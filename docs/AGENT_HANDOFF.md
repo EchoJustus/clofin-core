@@ -26,7 +26,37 @@ keeping is written into the repository *before* the code that depends on it.
 | What is built and what is next | `docs/ROADMAP.md` |
 | The interface | `api/openapi.yaml` |
 | What a specific unit of work involves | `docs/briefs/` |
+| What is in flight, and who has claimed it | the `Status` table in each brief |
+| What a review found, and what was done about it | `docs/audits/` |
 | Whether it works | the test suite |
+
+---
+
+## 1a. Execution model
+
+CloFin runs **asynchronously**. Three roles, none of which blocks the others:
+
+| Role | Responsibility |
+|---|---|
+| **Master Control** (orchestrator) | Maintains the backlog, writes briefs ahead of execution, keeps `ROADMAP.md` and the docs in step with reality, ingests audit feedback. |
+| **Worker session** | Executes one brief end to end: code, tests, contract, docs, status update. |
+| **Principal Architect** (offline) | Audits at milestones and produces `FEEDBACK` files. Reviews do **not** gate execution. |
+
+Two consequences worth stating explicitly:
+
+1. **Planning never waits on execution.** Briefs are written ahead, including
+   for work that is blocked on a dependency. A blocked brief names what it is
+   blocked on and is otherwise complete.
+2. **Execution never waits on review.** A worker session takes a `READY` brief
+   whose dependencies are met and proceeds. Audit findings arrive later and are
+   ingested per [`audits/README.md`](audits/README.md); an `IMPLEMENTED` brief
+   may return to `IN PROGRESS` when a blocking finding lands. That is normal,
+   not a failure.
+
+**Claiming work.** A session's first commit sets the brief's `Status` to
+`IN PROGRESS`. That commit is the lock. Before starting, check the brief's
+status and `git log` — if another session has claimed it, take the next
+unblocked brief instead.
 
 ---
 
@@ -110,13 +140,27 @@ up, write a brief in `docs/briefs/` **before** starting. A brief is a contract:
 it must be executable by someone with no access to the conversation that
 produced it.
 
-A brief that cannot be executed without asking a question is not finished.
+A brief that cannot be executed without asking a question is not finished. The
+test: hand it to someone who has read only the repository. If they would have to
+ask "which one?" or "where does this go?", answer it in the brief first.
+
+Name it `NNN-TASK-<short-feature>.md`, numbered sequentially and never
+renumbered. Add it to the backlog table in
+[`briefs/README.md`](briefs/README.md) in the same commit.
 
 ```markdown
-# Brief: <title>
+# TASK-NNN: <title>
 
-**Increment:** <n>  **Estimated scope:** <small | medium | large>
-**Requirements:** PR-nnn, PR-nnn
+| Field | Value |
+|---|---|
+| **Increment** | <n> |
+| **Status** | `READY` |
+| **Depends on** | TASK-NNN, or — |
+| **Blocks** | TASK-NNN, or — |
+| **Requirements** | PR-nnn, PR-nnn |
+| **Controls touched** | C-nn |
+| **Scope** | Small / Medium / Large |
+| **Audit** | Not yet submitted |
 
 ## Objective
 One paragraph. What will be true afterwards that is not true now.
@@ -140,7 +184,22 @@ Given / When / Then. Each one testable. Each traced to a PR-nnn.
 
 ## Definition of done
 The increment checklist above, plus anything specific to this work.
+
+## Notes for whoever picks this up
+The traps. Where a reasonable person would take a shortcut that this project
+has already decided against, and why. This is where audit findings accumulate.
 ```
+
+### Ingesting audit feedback
+
+When a `FEEDBACK` file lands in [`docs/audits/`](audits), read it in full before
+touching code, then triage every finding as actioned, deferred with a stated
+reason, or disputed with evidence — all three are legitimate, silence is not.
+
+The step with lasting value is the last one: a flagged anti-pattern is added to
+the *Notes for whoever picks this up* section of **every brief where it could
+recur**, so it is prevented rather than re-corrected. Full protocol in
+[`audits/README.md`](audits/README.md).
 
 ---
 

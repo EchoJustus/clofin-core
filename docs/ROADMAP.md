@@ -8,6 +8,27 @@ documented and tested — a half-finished increment is not merged.
 
 Legend: ✅ done · 🔨 in progress · 📋 next · 💭 later
 
+## Global state
+
+Single view of what is delivered, in flight, and queued. Kept in step with the
+`Status` table in each brief — if the two disagree, the brief is authoritative
+and this table is stale.
+
+| Increment | Theme | Brief | Status | CI |
+|---|---|---|---|---|
+| 1 | Foundation and ledger core | — (predates the brief protocol) | ✅ done | green, 303 assertions |
+| 2 | Ledger persistence and account API | [TASK-001](briefs/001-TASK-ledger-persistence-and-account-api.md) | 📋 `READY` | — |
+| 3 | Payment lifecycle and idempotency | [TASK-002](briefs/002-TASK-payment-instruction-lifecycle.md) | 📋 `READY`, blocked on 001 | — |
+| 4 | Authorisation, maker–checker, audit | [TASK-003](briefs/003-TASK-authorisation-and-audit-trail.md) | 📋 `READY`, blocked on 002 | — |
+| 5–9 | Settlement onwards | not yet briefed | 💭 later | — |
+
+**Controls still unenforced.** Four entries in
+[`COMPLIANCE.md`](COMPLIANCE.md) are 📋 *designed, not built* — C-01, C-02,
+C-05 and C-06. TASK-002 delivers C-06; TASK-003 delivers the other three. Until
+then, the honest statement is that CloFin **specifies** maker–checker and
+idempotency and **does not yet implement them**. Do not describe them otherwise
+in a README, a PR description or a conversation.
+
 ---
 
 ## Increment 1 — Foundation and ledger core ✅
@@ -30,6 +51,8 @@ Legend: ✅ done · 🔨 in progress · 📋 next · 💭 later
 
 ## Increment 2 — Ledger persistence and account API 📋
 
+**Brief:** [TASK-001](briefs/001-TASK-ledger-persistence-and-account-api.md) · **Status:** `READY`
+
 *Why next: the domain model exists but cannot yet be exercised through the API,
 so nothing above it can be built.*
 
@@ -44,6 +67,8 @@ so nothing above it can be built.*
 
 ## Increment 3 — Payment instruction lifecycle 📋
 
+**Brief:** [TASK-002](briefs/002-TASK-payment-instruction-lifecycle.md) · **Status:** `READY`, blocked on TASK-001
+
 *Why next: the lifecycle is the spine every control attaches to.*
 
 - Instruction capture, validation and structured multi-field rejection
@@ -54,6 +79,8 @@ so nothing above it can be built.*
   most direct financial consequence.
 
 ## Increment 4 — Authorisation, maker–checker and audit 📋
+
+**Brief:** [TASK-003](briefs/003-TASK-authorisation-and-audit-trail.md) · **Status:** `READY`, blocked on TASK-002
 
 *Why next: this is the control an auditor asks about first.*
 
@@ -108,8 +135,12 @@ so nothing above it can be built.*
 
 ## How to pick up the next task
 
-Increment 2 is next. Its work is specified as briefs in
-[`briefs/`](briefs) — each is self-contained, with scope, schemas, acceptance
-criteria and out-of-scope notes, so an independent session can execute one
-without access to the conversation that produced it. See
-[`AGENT_HANDOFF.md`](AGENT_HANDOFF.md).
+Take the lowest-numbered brief in [`briefs/`](briefs) that is `READY` with its
+dependencies met — currently **TASK-001**. Set its `Status` to `IN PROGRESS` in
+your first commit; that commit is the lock other sessions check.
+
+Each brief is self-contained — scope, schemas, acceptance criteria, out-of-scope
+notes and the traps to avoid — so a session with no access to the conversation
+that produced it can execute it. Protocol:
+[`AGENT_HANDOFF.md`](AGENT_HANDOFF.md). Audit feedback:
+[`audits/`](audits).
