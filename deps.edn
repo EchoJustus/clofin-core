@@ -1,0 +1,47 @@
+;; CloFin — enterprise payments & reconciliation core.
+;;
+;; Dependency policy: see docs/ADR/0004-minimal-dependency-footprint.md.
+;; Every runtime dependency below is resolvable from Maven Central and is either
+;; maintained by the Clojure core team or is an established JVM infrastructure
+;; library. New runtime dependencies require an ADR.
+{:paths ["src" "resources"]
+
+ :deps
+ {org.clojure/clojure          {:mvn/version "1.12.5"}
+  org.clojure/data.json        {:mvn/version "2.5.2"}
+  org.clojure/tools.logging    {:mvn/version "1.3.1"}
+
+  ;; HTTP transport
+  org.eclipse.jetty/jetty-server {:mvn/version "12.1.11"}
+
+  ;; Persistence
+  org.postgresql/postgresql    {:mvn/version "42.7.13"}
+  com.zaxxer/HikariCP          {:mvn/version "7.1.0"}
+
+  ;; Logging backend
+  ch.qos.logback/logback-classic {:mvn/version "1.6.1"}}
+
+ :aliases
+ {;; Run the service:  clojure -M:run
+  :run
+  {:main-opts ["-m" "clofin.main"]}
+
+  ;; Unit + property tests (no database):  clojure -M:test
+  :test
+  {:extra-paths ["test" "test-resources"]
+   :extra-deps  {org.clojure/test.check {:mvn/version "1.1.3"}
+                 ;; Test scope only: the contract test reads api/openapi.yaml and
+                 ;; asserts it matches the route table. Not a runtime dependency.
+                 org.yaml/snakeyaml     {:mvn/version "2.6"}}
+   :main-opts   ["-m" "clofin.test-runner"]}
+
+  ;; Unit + property + database integration tests:  clojure -M:test:it
+  ;; Requires a reachable PostgreSQL instance (see docker-compose.yml).
+  :it
+  {:jvm-opts ["-Dclofin.test.integration=true"]}
+
+  ;; REPL for local development:  clojure -M:dev
+  :dev
+  {:extra-paths ["test" "test-resources" "dev"]
+   :extra-deps  {org.clojure/test.check {:mvn/version "1.1.3"}
+                 org.yaml/snakeyaml     {:mvn/version "2.6"}}}}}

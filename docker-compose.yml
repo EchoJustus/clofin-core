@@ -1,0 +1,74 @@
+# CloFin — local development stack.
+#
+# Synthetic data only. Credentials here are local-development defaults and are
+# intentionally committed; they grant access to nothing outside your machine.
+#
+# See docs/ADR/0005-hybrid-local-and-cloud-execution.md.
+
+name: clofin
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-clofin}
+      POSTGRES_USER: ${POSTGRES_USER:-clofin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-clofin_local_dev_only}
+      # Deterministic collation so ordering is identical on every machine.
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+  app:
+    build:
+      context: .
+      dockerfile: infra/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      CLOFIN_ENV: ${CLOFIN_ENV:-dev}
+      CLOFIN_HTTP_HOST: 0.0.0.0
+      CLOFIN_HTTP_PORT: 8080
+      CLOFIN_DB_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-clofin}
+      CLOFIN_DB_USER: ${POSTGRES_USER:-clofin}
+      CLOFIN_DB_PASSWORD: ${POSTGRES_PASSWORD:-clofin_local_dev_only}
+      CLOFIN_DB_POOL_SIZE: ${CLOFIN_DB_POOL_SIZE:-8}
+      CLOFIN_MIGRATE_ON_START: ${CLOFIN_MIGRATE_ON_START:-true}
+    ports:
+      - "${CLOFIN_HTTP_PORT:-8080}:8080"
+    healthcheck:
+      test: ["CMD", "/usr/bin/wget", "--spider", "-q", "http://127.0.0.1:8080/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
+
+  # Ad-hoc Clojure toolchain for machines without a local CLI.
+  # Not started by `make up`; used on demand via `docker compose run toolchain`.
+  toolchain:
+    image: clojure:temurin-21-tools-deps-bookworm
+    profiles: ["tools"]
+    working_dir: /workspace
+    environment:
+      CLOFIN_DB_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-clofin}
+      CLOFIN_DB_USER: ${POSTGRES_USER:-clofin}
+      CLOFIN_DB_PASSWORD: ${POSTGRES_PASSWORD:-clofin_local_dev_only}
+    volumes:
+      - .:/workspace
+      - maven-cache:/root/.m2
+    command: ["clojure", "-M:test"]
+
+volumes:
+  postgres-data:
+  maven-cache:

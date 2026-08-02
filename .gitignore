@@ -1,0 +1,33 @@
+# Clojure / JVM
+.cpcache/
+.clj-kondo/.cache/
+.lsp/.cache/
+target/
+classes/
+*.jar
+*.class
+pom.xml.asc
+
+# Local environment — never commit real configuration
+.env
+.env.local
+*.local.edn
+
+# Editors
+.idea/
+*.iml
+.vscode/
+.calva/
+.nrepl-port
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Runtime output
+logs/
+*.log
+
+# Node (future web client)
+node_modules/
+dist/

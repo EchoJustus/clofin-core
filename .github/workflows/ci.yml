@@ -1,0 +1,121 @@
+name: CI
+
+# CI runs the same Make targets a developer runs. A target that breaks here
+# breaks for a contributor too, which is the point of having one entrypoint.
+# See docs/ADR/0005-hybrid-local-and-cloud-execution.md.
+
+on:
+  push:
+    branches: ["main", "feat/**", "fix/**", "claude/**"]
+  pull_request:
+    branches: ["main"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Unit, property and contract tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Clojure CLI
+        uses: DeLaGuardo/setup-clojure@13.4
+        with:
+          cli: latest
+
+      - name: Cache Maven dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.m2/repository
+            ~/.gitlibs
+          key: ${{ runner.os }}-deps-${{ hashFiles('deps.edn') }}
+          restore-keys: ${{ runner.os }}-deps-
+
+      - name: Check documentation links
+        run: make docs-check
+
+      - name: Run unit and property tests
+        run: make test
+
+  integration:
+    name: Database integration tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: clofin
+          POSTGRES_USER: clofin
+          POSTGRES_PASSWORD: clofin_local_dev_only
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U clofin -d clofin"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      CLOFIN_DB_URL: jdbc:postgresql://localhost:5432/clofin
+      CLOFIN_DB_USER: clofin
+      CLOFIN_DB_PASSWORD: clofin_local_dev_only
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Clojure CLI
+        uses: DeLaGuardo/setup-clojure@13.4
+        with:
+          cli: latest
+
+      - name: Cache Maven dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2/repository
+          key: ${{ runner.os }}-deps-${{ hashFiles('deps.edn') }}
+          restore-keys: ${{ runner.os }}-deps-
+
+      - name: Apply migrations
+        run: clojure -M -m clofin.db.migrate
+
+      - name: Report schema version
+        run: clojure -M -m clofin.db.migrate status
+
+      - name: Run full test suite
+        run: clojure -M:test:it
+
+  stack:
+    name: Compose stack smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build and start the stack
+        run: |
+          cp .env.example .env
+          make smoke
+
+      - name: Show service logs on failure
+        if: failure()
+        run: docker compose logs app
+
+      - name: Tear down
+        if: always()
+        run: make destroy
