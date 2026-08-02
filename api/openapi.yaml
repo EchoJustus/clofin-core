@@ -1,0 +1,186 @@
+openapi: 3.1.0
+
+info:
+  title: CloFin Core API
+  version: 0.1.0
+  summary: Enterprise payments, ledger and reconciliation core.
+  description: |
+    CloFin is an open-source reference implementation of enterprise payment
+    initiation, double-entry ledger, settlement and reconciliation.
+
+    **Scope and limitations.** CloFin operates on synthetic data only. It is
+    not connected to any bank, payment scheme or central bank, holds no
+    regulatory authorisation of any kind, and never processes real funds.
+
+    **Contract discipline.** This document is the interface specification, not
+    generated documentation. It changes in the same commit as the handler it
+    describes, and a contract test asserts that every operation declared here
+    exists in the service's route table and vice versa.
+  license:
+    name: EPL-2.0
+    identifier: EPL-2.0
+
+servers:
+  - url: http://localhost:8080
+    description: Local development stack (docker compose)
+
+tags:
+  - name: Operations
+    description: Liveness, readiness and service description.
+
+paths:
+  /:
+    get:
+      tags: [Operations]
+      operationId: getServiceInfo
+      summary: Service description and scope disclaimer
+      description: |
+        Identifies the service to anyone who reaches it without context, and
+        states plainly what it is not. Unauthenticated by design.
+      responses:
+        "200":
+          description: Service description
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ServiceInfo"
+
+  /healthz:
+    get:
+      tags: [Operations]
+      operationId: getHealth
+      summary: Liveness probe
+      description: |
+        Answers whenever the process can serve a request. It deliberately does
+        not check external dependencies: a liveness probe that fails because a
+        database is briefly unavailable turns a recoverable blip into a restart
+        loop.
+      responses:
+        "200":
+          description: The process is alive
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Health"
+
+  /readyz:
+    get:
+      tags: [Operations]
+      operationId: getReadiness
+      summary: Readiness probe, including database reachability
+      description: |
+        Answers whether the service should receive traffic. Reports the applied
+        schema version, which is the first thing anyone asks during an incident.
+      responses:
+        "200":
+          description: Ready to receive traffic
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Readiness"
+        "503":
+          description: Not ready — a dependency is unavailable
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+
+components:
+  schemas:
+    Money:
+      type: object
+      description: |
+        A monetary amount as an integer count of the currency's minor units.
+        Floating point is never used for money. The number of minor units in
+        one major unit is 10^scale, where scale comes from ISO 4217 — it is not
+        always 2. JPY and KRW have no minor unit; BHD, KWD and TND have three.
+      required: [currency, minorUnits]
+      additionalProperties: false
+      properties:
+        currency:
+          type: string
+          pattern: "^[A-Z]{3}$"
+          description: ISO 4217 alphabetic code.
+          examples: ["SGD"]
+        minorUnits:
+          type: integer
+          format: int64
+          description: Signed count of minor units.
+          examples: [125000]
+      examples:
+        - { currency: "SGD", minorUnits: 125000 }
+        - { currency: "JPY", minorUnits: 125000 }
+
+    ServiceInfo:
+      type: object
+      required: [service, description, environment, disclaimer]
+      properties:
+        service: { type: string, examples: ["clofin-core"] }
+        description: { type: string }
+        environment:
+          type: string
+          enum: [dev, test, prod]
+        disclaimer:
+          type: string
+          description: Statement of scope — synthetic data, no institutional connectivity.
+        documentation: { type: string, format: uri }
+
+    Health:
+      type: object
+      required: [status, service]
+      properties:
+        status:
+          type: string
+          enum: [ok]
+        service: { type: string }
+        uptimeSeconds: { type: integer, format: int64 }
+
+    Readiness:
+      type: object
+      required: [status, checks]
+      properties:
+        status:
+          type: string
+          enum: [ready]
+        checks:
+          type: object
+          additionalProperties:
+            type: string
+            enum: [ok, failed]
+        schemaVersion:
+          type: string
+          description: Highest applied migration version, or "none".
+          examples: ["0002"]
+
+    Problem:
+      type: object
+      description: |
+        RFC 9457 problem details. Payment APIs are consumed by systems that
+        must branch on failure, so `type` is a stable URI that never changes
+        meaning; `title` and `detail` are for humans and may be reworded.
+      required: [type, title, status]
+      properties:
+        type:
+          type: string
+          format: uri
+          examples: ["https://clofin.dev/problems/validation"]
+        title: { type: string }
+        status: { type: integer }
+        detail: { type: string }
+        instance:
+          type: string
+          description: Correlation id — quote this when reporting a failure.
+        errors:
+          type: object
+          description: Structured, machine-readable detail about what failed.
+          additionalProperties: true
+
+  headers:
+    XCorrelationId:
+      description: |
+        Correlation id echoed on every response. A caller-supplied value is
+        honoured so that a trace survives across system boundaries; it is
+        sanitised and length-limited before being echoed or logged.
+      schema:
+        type: string
+        maxLength: 128
