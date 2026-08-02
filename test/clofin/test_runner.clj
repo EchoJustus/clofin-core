@@ -23,6 +23,7 @@
     clofin.http.router-test
     clofin.http.middleware-test
     clofin.api.health-test
+    clofin.api.wire-test
     clofin.contract-test])
 
 (def integration-namespaces
@@ -31,6 +32,7 @@
     clofin.db.ledger-constraints-test
     clofin.organisations.repository-test
     clofin.ledger.repository-test
+    clofin.api.ledger-api-test
     clofin.system-test])
 
 (defn integration?
