@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Logging during tests.
+
+  Several tests deliberately drive failure paths — an unhandled defect, an
+  unreachable database — and the code under test correctly logs those at ERROR.
+  Printing the resulting stack traces would bury real failures in expected
+  noise, so the namespaces that log on purpose are silenced here. Assertions are
+  made against the responses, not against the logs.
+-->
+<configuration scan="false">
+
+  <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+    <encoder>
+      <pattern>%-5level %logger{24} - %msg%n</pattern>
+    </encoder>
+  </appender>
+
+  <logger name="clofin.http.middleware" level="OFF"/>
+  <logger name="clofin.http.server" level="OFF"/>
+  <logger name="org.eclipse.jetty" level="WARN"/>
+  <logger name="com.zaxxer.hikari" level="WARN"/>
+
+  <root level="WARN">
+    <appender-ref ref="STDOUT"/>
+  </root>
+
+</configuration>

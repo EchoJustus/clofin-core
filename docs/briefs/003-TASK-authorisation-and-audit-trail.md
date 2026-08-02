@@ -1,0 +1,267 @@
+# TASK-003: Authorisation, maker–checker and audit trail
+
+| Field | Value |
+|---|---|
+| **Increment** | 4 |
+| **Status** | `READY` (blocked on TASK-002) |
+| **Depends on** | TASK-002 — needs the instruction lifecycle to attach approval to |
+| **Blocks** | Increment 5 (settlement) |
+| **Requirements** | PR-010…PR-015, PR-070…PR-075 |
+| **Controls touched** | C-01, C-02, C-05, C-08 |
+| **Scope** | Large — split into (a) authz + approval, (b) audit trail + evidence |
+| **Audit** | Not yet submitted |
+
+> Status lifecycle: `READY` → `IN PROGRESS` → `IMPLEMENTED` → `AUDITED` → `CLOSED`.
+
+---
+
+## Objective
+
+This is **the increment an auditor asks about first**, and the one that most
+distinguishes a payments product from a database with an API.
+
+After this task: no payment can be approved by the person who submitted it; the
+number of approvals required rises with the amount; no approver can act beyond
+their own limit; amending an instruction invalidates approvals already given;
+and every state change leaves an immutable audit record that commits with the
+change it describes.
+
+Four controls that are currently 📋 in `COMPLIANCE.md` become ✅ here.
+
+## Context you need
+
+| Source | What it gives you |
+|---|---|
+| [COMPLIANCE C-01, C-02, C-05, C-08](../COMPLIANCE.md) | The control statements, verbatim — implement to these |
+| [PRD §5.2, §5.8](../PRD.md) | PR-010…PR-015 and PR-070…PR-075 |
+| [DOMAIN_MODEL §2.2, §3](../DOMAIN_MODEL.md) | `Approval` fields; lifecycle rules 2 and 3 |
+| [ADR-0006](../ADR/0006-postgresql-as-system-of-record.md) | Append-only enforcement pattern — copy the existing trigger approach |
+| `resources/migrations/0002-…sql` | `reject_mutation()` already exists; **reuse it**, do not redefine |
+| TASK-002 output | `clofin.payments.state`, `clofin.payments.repository/transition!` |
+
+**Open question you must resolve, not assume** — PRD Q1: are approval thresholds
+per-currency, or normalised to a base currency? Pick one, **write the ADR**, and
+say what it means for a multi-currency organisation. Getting this silently wrong
+gives inconsistent control strength across currencies.
+
+## Scope
+
+### In
+
+1. **`clofin.authz.model`** — actors, roles, permissions. Default deny: an
+   absent permission is a denied permission, and there is no superuser.
+2. **`clofin.authz.approval`** — the pure decision function:
+
+   ```clojure
+   (evaluate {:instruction … :actor … :existing-approvals [] :thresholds …})
+   ;=> {:decision :permitted}
+   ;   {:decision :refused :reason :self-approval}      ; C-01
+   ;   {:decision :refused :reason :above-actor-limit}  ; C-02
+   ;   {:decision :refused :reason :already-approved}
+   ;   {:decision :refused :reason :not-an-approver}
+   ```
+
+   Pure — no database, no clock. Every refusal reason is a named keyword so a
+   caller can branch and a test can enumerate.
+3. **`clofin.authz.repository`**, **`clofin.payments.approval-service`**.
+4. **`clofin.audit`** — append-only event capture and evidence extraction.
+5. **Migration `0004-authorisation-and-audit.sql`**.
+6. **`clofin.api.approvals`**, **`clofin.api.audit`** + routes + OpenAPI.
+7. Replace every `TODO(TASK-003)` left by TASK-001 and TASK-002 with the real
+   authenticated principal. **Grep for them; leaving one is a failed handover.**
+
+### Out — and why
+
+| Out of scope | Reason |
+|---|---|
+| OIDC / identity provider integration | The permission *model* is the interesting part; provider wiring is plumbing. Authenticate from a signed header or a seeded actor table, and say so plainly in the OpenAPI description. |
+| Release and settlement | Increment 5. `approve` reaches `approved` and stops. |
+| Screening as an approval precondition | Increment 7. Leave the `TODO(increment-7)`. |
+| A UI approval queue | Increment 8. `GET /approvals/queue` returns JSON. |
+| Field-level encryption of audit payloads | Known gap in COMPLIANCE §4. Store digests, not payloads — see below. |
+
+## Interfaces
+
+### Migration `0004-authorisation-and-audit.sql`
+
+```sql
+create table actor (
+  id uuid primary key,
+  organisation_id uuid not null references organisation (id),
+  display_name text not null,
+  status text not null default 'active',
+  constraint actor_status_known check (status in ('active','suspended'))
+);
+
+create table actor_role (
+  actor_id uuid not null references actor (id),
+  role     text not null,
+  primary key (actor_id, role),
+  constraint role_known
+    check (role in ('operator','approver','controller','compliance','auditor'))
+);
+
+-- An approver's own ceiling. Null currency = applies to every currency;
+-- see the ADR you write for PRD Q1.
+create table approver_limit (
+  actor_id     uuid    not null references actor (id),
+  currency     char(3) null references currency (code),
+  limit_minor  bigint  not null,
+  primary key (actor_id, currency),
+  constraint approver_limit_positive check (limit_minor > 0)
+);
+
+-- Amount bands -> how many approvals are required.
+create table approval_threshold (
+  organisation_id  uuid    not null references organisation (id),
+  currency         char(3) not null references currency (code),
+  from_minor       bigint  not null,
+  approvals_required smallint not null,
+  primary key (organisation_id, currency, from_minor),
+  constraint threshold_approvals_positive check (approvals_required >= 1)
+);
+
+create table approval (
+  id             uuid        primary key,
+  instruction_id uuid        not null references payment_instruction (id),
+  actor_id       uuid        not null references actor (id),
+  decision       text        not null,
+  reason         text        null,
+  decided_at     timestamptz not null default now(),
+  -- Invalidated when the instruction is amended (PR-014). Never deleted.
+  invalidated_at timestamptz null,
+
+  constraint approval_decision_known check (decision in ('approved','rejected')),
+  constraint approval_rejection_needs_reason
+    check (decision <> 'rejected' or length(btrim(coalesce(reason,''))) > 0)
+);
+
+-- One live approval per actor per instruction; an invalidated one may be re-given.
+create unique index approval_actor_live_key
+  on approval (instruction_id, actor_id) where invalidated_at is null;
+
+create table audit_event (
+  id              uuid        primary key,
+  organisation_id uuid        not null references organisation (id),
+  actor_id        uuid        null references actor (id),
+  action          text        not null,
+  subject_type    text        not null,
+  subject_id      uuid        not null,
+  before_digest   text        null,
+  after_digest    text        null,
+  correlation_id  text        null,
+  occurred_at     timestamptz not null default now()
+);
+
+create index audit_event_subject_idx on audit_event (subject_type, subject_id, occurred_at);
+create index audit_event_org_time_idx on audit_event (organisation_id, occurred_at desc);
+
+-- Reuse the existing function from migration 0002. Do not redefine it.
+create trigger audit_event_append_only
+  before update or delete on audit_event
+  for each row execute function reject_mutation();
+
+create trigger approval_no_delete
+  before delete on approval
+  for each row execute function reject_mutation();
+```
+
+Note `approval` permits `UPDATE` (to set `invalidated_at`) but forbids `DELETE`.
+That asymmetry is deliberate — say so in a comment, or the next reader will
+"fix" it.
+
+### Audit capture
+
+`audit_event` stores **digests, not payloads**. A payments audit table that
+holds counterparty names becomes a second copy of the data you are trying to
+minimise (C-09), and it is append-only, so you can never remove it. Digests
+prove *that* something changed and *what it changed to* when compared against a
+known value — which is what an auditor actually needs.
+
+The write must be in the **same transaction** as the change (PR-075). The
+cleanest shape is a helper that takes the transaction:
+
+```clojure
+(audit/record! tx {:actor-id … :action "payment.approved"
+                   :subject-type "payment-instruction" :subject-id …
+                   :before before-value :after after-value
+                   :correlation-id (:correlation-id request)})
+```
+
+A test must assert that a **rolled-back** change leaves **no** audit event, and
+that a committed one always leaves exactly one. That pair is the proof that an
+unaudited state change is not representable.
+
+### HTTP
+
+| Method | Path | Operation id |
+|---|---|---|
+| `POST` | `/payment-instructions/:id/approvals` | `approvePaymentInstruction` |
+| `DELETE` | `/payment-instructions/:id/approvals/:approvalId` | `withdrawApproval` |
+| `GET` | `/approvals/queue` | `getApprovalQueue` |
+| `GET` | `/audit/events` | `listAuditEvents` |
+| `GET` | `/audit/evidence/:subjectId` | `getEvidencePack` |
+
+The queue must carry what an approver needs to *decide* (PR-015): amount,
+counterparty, purpose, prior approvals, and how many more are required. A queue
+that shows only an id forces the approver into another system, and an approval
+given without context is a rubber stamp — which is the control failure the PRD
+opens with.
+
+## Acceptance criteria
+
+| # | Given / When / Then | Traces |
+|---|---|---|
+| AC-1 | Given an instruction submitted by actor A, when A attempts to approve it, then it is refused with `:self-approval`. | PR-010, C-01 |
+| AC-2 | Given an instruction submitted by A, when approver B approves it, then it succeeds. | PR-010 |
+| AC-3 | Given an amount above B's limit, when B approves, then it is refused with `:above-actor-limit`. | PR-012, C-02 |
+| AC-4 | Given a threshold table requiring two approvals above a band, when only one is given, then status stays `pending-approval`; on the second it becomes `approved`. | PR-011, C-02 |
+| AC-5 | Given band boundaries, when an amount falls exactly on a boundary, then the documented side wins — asserted at boundary − 1, boundary, boundary + 1. | PR-011 |
+| AC-6 | Given a rejection with no reason, when submitted, then it returns `422`. | PR-013 |
+| AC-7 | Given an approved instruction, when any field is amended, then every prior approval is invalidated and status returns to `draft`. | PR-014 |
+| AC-8 | Given an actor without the `approver` role, when they approve, then it is refused with `:not-an-approver`. | PR-070, C-08 |
+| AC-9 | Given any state change, when it commits, then exactly one `audit_event` exists carrying actor, action, subject and correlation id. | PR-072, PR-075 |
+| AC-10 | Given a transaction that **rolls back**, then **no** audit event exists. | PR-075, C-05 |
+| AC-11 | Given a committed audit event, when `UPDATE` or `DELETE` is attempted directly in SQL, then the database refuses. | PR-073, C-05 |
+| AC-12 | Given an instruction with a full history, when an evidence pack is requested, then it contains every state change in order with its actor. | PR-074 |
+| AC-13 | Given the approval queue, when an approver requests it, then each row carries amount, counterparty, purpose, prior approvals and approvals still required. | PR-015 |
+| AC-14 | Every new route has a matching OpenAPI operation. | NFR-003 |
+
+**AC-1 and AC-10 are the two that must not be compromised.** If either is
+difficult, that is a signal the design is wrong — raise it rather than weakening
+the test.
+
+## Definition of done
+
+- [ ] Every acceptance criterion has a named test
+- [ ] AC-1, AC-3 and AC-8 are table-driven across the full actor × instruction matrix
+- [ ] AC-11 is an integration test issuing raw SQL, like `clofin.db.ledger-constraints-test`
+- [ ] **No `TODO(TASK-003)` remains anywhere** — `grep -rn "TODO(TASK-003)" src/` is empty
+- [ ] `api/openapi.yaml` updated in the same commit as the handlers
+- [ ] `make verify` and `make test-it` both green
+- [ ] `COMPLIANCE.md`: C-01, C-02, C-05, C-08 moved 📋 → ✅, each with its
+      enforcement point and extractable evidence named
+- [ ] `DOMAIN_MODEL.md`: invariants I8 and I9 marked ✅
+- [ ] `docs/ROADMAP.md` increment 4 marked done; this brief set to `IMPLEMENTED`
+- [ ] UAT script `docs/uat/UAT-004-segregation-of-duties.md` — a reviewer must be
+      able to *attempt* self-approval and watch it fail
+- [ ] **Two ADRs**: (1) threshold currency handling, resolving PRD Q1;
+      (2) digests-not-payloads in the audit trail, and what that costs an auditor
+
+## Notes for whoever picks this up
+
+Three traps, in order of how much damage they do.
+
+**Segregation of duties is a domain rule, not a UI rule.** If the only thing
+stopping self-approval is that the button is hidden, the control does not exist.
+`evaluate` must refuse it with no HTTP layer involved, and the test must prove
+that by calling the function directly.
+
+**The audit write must share the transaction.** Writing it afterwards — even one
+line later — means a crash in between produces a state change with no record.
+That is precisely the failure C-05 exists to prevent, and it is invisible until
+an incident.
+
+**Do not add a superuser role to make testing easier.** Default deny means
+default deny. If a test needs broad permissions, grant them explicitly in the
+fixture; that fixture then doubles as documentation of what the role can do.

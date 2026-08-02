@@ -1,0 +1,8 @@
+# Migrations, applied in this order.
+#
+# Append only. Never reorder, never edit a file that has already been applied —
+# the runner verifies checksums and will refuse to start.
+# See docs/ADR/0009-forward-only-sql-migrations.md.
+
+0001-organisation-and-currency.sql
+0002-ledger-accounts-and-journal.sql
