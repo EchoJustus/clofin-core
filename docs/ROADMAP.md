@@ -17,7 +17,7 @@ and this table is stale.
 | Increment | Theme | Brief | Status | CI |
 |---|---|---|---|---|
 | 1 | Foundation and ledger core | — (predates the brief protocol) | ✅ done | green, 303 assertions |
-| 2 | Ledger persistence and account API | [TASK-001](briefs/001-TASK-ledger-persistence-and-account-api.md) | 📋 `READY` | — |
+| 2 | Ledger persistence and account API | [TASK-001](briefs/001-TASK-ledger-persistence-and-account-api.md) | 🔨 `IN PROGRESS` | — |
 | 3 | Payment lifecycle and idempotency | [TASK-002](briefs/002-TASK-payment-instruction-lifecycle.md) | 📋 `READY`, blocked on 001 | — |
 | 4 | Authorisation, maker–checker, audit | [TASK-003](briefs/003-TASK-authorisation-and-audit-trail.md) | 📋 `READY`, blocked on 002 | — |
 | 5–9 | Settlement onwards | not yet briefed | 💭 later | — |

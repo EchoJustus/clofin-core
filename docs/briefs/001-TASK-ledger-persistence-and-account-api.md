@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | **Increment** | 2 |
-| **Status** | `READY` |
+| **Status** | `IN PROGRESS` |
 | **Depends on** | — (increment 1 is merged and green) |
 | **Blocks** | TASK-002, TASK-003 |
 | **Requirements** | PR-020, PR-021, PR-022, PR-023, PR-024 |
