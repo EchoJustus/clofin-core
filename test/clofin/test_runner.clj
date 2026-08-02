@@ -17,6 +17,8 @@
     clofin.error-test
     clofin.ledger.account-test
     clofin.ledger.entry-test
+    clofin.ledger.purity-test
+    clofin.organisations.organisation-test
     clofin.config-test
     clofin.http.router-test
     clofin.http.middleware-test
@@ -27,6 +29,8 @@
   "Tests that need a reachable PostgreSQL instance."
   '[clofin.db.migrate-test
     clofin.db.ledger-constraints-test
+    clofin.organisations.repository-test
+    clofin.ledger.repository-test
     clofin.system-test])
 
 (defn integration?
