@@ -9,6 +9,11 @@ and becomes durable.
 where one applies (`FEEDBACK-001-…` reviews `TASK-001`), or a milestone name for
 a broader audit (`FEEDBACK-M1-foundation.md`).
 
+A worker session submits its own increment for review as
+`NNN-REQ-<subject>.md` — what it built, the decisions it took, the edge cases it
+found, and the debt it knowingly left. The `REQ` is the *submission*; the
+`FEEDBACK` is the reply. Both are kept.
+
 > A review that exists only in a conversation does not exist. If an audit
 > finding is worth acting on, it is worth committing here — otherwise the next
 > session re-introduces the same anti-pattern, and the one after that re-argues
@@ -56,6 +61,12 @@ that its statements are checkable; that applies to its replies to reviewers too.
 | Feedback | Reviews | Received | Findings (B/S/C) | Disposition |
 |---|---|---|---|---|
 | _(none yet)_ | | | | |
+
+### Submissions awaiting review
+
+| Submission | Covers | Submitted | Status |
+|---|---|---|---|
+| [001-REQ](001-REQ-ledger-persistence-and-account-api.md) | [TASK-001](../briefs/001-TASK-ledger-persistence-and-account-api.md) | 2026-08-02 | Awaiting audit |
 
 ## Standing lessons
 
