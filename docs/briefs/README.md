@@ -30,8 +30,8 @@ in flight (see [`../AGENT_HANDOFF.md`](../AGENT_HANDOFF.md)).
 
 | Brief | Increment | Status | Depends on | Requirements | Scope |
 |---|---|---|---|---|---|
-| [001 — Ledger persistence and account API](001-TASK-ledger-persistence-and-account-api.md) | 2 | `READY` | — | PR-020…024 | Medium |
-| [002 — Payment instruction lifecycle and idempotency](002-TASK-payment-instruction-lifecycle.md) | 3 | `READY` | 001 | PR-001…005, PR-040…044 | Large |
+| [001 — Ledger persistence and account API](001-TASK-ledger-persistence-and-account-api.md) | 2 | `IMPLEMENTED` | — | PR-020…024 | Medium |
+| [002 — Payment instruction lifecycle and idempotency](002-TASK-payment-instruction-lifecycle.md) | 3 | `READY` | 001 ✅ | PR-001…005, PR-040…044 | Large |
 | [003 — Authorisation, maker–checker and audit trail](003-TASK-authorisation-and-audit-trail.md) | 4 | `READY` | 002 | PR-010…015, PR-070…075 | Large |
 
 Sequencing follows **product relevance and regulatory risk**, not implementation

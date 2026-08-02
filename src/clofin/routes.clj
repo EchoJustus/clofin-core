@@ -7,7 +7,10 @@
 
   `operation-id` matches the corresponding OpenAPI `operationId`; that is the
   join key the contract test uses."
-  (:require [clofin.api.health :as health]))
+  (:require [clofin.api.accounts :as accounts]
+            [clofin.api.entries :as entries]
+            [clofin.api.health :as health]
+            [clofin.api.organisations :as organisations]))
 
 (defn routes
   "Build the route table for a running system."
@@ -22,4 +25,48 @@
 
    {:method :get :path "/" :operation-id "getServiceInfo"
     :handler (health/info config)
-    :summary "Service description and scope disclaimer"}])
+    :summary "Service description and scope disclaimer"}
+
+   ;; -------------------------------------------------------------------------
+   ;; Organisations
+   ;; -------------------------------------------------------------------------
+
+   {:method :post :path "/organisations" :operation-id "createOrganisation"
+    :handler (organisations/create pool)
+    :summary "Register a synthetic organisation"}
+
+   {:method :get :path "/organisations/:id" :operation-id "getOrganisation"
+    :handler (organisations/show pool)
+    :summary "Retrieve an organisation"}
+
+   ;; -------------------------------------------------------------------------
+   ;; Ledger accounts
+   ;; -------------------------------------------------------------------------
+
+   {:method :post :path "/accounts" :operation-id "createAccount"
+    :handler (accounts/create pool)
+    :summary "Open a ledger account"}
+
+   {:method :get :path "/accounts" :operation-id "listAccounts"
+    :handler (accounts/index pool)
+    :summary "List an organisation's chart of accounts"}
+
+   {:method :get :path "/accounts/:id" :operation-id "getAccount"
+    :handler (accounts/show pool)
+    :summary "Retrieve a ledger account"}
+
+   {:method :get :path "/accounts/:id/statement" :operation-id "getAccountStatement"
+    :handler (accounts/statement pool)
+    :summary "Produce an account statement for a period"}
+
+   ;; -------------------------------------------------------------------------
+   ;; Journal
+   ;; -------------------------------------------------------------------------
+
+   {:method :post :path "/journal-entries" :operation-id "postJournalEntry"
+    :handler (entries/post-entry pool)
+    :summary "Post a balanced journal entry"}
+
+   {:method :get :path "/journal-entries/:id" :operation-id "getJournalEntry"
+    :handler (entries/show pool)
+    :summary "Retrieve a posted journal entry"}])

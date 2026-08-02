@@ -13,7 +13,8 @@
   (:import [com.zaxxer.hikari HikariConfig HikariDataSource]
            [java.sql Connection PreparedStatement ResultSet Statement Timestamp Types]
            [java.time Instant]
-           [javax.sql DataSource]))
+           [javax.sql DataSource]
+           [org.postgresql.util PSQLException ServerErrorMessage]))
 
 (set! *warn-on-reflection* true)
 
@@ -78,6 +79,40 @@
       (if (.next rs)
         (recur (conj! acc (row->map rs column-keys)))
         (persistent! acc)))))
+
+;; ---------------------------------------------------------------------------
+;; Reading values back out of a row
+;; ---------------------------------------------------------------------------
+;;
+;; JDBC returns whatever the driver considers natural for a column type, which
+;; is not always what the domain uses: `sum(bigint)` is `numeric` and arrives as
+;; a `BigDecimal`, and `timestamptz` arrives as a `java.sql.Timestamp`. These
+;; two functions are the only place that conversion happens, so a repository
+;; never carries a driver type into a domain value.
+
+(defn ->long
+  "Coerce a numeric column value to a `long`, exactly.
+
+  `longValueExact` rather than `longValue`: an aggregate that has overflowed a
+  long is a fact worth failing on, not one worth truncating. Money is involved."
+  ^long [value]
+  (cond
+    (nil? value)                     0
+    (instance? Long value)           (long value)
+    (instance? java.math.BigDecimal value) (.longValueExact ^java.math.BigDecimal value)
+    (instance? java.math.BigInteger value) (.longValueExact ^java.math.BigInteger value)
+    (instance? Number value)         (long value)
+    :else (err/invalid! (str "Not a numeric column value: " (class value)) {:value value})))
+
+(defn ->instant
+  "Coerce a timestamp column value to a `java.time.Instant`."
+  ^Instant [value]
+  (cond
+    (nil? value)                  nil
+    (instance? Instant value)     value
+    (instance? Timestamp value)   (.toInstant ^Timestamp value)
+    (instance? java.util.Date value) (.toInstant ^java.util.Date value)
+    :else (err/invalid! (str "Not a timestamp column value: " (class value)) {:value value})))
 
 ;; ---------------------------------------------------------------------------
 ;; Query and execute
@@ -206,6 +241,45 @@
           (execute! tx [...]))"
   [[binding source opts] & body]
   `(with-transaction* ~source ~(or opts {}) (fn [~binding] ~@body)))
+
+;; ---------------------------------------------------------------------------
+;; Constraint violations
+;; ---------------------------------------------------------------------------
+
+(defn placeholders
+  "`\"?, ?, ?\"` for an `IN` list of `n` values.
+
+  Only the *number* of placeholders is derived from the collection — every
+  value still travels as a bound parameter. This is not an exception to the
+  no-interpolation rule; it is what makes an `IN` list obey it."
+  [n]
+  (str/join ", " (repeat n "?")))
+
+(defn violation
+  "Structured detail about a constraint violation, or nil if `t` is not one.
+
+  The cause chain is walked because a deferred constraint fires at `commit`,
+  and by then the driver's exception is wrapped by whatever was unwinding.
+  Returning the constraint name — rather than a pre-baked domain error — keeps
+  the decision about what a violation *means* with the repository that issued
+  the statement, which is the only place that knows."
+  [t]
+  (loop [^Throwable cause t]
+    (when cause
+      (if-let [server (and (instance? PSQLException cause)
+                           (.getServerErrorMessage ^PSQLException cause))]
+        {:sql-state  (.getSQLState ^PSQLException cause)
+         :constraint (.getConstraint ^ServerErrorMessage server)
+         :table      (.getTable ^ServerErrorMessage server)}
+        (recur (.getCause cause))))))
+
+(def sql-states
+  "The SQLSTATE codes CloFin translates into domain outcomes. Anything else is
+  a defect and is left to surface as an internal error with a correlation id."
+  {:unique-violation      "23505"
+   :foreign-key-violation "23503"
+   :check-violation       "23514"
+   :not-null-violation    "23502"})
 
 ;; ---------------------------------------------------------------------------
 ;; Health

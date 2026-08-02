@@ -75,6 +75,7 @@ failure modes without adding product insight at this stage
 
 | Context | Namespace root | Owns |
 |---|---|---|
+| **Organisations** | `clofin.organisations` | Tenants; every business record belongs to one |
 | **Ledger** | `clofin.ledger` | Accounts, journal entries, postings, balances |
 | **Payments** | `clofin.payments` | Payment instructions, lifecycle, idempotency |
 | **Authorisation** | `clofin.authz` | Roles, permissions, maker–checker, SoD |
@@ -109,6 +110,19 @@ supplied by the caller. Two consequences that matter in a regulated context:
 1. Domain rules are tested exhaustively without infrastructure.
 2. The same rule can be replayed against historical inputs to reproduce a past
    decision — which is what an auditor actually asks for.
+
+**The persistence seam is named, not implied.** One namespace per context may
+require `clofin.db.*`, and it is the one called `repository` —
+`clofin.ledger.repository`, `clofin.organisations.repository`. Every other
+domain namespace beside it stays pure. The rule is checked by
+`test/clofin/ledger/purity_test.clj`, which reads the `ns` forms rather than
+trusting review to remember
+([ADR-0012](docs/ADR/0012-repository-seam-and-posting-time-validation.md)).
+
+A repository is also where rules that **cannot** be checked purely belong —
+those that are properties of stored state rather than of a value, such as
+whether an account exists in the caller's organisation and still accepts
+postings. Those run inside the same transaction as the write they guard.
 
 ---
 

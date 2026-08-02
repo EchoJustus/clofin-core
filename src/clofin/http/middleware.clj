@@ -11,6 +11,7 @@
             [clojure.string :as str]
             [clojure.tools.logging :as log])
   (:import [java.io InputStream]
+           [java.net URLDecoder]
            [java.nio.charset StandardCharsets]))
 
 ;; ---------------------------------------------------------------------------
@@ -56,6 +57,50 @@
                  elapsed-ms
                  (:correlation-id request))
       response)))
+
+;; ---------------------------------------------------------------------------
+;; Query parameters
+;; ---------------------------------------------------------------------------
+
+(def ^:private max-query-params
+  "Cap on the number of parameters parsed from a query string. A caller cannot
+  make CloFin build an unbounded map out of a single URL."
+  64)
+
+(defn- decode-component
+  "Percent-decode one component of a query string.
+
+  `+` means space in the `application/x-www-form-urlencoded` production that
+  query strings follow, which is why `URLDecoder` is the right tool and
+  `URI/getQuery` is not."
+  [^String s]
+  (try
+    (URLDecoder/decode s StandardCharsets/UTF_8)
+    (catch IllegalArgumentException _
+      (err/invalid! "Query string is not correctly percent-encoded" {:value s}))))
+
+(defn wrap-query-params
+  "Parse `:query-string` into `:query-params`, a map of string to string.
+
+  Keys stay strings for the same reason JSON keys do: interning arbitrary
+  caller-supplied text as keywords lets a caller grow the JVM keyword table
+  without bound. A repeated parameter keeps its first value — handlers here
+  take single-valued parameters, and silently using the last one is how a
+  caller's typo becomes a different query than they read."
+  [handler]
+  (fn [request]
+    (let [pairs (some-> (:query-string request)
+                        (str/split #"&")
+                        (->> (remove str/blank?)
+                             (take max-query-params)))
+          params (reduce (fn [acc pair]
+                           (let [idx (str/index-of pair "=")
+                                 k (decode-component (if idx (subs pair 0 idx) pair))
+                                 v (if idx (decode-component (subs pair (inc idx))) "")]
+                             (if (contains? acc k) acc (assoc acc k v))))
+                         {}
+                         pairs)]
+      (handler (assoc request :query-params params)))))
 
 ;; ---------------------------------------------------------------------------
 ;; JSON
@@ -172,9 +217,11 @@
   3. JSON response   — sits *outside* the error boundary so that the problem
                        documents it produces are encoded like any other body
   4. error boundary  — so a throwable from anything below becomes a response
-  5. JSON request    — parsing failures are raised inside the error boundary"
+  5. JSON request    — parsing failures are raised inside the error boundary
+  6. query params    — likewise: a malformed query string is a 400, not a 500"
   [handler config]
   (-> handler
+      wrap-query-params
       wrap-json-request
       (wrap-errors config)
       wrap-json-response
