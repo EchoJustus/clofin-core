@@ -42,7 +42,12 @@
   are `for each row` on update and delete — deliberately, so that a test can
   reset without weakening the production constraint."
   [pool]
-  (db/execute! pool ["truncate journal_line, journal_entry, ledger_account, organisation cascade"]))
+  ;; `cascade` would reach the payment tables through their foreign keys, but
+  ;; they are named anyway: a test that leaves rows behind because a table was
+  ;; only ever truncated by implication is a test that fails somewhere else.
+  (db/execute! pool ["truncate idempotency_key, payment_instruction,
+                              journal_line, journal_entry, ledger_account,
+                              organisation cascade"]))
 
 (defn with-clean-data
   [f]

@@ -6,3 +6,4 @@
 
 0001-organisation-and-currency.sql
 0002-ledger-accounts-and-journal.sql
+0003-payment-instructions.sql

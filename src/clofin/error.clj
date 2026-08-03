@@ -11,14 +11,31 @@
 
 (def error-types
   "The complete set of domain error categories, and how the HTTP layer renders
-  each one. Adding a category means deciding its externally visible meaning."
+  each one. Adding a category means deciding its externally visible meaning.
+
+  `:problem-type` is optional and names the problem *type* a category is
+  reported under, when that differs from the category's own name. Only
+  `:field-validation` uses it — see below."
   {:validation   {:status 400 :title "Request failed validation"}
    :unauthorised {:status 401 :title "Authentication required"}
    :forbidden    {:status 403 :title "Not permitted"}
    :not-found    {:status 404 :title "Resource not found"}
    :conflict     {:status 409 :title "Conflicting state"}
    :unprocessable {:status 422 :title "Request cannot be processed"}
-   :unavailable  {:status 503 :title "Dependency unavailable"}})
+   :unavailable  {:status 503 :title "Dependency unavailable"}
+
+   ;; A request that was understood, and whose named fields are each rejected on
+   ;; their own merits: an amount of zero, a value date in the past, a purpose
+   ;; code outside the vocabulary. `:validation` above keeps 400 for a request
+   ;; that could not be *understood* — a malformed UUID, an absent body.
+   ;;
+   ;; The distinction is ADR-0012's: 400 is a bug in the caller, 422 is a
+   ;; business outcome to show a human. Both report the same problem type,
+   ;; because to a client branching on `type` they are one class of failure and
+   ;; `status` already separates them. See ADR-0014.
+   :field-validation {:status 422
+                      :title "Request failed validation"
+                      :problem-type :validation}})
 
 (defn error
   "Build a domain error. `type` must be a key of `error-types`."
