@@ -196,9 +196,9 @@ PRD Q1.
 ## 3. Payment instruction lifecycle 🔨
 
 ```
-                    ┌──────────────── amend ────────────────┐
-                    ▼                                       │
-   ┌───────┐    submit    ┌──────────────────┐   approve  ┌─┴────────┐
+       ┌────────── amend ──────────┬────────── amend ──────────┐
+       ▼                           │                           │
+   ┌───────┐    submit    ┌────────┴─────────┐   approve  ┌────┴─────┐
    │ draft │─────────────▶│ pending_approval │───────────▶│ approved │
    └───┬───┘              └────────┬─────────┘            └────┬─────┘
        │                           │                           │
@@ -220,6 +220,13 @@ PRD Q1.
                                     │  instruction │
                                     └──────────────┘
 ```
+
+`amend` leaves **two** states — `pending_approval` and `approved` — and both
+land back in `draft`, invalidating every approval given so far. The diagram is
+checked against `clofin.payments.state/transitions`, which carries eleven
+permitted pairs; a drawing that disagreed with the table would be the failure
+[ADR-0014](ADR/0014-payment-lifecycle-as-data.md) exists to prevent, and it is
+the failure this diagram *was* until ruling O-2 (lesson L-4).
 
 Rules that the diagram alone does not carry:
 

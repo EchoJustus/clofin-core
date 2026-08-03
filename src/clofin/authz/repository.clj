@@ -31,10 +31,11 @@
   "An actor's approval ceilings, keyed by currency.
 
   A row whose currency is null keys under `nil`, which
-  `clofin.authz.approval/limit-for` reads as \"every currency\". No such row can
-  exist today — the primary key on `approver_limit` forbids a null there — and
-  this map handles the case anyway so that correcting the schema needs no code
-  change. See objection O-1 in the REQ."
+  `clofin.authz.approval/limit-for` reads as \"every currency\". Migration `0005`
+  made such a row uninsertable by declaring a primary key over a nullable
+  column; `0006` corrected it with `unique nulls not distinct`, which also holds
+  an actor to at most one wildcard row. This map handled the case throughout,
+  which is why the fix needed no change here — see objection O-1 in the REQ."
   [source actor-id]
   (into {}
         (map (fn [row] [(:currency row) (db/->long (:limit-minor row))]))

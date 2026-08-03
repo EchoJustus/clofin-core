@@ -52,8 +52,8 @@ currency's own integer minor units (ADR-0003), and no conversion happens
 anywhere in the approval path.
 
 **2. Approver limits are per currency too**, for the same reason, with a
-nullable `currency` intended to mean "every currency". *(That row cannot in
-fact be stored — see Consequences.)*
+nullable `currency` meaning "every currency" — at most one such row per actor,
+enforced by `unique nulls not distinct`.
 
 **3. `from_minor` is inclusive**, so an amount exactly on a band boundary falls
 into the **higher** band. Of the two readings this is the one that asks for more
@@ -106,15 +106,27 @@ everywhere in this model.
   a *conservative* ceiling, and an organisation with mixed currencies should
   prefer per-currency rows. Stated here because the alternative is a reader
   discovering it from behaviour.
-- **The wildcard limit row cannot currently be stored.**
-  `approver_limit`'s primary key is `(actor_id, currency)`, and PostgreSQL makes
-  every primary key column `NOT NULL` — so the nullable `currency` the design
-  calls for is silently `NOT NULL` in practice and the "every currency" row
-  fails to insert. `evaluate` implements the rule regardless and is tested on
-  it, so correcting the schema needs no code change. Recorded as objection
-  **O-1** in [`003-REQ`](../audits/003-REQ-authorisation-and-audit-trail.md),
-  awaiting a ruling; `clofin.db.audit-constraints-test` asserts the current
-  behaviour so the defect cannot be forgotten.
+- **A wildcard limit is at most one row per actor.** Two null-currency rows
+  would be two contradictory "every currency" ceilings with no rule for which
+  wins, so `approver_limit_key` is declared `unique nulls not distinct` — nulls
+  compare equal, and the second row is refused. That is a constraint an
+  organisation configuring limits will meet, so it is stated here rather than
+  discovered.
+
+  *Resolved defect, recorded because the reasoning outlived it.* As originally
+  specified, `approver_limit` had `primary key (actor_id, currency)`. PostgreSQL
+  makes every primary-key column `NOT NULL`, so the nullable `currency` this
+  design calls for was silently `NOT NULL` and the wildcard row could not be
+  inserted at all. Raised as objection **O-1** in
+  [`003-REQ`](../audits/003-REQ-authorisation-and-audit-trail.md), confirmed as
+  a defect in the brief, and corrected by **migration `0006`** — which drops the
+  primary key, drops the `NOT NULL` it left behind, and adds the unique
+  constraint above. `evaluate` implemented the rule throughout and needed no
+  change, which is the argument for keeping the decision in a pure function: a
+  schema defect could make the rule unreachable but could not make it wrong.
+  `clofin.db.audit-constraints-test` and `clofin.authz.repository-test` now
+  assert the storage behaviour, because a domain function honouring a row nobody
+  can insert is a rule that does not exist.
 
 **Risks and how they are mitigated**
 
@@ -135,6 +147,12 @@ everywhere in this model.
   `:no-threshold-configured`, and that an approver with a limit in one currency
   has none in another.
 - `clofin.authz.repository-test` asserts that bands are read per currency and
-  do not leak between organisations.
+  do not leak between organisations, and that a wildcard limit round-trips
+  through storage — the row inserts, `find-actor` keys it under nil, and a
+  currency-specific row beats it for its own currency while the wildcard covers
+  the rest.
+- `clofin.db.audit-constraints-test` asserts the constraint itself: a wildcard
+  row inserts, a second one for the same actor is refused, and a wildcard and a
+  currency-specific row coexist.
 - `clofin.api.approvals-api-test` asserts the boundary rule end to end, through
   the API, at all three points.

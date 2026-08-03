@@ -121,7 +121,10 @@
                               :instruction (instruction :amount (money/of "SGD" 1))))))))
 
 (deftest a-wildcard-limit-applies-to-every-currency
-  (testing "the rule is implemented even though migration 0005's primary key stops the row being stored — see objection O-1"
+  (testing "the pure rule. That it survives *storage* is
+            `clofin.authz.repository-test` — migration 0005 made the row
+            uninsertable and 0006 fixed it (objection O-1), and this test passed
+            throughout, which is exactly why a pure test alone was not enough"
     (let [everywhere (actor approver-id :limits {approval/wildcard-currency 500000})]
       (is (= :permitted (:decision (decide :actor everywhere
                                            :instruction (instruction :amount (money/of "SGD" 500000))))))

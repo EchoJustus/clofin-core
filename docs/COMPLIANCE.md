@@ -129,9 +129,10 @@ currency, and the audit event pins the amount by digest.
 **Known limit of the evidence.** The approver's limit *at the time* is **not**
 retained. `approver_limit` is mutable and not versioned, so a limit raised after
 an approval cannot be distinguished from one that was always that high. Stated
-rather than glossed over; recorded as objection **O-1**'s neighbour in
-[`003-REQ`](audits/003-REQ-authorisation-and-audit-trail.md) §Objections, and
-listed in §4 below.
+rather than glossed over; recorded as objection **O-4** in
+[`003-REQ`](audits/003-REQ-authorisation-and-audit-trail.md) §Objections —
+accepted by ruling, with the capture columns carried forward as debt for a
+future brief — and listed in §4 below.
 
 **Tests.** `clofin.authz.approval-test` asserts the boundary rule at
 boundary − 1, boundary and boundary + 1 across a three-band table, and the
@@ -453,7 +454,7 @@ Being explicit about gaps is part of the control design.
 | Rate limiting and abuse protection | Not built; local posture only |
 | Authentication provider integration | **Permission model built (C-08); provider wiring not.** The actor is named by an `X-Actor-Id` header against a seeded table — anyone who can reach the service can claim to be any seeded actor. The authorisation model is real; the authentication in front of it is not adversarial |
 | Audit coverage of ledger and organisation writes | **Payment instructions and approvals emit audit events; account opening, journal posting and organisation creation do not yet.** A literal reading of PR-072 covers them. See C-05 §Scope |
-| Approver limit at the time of an approval | Not retained. `approver_limit` is mutable and unversioned, so a limit raised after an approval is indistinguishable from one that was always that high (C-02 §Known limit) |
+| Approver limit at the time of an approval | Not retained. `approver_limit` is mutable and unversioned, so a limit raised after an approval is indistinguishable from one that was always that high (C-02 §Known limit). Raised as objection O-4 and **accepted by ruling**: the capture columns (`actor_limit_minor`, `approvals_required` on `approval`, written at decision time) are carried forward as debt for a future brief, because a schema change belongs in a brief |
 | Actor administration | No endpoint creates an actor, grants a role or sets a limit. Deliberate for this increment — an actor that could grant itself the approver role would make C-01 unenforceable — but a real deployment needs an administered path with its own controls |
 | Automated dependency vulnerability scanning | Candidate for CI |
 | Retention and deletion policy | Not modelled; interacts with C-03 and C-05 immutability and needs a decision |

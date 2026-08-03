@@ -18,6 +18,7 @@
             [clofin.authz.repository :as authz]
             [clofin.db.core :as db]
             [clofin.money :as money]
+            [clofin.payments.repository :as payments]
             [clofin.test-db :as tdb]
             [clojure.test :refer [deftest is testing use-fixtures]])
   (:import [java.time Instant]))
@@ -83,6 +84,79 @@
 
 (deftest an-unknown-actor-is-nil
   (is (nil? (authz/find-actor tdb/*pool* (random-uuid)))))
+
+;; ---------------------------------------------------------------------------
+;; The wildcard limit, end to end through storage
+;; ---------------------------------------------------------------------------
+;;
+;; `clofin.authz.approval-test` asserts the *rule* — a wildcard limit applies to
+;; every currency, and a currency-specific one beats it — against values. These
+;; assert the same rule survives the round trip: the row is stored with a null
+;; currency, `find-actor` keys it under nil, and `evaluate` reaches the same
+;; decision it reached on a hand-built map.
+;;
+;; Before migration 0006 this could not be tested at all: the row could not be
+;; inserted (objection O-1). A domain function honouring a row nobody can store
+;; is a rule that does not exist, which is why the pure test alone was not
+;; enough.
+
+(deftest a-wildcard-limit-round-trips-and-applies-to-every-currency
+  (let [{:keys [org]} (setup)
+        actor-id (:id (authz/create-actor! tdb/*pool* {:id (random-uuid)
+                                                       :organisation-id org
+                                                       :display-name "Wildcard checker"}))]
+    (authz/grant-role! tdb/*pool* actor-id :approver)
+    (authz/set-limit! tdb/*pool* actor-id nil 500000)
+    (let [actor (authz/find-actor tdb/*pool* actor-id)]
+      (is (= {nil 500000} (:limits actor))
+          "the null currency keys under nil, which is what `limit-for` reads as the wildcard")
+      (is (= 500000 (approval/limit-for actor "SGD")))
+      (is (= 500000 (approval/limit-for actor "JPY"))
+          "one row, every currency — no conversion, so this is a conservative ceiling")
+      (is (true? (approval/within-limit? actor (money/of "SGD" 500000))))
+      (is (false? (approval/within-limit? actor (money/of "SGD" 500001)))))))
+
+(deftest a-currency-specific-limit-beats-the-wildcard-through-the-repository
+  (testing "not only in the pure function: the two rows coexist in storage and
+            `find-actor` assembles them so the specific one wins"
+    (let [{:keys [org account maker] :as f} (setup)
+          actor-id (:id (authz/create-actor! tdb/*pool* {:id (random-uuid)
+                                                         :organisation-id org
+                                                         :display-name "Mixed limits"}))]
+      (authz/grant-role! tdb/*pool* actor-id :approver)
+      (authz/set-limit! tdb/*pool* actor-id nil 999999999)
+      (authz/set-limit! tdb/*pool* actor-id "SGD" 100)
+      (let [actor (authz/find-actor tdb/*pool* actor-id)]
+        (is (= {nil 999999999 "SGD" 100} (:limits actor)))
+        (is (= 100 (approval/limit-for actor "SGD")) "the specific row wins for SGD")
+        (is (= 999999999 (approval/limit-for actor "EUR")) "and the wildcard covers the rest")
+
+        (testing "and `evaluate`, reading those limits, refuses an SGD amount over 100"
+          (let [instruction (insert-instruction! tdb/*pool*
+                                                 (assoc f :org org :account account :maker maker
+                                                        :amount-minor 125000))
+                pi (payments/find-instruction tdb/*pool* org instruction)
+                outcome (approval/evaluate
+                         {:instruction pi
+                          :actor actor
+                          :existing-approvals (authz/approvals-for tdb/*pool* instruction)
+                          :thresholds (authz/thresholds-for tdb/*pool* org "SGD")})]
+            (is (= :refused (:decision outcome)))
+            (is (= :above-actor-limit (:reason outcome)))
+            (is (= 100 (:actor-limit-minor outcome))
+                "the ceiling reported is the specific one, not the wildcard")))))))
+
+(deftest set-limit!-updates-a-wildcard-row-rather-than-duplicating-it
+  (testing "the on-conflict target must match `approver_limit_key`, or a second
+            wildcard row would be attempted and refused"
+    (let [{:keys [org]} (setup)
+          actor-id (:id (authz/create-actor! tdb/*pool* {:id (random-uuid)
+                                                         :organisation-id org
+                                                         :display-name "Raised ceiling"}))]
+      (authz/set-limit! tdb/*pool* actor-id nil 100)
+      (authz/set-limit! tdb/*pool* actor-id nil 250)
+      (is (= {nil 250} (:limits (authz/find-actor tdb/*pool* actor-id)))
+          "one row, updated — not two rows or a constraint violation"))))
 
 (deftest a-seeded-actor-starts-with-nothing
   (testing "default deny begins at creation, not at the first check"

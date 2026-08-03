@@ -164,16 +164,70 @@
                                      ["insert into approver_limit (actor_id, currency, limit_minor)
                                        values (?, 'SGD', 0)" actor]))))))
 
-(deftest objection-o-1-a-wildcard-currency-limit-cannot-be-stored
-  (testing "the brief documents a null-currency row meaning 'every currency'; the primary key forbids it"
+;; ---------------------------------------------------------------------------
+;; The wildcard approver limit
+;; ---------------------------------------------------------------------------
+;;
+;; These replace a test that pinned the *defect* — migration 0005 declared
+;; `primary key (actor_id, currency)` while documenting the column as nullable,
+;; and PostgreSQL forces primary-key columns NOT NULL, so the "applies to every
+;; currency" row could not be stored at all. Raised as objection O-1, confirmed
+;; as a brief defect, and corrected by migration 0006.
+;;
+;; The pure rule was always implemented and tested
+;; (`clofin.authz.approval-test/a-wildcard-limit-applies-to-every-currency`).
+;; What was missing, and what these assert, is that the rule survives *storage*:
+;; a domain function that honours a row nobody can insert is a rule that does
+;; not exist.
+
+(deftest a-wildcard-currency-limit-can-be-stored
+  (testing "O-1's fix: the row the column has always documented now inserts"
     (let [{:keys [org]} (fixture)
-          actor (tdb/insert-actor! tdb/*pool* {:organisation-id org})
-          t (caught #(db/execute! tdb/*pool*
-                                  ["insert into approver_limit (actor_id, currency, limit_minor)
-                                    values (?, null, 100000)" actor]))]
-      (is (some? t)
-          "PostgreSQL makes every primary key column NOT NULL, so approver_limit.currency
-           cannot be null despite being declared so. This test records the defect rather
-           than papering over it — see objection O-1 in the REQ. Delete it when the schema
-           is corrected by a ruling, not before.")
-      (is (re-find #"null value|not-null" (.getMessage ^Exception t))))))
+          actor (tdb/insert-actor! tdb/*pool* {:organisation-id org})]
+      (is (= 1 (db/execute! tdb/*pool*
+                            ["insert into approver_limit (actor_id, currency, limit_minor)
+                              values (?, null, 100000)" actor])))
+      (is (nil? (:currency (db/query-one tdb/*pool*
+                                         ["select currency from approver_limit where actor_id = ?"
+                                          actor])))
+          "and it comes back as null rather than as a sentinel — see migration 0006
+           for why `unique nulls not distinct` was chosen over a coalesce index"))))
+
+(deftest an-actor-cannot-hold-two-wildcard-limits
+  (testing "`nulls not distinct`: two contradictory 'every currency' ceilings would
+            leave no rule for which wins, and a plain unique index would accept both"
+    (let [{:keys [org]} (fixture)
+          actor (tdb/insert-actor! tdb/*pool* {:organisation-id org})]
+      (db/execute! tdb/*pool* ["insert into approver_limit (actor_id, currency, limit_minor)
+                               values (?, null, 100000)" actor])
+      (let [t (caught #(db/execute! tdb/*pool*
+                                    ["insert into approver_limit (actor_id, currency, limit_minor)
+                                      values (?, null, 999)" actor]))]
+        (is (some? t) "a second wildcard row must be refused")
+        (is (re-find #"approver_limit_key" (.getMessage ^Exception t)))))))
+
+(deftest an-actor-cannot-hold-two-limits-in-one-currency
+  (testing "the same constraint still does the per-currency job the primary key did"
+    (let [{:keys [org]} (fixture)
+          actor (tdb/insert-actor! tdb/*pool* {:organisation-id org})]
+      (db/execute! tdb/*pool* ["insert into approver_limit (actor_id, currency, limit_minor)
+                               values (?, 'SGD', 100000)" actor])
+      (is (some? (caught #(db/execute! tdb/*pool*
+                                       ["insert into approver_limit (actor_id, currency, limit_minor)
+                                         values (?, 'SGD', 999)" actor])))))))
+
+(deftest a-wildcard-and-a-currency-specific-limit-coexist
+  (let [{:keys [org]} (fixture)
+        actor (tdb/insert-actor! tdb/*pool* {:organisation-id org})]
+    (db/execute! tdb/*pool* ["insert into approver_limit (actor_id, currency, limit_minor)
+                             values (?, null, 100000)" actor])
+    (db/execute! tdb/*pool* ["insert into approver_limit (actor_id, currency, limit_minor)
+                             values (?, 'SGD', 500)" actor])
+    (is (= 2 (:count (db/query-one tdb/*pool*
+                                   ["select count(*) as count from approver_limit where actor_id = ?"
+                                    actor]))))
+    (testing "and two actors may each hold their own wildcard row"
+      (let [other (tdb/insert-actor! tdb/*pool* {:organisation-id org})]
+        (is (= 1 (db/execute! tdb/*pool*
+                              ["insert into approver_limit (actor_id, currency, limit_minor)
+                                values (?, null, 7)" other])))))))

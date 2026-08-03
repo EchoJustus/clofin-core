@@ -56,13 +56,18 @@
 (def wildcard-currency
   "The key an approver limit uses when it applies to every currency.
 
-  `nil`, matching the intent of `approver_limit.currency` being nullable in
-  migration `0005`. Note that the migration's primary key makes such a row
-  impossible to store today — see objection O-1 in
-  `docs/audits/003-REQ-authorisation-and-audit-trail.md`. The rule is
-  implemented and tested here regardless: the domain answer should not be
-  shaped by a schema defect, and when the schema is corrected nothing here
-  needs to change."
+  `nil`, matching `approver_limit.currency` being nullable. Migration `0005`
+  declared a primary key over that column, which PostgreSQL forces `NOT NULL`,
+  so the row was uninsertable until migration `0006` replaced the key with
+  `unique nulls not distinct (actor_id, currency)` — which also holds an actor
+  to at most one wildcard row. Raised as objection O-1 and confirmed as a defect
+  in the brief; see `docs/audits/003-REQ-authorisation-and-audit-trail.md`.
+
+  The rule was implemented and tested here throughout, which is why the fix was
+  a migration and no change to this namespace: the domain answer should not be
+  shaped by a schema defect. `clofin.authz.repository-test` now asserts the same
+  rule survives the round trip, because a function honouring a row nobody can
+  store is a rule that does not exist."
   nil)
 
 (defn band-for
