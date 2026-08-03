@@ -19,7 +19,7 @@ and this table is stale.
 | 1 | Foundation and ledger core | — (predates the brief protocol) | ✅ done — merged to `main` at `3bde834` (PR #1; milestone audit waived, see audits register) | green, 303 assertions |
 | 2 | Ledger persistence and account API | [TASK-001](briefs/001-TASK-ledger-persistence-and-account-api.md) | ✅ `IMPLEMENTED` — merged to `main` in PR #2 (`f7018a1`); `FEEDBACK-001` outstanding | green, 757 assertions |
 | 3 | Payment lifecycle and idempotency | [TASK-002](briefs/002-TASK-payment-instruction-lifecycle.md) | 🔨 `IMPLEMENTED` — PR #4 open and green, O-3 fix applied; audit deferred to post-TASK-003 batch | green, 1547+ assertions |
-| 4 | Authorisation, maker–checker, audit | [TASK-003](briefs/003-TASK-authorisation-and-audit-trail.md) | 🔨 `IMPLEMENTED` — PR #5 open and green, **stacked on PR #4**; O-1 fix (migration `0006`) in flight | green, 2314 assertions |
+| 4 | Authorisation, maker–checker, audit | [TASK-003](briefs/003-TASK-authorisation-and-audit-trail.md) | 🔨 `IMPLEMENTED` — PR #5 open and green at `6f58857`, **stacked on PR #4**; all four rulings actioned, O-1 fix applied | green, 2333 assertions |
 | 5–9 | Settlement onwards | not yet briefed | 💭 later | — |
 
 **Controls: enforced on the stack, not yet on `main`.** C-06 (idempotency) is
@@ -108,7 +108,7 @@ to rediscover them:
 
 ## Increment 4 — Authorisation, maker–checker and audit 🔨
 
-**Brief:** [TASK-003](briefs/003-TASK-authorisation-and-audit-trail.md) · **Status:** `IMPLEMENTED` — PR #5 open and green, stacked on PR #4; four objections ruled, O-1 fix (migration `0006`) in flight
+**Brief:** [TASK-003](briefs/003-TASK-authorisation-and-audit-trail.md) · **Status:** `IMPLEMENTED` — PR #5 open and green at `6f58857`, stacked on PR #4; four objections ruled and actioned, O-1 fixed by migration `0006`
 
 *Why next: this is the control an auditor asks about first.*
 
@@ -134,8 +134,6 @@ to rediscover them:
   scaffolding, and every relevant doc says so.
 - **No actor administration API** — deliberate; self-granted roles would make
   C-01 unenforceable.
-- **The wildcard approver limit is unbuildable until migration `0006` lands**
-  (O-1 fix dispatched).
 
 ## Increment 5 — Settlement simulation 💭
 

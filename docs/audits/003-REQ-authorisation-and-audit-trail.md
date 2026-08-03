@@ -8,15 +8,15 @@
 | **PR base** | `feat/payment-instruction-lifecycle` — TASK-002 is implemented but unmerged (PR #4), per AGENT_HANDOFF §1b |
 | **Controls** | C-01, C-02, C-05, C-08 → ✅ |
 | **Requirements** | PR-010…PR-015, PR-070…PR-075 |
-| **Status** | Implemented; four objections raised, none resolved unilaterally |
+| **Status** | Implemented. All four objections ruled on 2026-08-03; O-1's fix delivered as migration `0006`, O-2 ratified, O-3 and O-4 accepted as filed |
 
 > **Meta copy.** Ingested 2026-08-03 from the submission branch
-> `claude/authorisation-audit-trail-r5fzw3` (PR #5, stacked on PR #4). All four
-> objections ruled same day — rulings in the brief's changelog
-> ([TASK-003](../briefs/003-TASK-authorisation-and-audit-trail.md)). The one fix
-> ordered (O-1, migration `0006`) is dispatched to the owning Worker. References
-> to ADR-0014/0015/0016 and UAT-005 resolve on the submission branch, not on
-> `meta`.
+> `claude/authorisation-audit-trail-r5fzw3` (PR #5, stacked on PR #4);
+> refreshed same day after the O-1 fix landed (`6f58857`, CI green). Rulings
+> live in the brief's changelog
+> ([TASK-003](../briefs/003-TASK-authorisation-and-audit-trail.md)). References
+> to ADR-0014/0015/0016, UAT-005 and migration `0006` resolve on the submission
+> branch, not on `meta`.
 
 ---
 
@@ -149,7 +149,7 @@ Ran 219 tests containing 1252 assertions.
 0 failures, 0 errors.
 
 $ clojure -M:test:it     # including PostgreSQL integration
-Ran 416 tests containing 2314 assertions.
+Ran 422 tests containing 2333 assertions.
 0 failures, 0 errors.
 
 $ sh scripts/check-doc-links.sh
@@ -163,7 +163,16 @@ integration:
 | | Base | This branch | Added |
 |---|---|---|---|
 | Unit tests / assertions | 158 / 900 | 219 / 1252 | **+61 / +352** |
-| With integration | 278 / 1572 | 416 / 2314 | **+138 / +742** |
+| With integration | 278 / 1572 | 422 / 2333 | **+144 / +761** |
+
+The integration figures moved after the O-1 fix: the pinning test (1 test, 2
+assertions) was deleted and seven storage-level tests (21 assertions) replaced
+it. Unit counts are unchanged, which is the expected shape — `0006` corrected a
+schema, and the pure rule it made reachable was already implemented and tested.
+
+Migration `0006` was also verified from an **empty schema**, applying all six in
+order, rather than only as an increment on an already-migrated database — the
+case a fresh `make up` hits.
 
 `make verify` = `test` + `docs-check`, both green. `make test-it` green.
 
@@ -178,10 +187,16 @@ integration:
 
 ## 4. Objections
 
-Per AGENT_HANDOFF §1b, these are recorded rather than resolved unilaterally.
+Per AGENT_HANDOFF §1b, these were recorded rather than resolved unilaterally.
 None of them was worked around silently.
 
-### O-1 — `approver_limit`'s primary key makes its documented null-currency row impossible ⚠️ needs a ruling
+**All four were ruled on the day this file was filed.** Each objection below
+keeps what was originally reported — so the record of what was believed at the
+time survives — followed by the ruling and, where one was ordered, the fix.
+O-1's fix is in this branch as migration `0006`; the others needed no code
+beyond the O-2 residual (the DOMAIN_MODEL diagram, now corrected).
+
+### O-1 — `approver_limit`'s primary key makes its documented null-currency row impossible ✅ ruled: confirmed, fixed in migration `0006`
 
 The brief's SQL for `approver_limit` is:
 
@@ -206,31 +221,71 @@ ERROR:  null value in column "currency" of relation "approver_limit"
         violates not-null constraint
 ```
 
-**What I did.** Shipped the brief's DDL **verbatim**, so that a ruling lands
-against the exact thing specified rather than against my edit of it. The domain
-function implements the wildcard rule regardless and is tested on it
-(`authz.approval-test/a-wildcard-limit-applies-to-every-currency`,
-`.../a-currency-specific-limit-beats-the-wildcard`), so correcting the schema
-needs no code change. The defect is pinned by a test that asserts the *current*
-failure (`db.audit-constraints-test/objection-o-1-a-wildcard-currency-limit-cannot-be-stored`),
-with a comment saying to delete it when a ruling corrects the schema — so it
-cannot be quietly forgotten. Recorded in the migration's column comment and in
-ADR-0015's Consequences.
+**What I did when filing.** Shipped the brief's DDL **verbatim**, so that a
+ruling would land against the exact thing specified rather than against my edit
+of it. The domain function implemented the wildcard rule regardless and was
+tested on it, so correcting the schema needed no code change. The defect was
+pinned by a test asserting the *current* failure, with a comment saying to
+delete it when a ruling corrected the schema.
 
-**Suggested fix, for the ruling.** A follow-on migration replacing the primary
-key with a unique index over a sentinel:
+### Ruling and fix — **confirmed as a brief defect; resolved**
 
-```sql
-alter table approver_limit drop constraint approver_limit_pkey;
-create unique index approver_limit_key
-  on approver_limit (actor_id, coalesce(currency, '***'));
+Master Control confirmed the defect and ordered the fix, choosing
+`unique nulls not distinct` over my suggested `coalesce(currency, '***')`
+expression index. The ruling is right and my suggestion was worse on three
+counts: a sentinel is a magic value every future query has to remember to
+exclude; an expression index hides a business rule in an implementation detail
+rather than declaring it; and — the one I had missed — a plain unique index over
+a nullable column would have accepted **two** wildcard rows for one actor, since
+SQL nulls are distinct by default. That would have left two contradictory
+"applies to every currency" ceilings and no rule for which wins.
+`NULLS NOT DISTINCT` refuses the second.
+
+Delivered as **migration `0006-approver-limit-wildcard-currency.sql`** —
+`0005` is applied and checksummed, so it is immutable and the correction is a
+new migration, not an edit.
+
+**One thing the ruling's DDL did not cover, found by verifying rather than
+assuming.** Dropping the primary key does **not** drop the `NOT NULL` it
+implied — PostgreSQL leaves those column marks behind. My first draft of `0006`
+did exactly what the ruling specified and the wildcard insert *still* failed
+with `null value in column "currency" … violates not-null constraint`. `0006`
+therefore carries an explicit `alter column currency drop not null` between the
+two statements, with a comment saying why. Verified against a live server, from
+an empty schema, applying all six migrations in order:
+
+```
+$ psql \d approver_limit
+ currency    | character(3) |           |          |          ← nullable
+Indexes:
+    "approver_limit_key" UNIQUE CONSTRAINT, btree (actor_id, currency) NULLS NOT DISTINCT
 ```
 
-I did not apply it: it is a schema change the brief does not specify, and
-`approver_limit` has no wildcard rows today so nothing is currently broken by
-the defect — only unbuildable.
+**Tests.** The pinning test `objection-o-1-a-wildcard-currency-limit-cannot-be-stored`
+is deleted, as its own comment instructed. In its place:
 
-### O-2 — AC-7 requires an `amend` arrow the lifecycle table does not have ⚠️ resolved by me, ruling requested
+| Test | Asserts |
+|---|---|
+| `db.audit-constraints-test/a-wildcard-currency-limit-can-be-stored` | The row inserts and reads back as null, not as a sentinel |
+| `.../an-actor-cannot-hold-two-wildcard-limits` | The second wildcard row is refused, naming `approver_limit_key` |
+| `.../an-actor-cannot-hold-two-limits-in-one-currency` | The constraint still does the per-currency job the primary key did |
+| `.../a-wildcard-and-a-currency-specific-limit-coexist` | Both rows live, and two actors may each hold their own wildcard |
+| `authz.repository-test/a-wildcard-limit-round-trips-and-applies-to-every-currency` | Stored → `find-actor` keys it under nil → `limit-for` honours it for every currency |
+| `.../a-currency-specific-limit-beats-the-wildcard-through-the-repository` | The specific row wins **through the repository path**, and `evaluate` reading those limits reports the specific ceiling in its refusal |
+| `.../set-limit!-updates-a-wildcard-row-rather-than-duplicating-it` | `on conflict` infers the new constraint, so raising a wildcard ceiling updates rather than violating |
+
+The pure tests in `authz.approval-test` are unchanged and still pass — which is
+the point worth keeping: they passed throughout the defect, because a schema
+that cannot store a row can make a rule *unreachable* but not *wrong*. That is
+the argument for the decision living in a pure function, and also the reason a
+pure test alone was not enough. The storage tests are the half that was missing.
+
+Documentation updated to record the ruling rather than the defect: `0006`'s
+column comment supersedes `0005`'s, and `clofin.authz.approval/wildcard-currency`,
+`clofin.authz.repository/limits-for`, ADR-0015 (decision 2, Consequences,
+Verification) and this file all now describe a working wildcard row.
+
+### O-2 — AC-7 requires an `amend` arrow the lifecycle table does not have ✅ ruled: resolution ratified, no revert
 
 AC-7 reads: *"Given an **approved** instruction, when any field is amended, then
 every prior approval is invalidated and status returns to `draft`."*
@@ -265,7 +320,27 @@ rule 3 should be made to agree. I have updated rule 3 and the surrounding prose
 on this branch; the ASCII diagram itself I left alone, because redrawing it is a
 change to a document the next increment may also be editing.
 
-### O-3 — `UAT-004` was already taken ℹ️ informational
+### Ruling — **resolution ratified; no revert. Residual closed.**
+
+AC-7 means what it says: an approved instruction is amendable, every approval is
+invalidated, and the status returns to `draft` — PR-014's clearest case, and
+without it the only path off `approved` is cancellation. The added arrow and
+ADR-0014 amendment 1 stand.
+
+Master Control ruled the contradiction a **cross-brief authoring defect** rather
+than a Worker error, since both contradicting documents were authored on `meta`,
+and recorded it as standing **lesson L-4**.
+
+**Residual, now closed.** The ruling folded the diagram redraw into this fix
+instruction, so my reason for leaving it alone no longer applies. `DOMAIN_MODEL.md`
+§3 now draws `amend` leaving **both** `pending-approval` and `approved`, with the
+two arrows converging on `draft`; the connector columns line up with the
+`cancel`/`reject`/`release` drops already below the boxes, which the *original*
+diagram did not. A line under it states the arrow count and points at
+`clofin.payments.state/transitions` as the thing to check the drawing against —
+because a diagram nobody can check against the table is how this defect happened.
+
+### O-3 — `UAT-004` was already taken ✅ ruled: accepted; lesson L-1 widened
 
 The brief's definition of done asks for
 `docs/uat/UAT-004-segregation-of-duties.md`. `UAT-004-idempotent-submission.md`
@@ -278,7 +353,13 @@ lesson L-1) — the standing lesson is about migrations; it may be worth widenin
 it to *every* sequentially-numbered artefact, since briefs, audits, ADRs, UAT
 scripts and migrations are all numbered and never renumbered.
 
-### O-4 — C-02's stated evidence is not producible from the brief's schema ℹ️ documented, not worked around
+**Ruled accepted.** `UAT-005` stands and the brief's definition of done is
+amended on `meta`. The suggestion was taken: **lesson L-1 is widened** from
+migrations to every sequentially-numbered artefact series. Master Control noted
+this as the second L-1 recurrence inside one brief — the brief renumbered its own
+migration and still hard-coded a stale UAT number.
+
+### O-4 — C-02's stated evidence is not producible from the brief's schema ✅ ruled: accepted; capture columns carried forward as debt
 
 `COMPLIANCE.md` C-02 previously said:
 
@@ -303,6 +384,12 @@ the change of wording is mine and is flagged here.
 (`actor_limit_minor`, `approvals_required`) captured at decision time. That is a
 schema change and belongs in a brief, not in this one.
 
+**Ruled accepted.** Rewriting C-02 to name only what is extractable *is* the
+definition-of-done instruction ("extractable evidence named"), not a divergence.
+The capture columns are recorded as carried-forward debt on the ROADMAP for a
+future brief — a schema change belongs in a brief, exactly as judged here. No
+change to this branch beyond the cross-reference in COMPLIANCE §4.
+
 ---
 
 ## 5. Decisions taken, and where the ADRs are
@@ -324,7 +411,8 @@ about is answered not by normalisation but by **denying** an unconfigured
 currency: an organisation that forgets EUR does not get weak control over EUR, it
 gets no EUR payments. The gap is loud instead of silent.
 
-Two smaller decisions taken without an ADR, recorded here:
+Two smaller decisions taken without an ADR, **both ratified by ruling** so they
+are not re-argued:
 
 - **A fifth refusal reason, `:no-threshold-configured`**, beyond the four the
   brief lists. The brief's four have no answer for "the organisation has not said
@@ -332,13 +420,15 @@ Two smaller decisions taken without an ADR, recorded here:
   number (which is how a control silently weakens) or to throw a defect (which an
   unconfigured tenant is not). It strengthens default deny rather than weakening
   any AC. Flagged because the brief's list may have been intended as exhaustive.
+  **Ruled accepted:** the list was illustrative, and denying loudly is ADR-0015's
+  posture applied consistently.
 - **`evaluate` takes an optional `:decision`**, defaulting to `:approved`, so a
   rejection runs through the *same* function — checking `:payment/reject` and the
   maker rule, and skipping the limit and the threshold, because a ceiling is
   authority to permit a payment of a size, not to refuse one. One function rather
   than two, because C-01 is the rule that must not be stated twice and a separate
   `evaluate-rejection` is exactly where the second statement would drift. The
-  brief's call shape is unchanged.
+  brief's call shape is unchanged. **Ruled accepted**, on that reasoning.
 
 ---
 
@@ -349,12 +439,12 @@ Named here and in `COMPLIANCE.md` §4, not left for a reader to discover.
 | Debt | Why, and what it would take |
 |---|---|
 | **Ledger and organisation writes emit no audit events.** Payment instructions and approvals emit one per state change; account opening, journal posting and organisation creation do not | Those are TASK-001's endpoints and outside this brief's In-scope list, which names `clofin.audit` and the payment/approval interfaces only. A literal reading of PR-072 covers them, so **C-05 is marked ✅ with an explicit scope paragraph** rather than unqualified. The work is small — each handler wrapping its repository call in a transaction and recording on it — but it changes three of TASK-002's and TASK-001's files and belongs in its own brief |
-| **The approver's limit at the time of an approval is not retained** | O-4. Needs two columns on `approval` |
+| **The approver's limit at the time of an approval is not retained** | O-4, **accepted by ruling**: the capture columns (`actor_limit_minor`, `approvals_required` on `approval`, written at decision time) are carried forward on the ROADMAP for a future brief, because a schema change belongs in a brief |
 | **Authentication does not resist an adversary** | Out of scope by the brief. `X-Actor-Id` names a seeded actor with no token and no signature; anyone who can reach the service can claim to be any actor. Said plainly in `api/openapi.yaml`, `clofin.api.principal`'s docstring and COMPLIANCE §4 — the authorisation model is real, the authentication in front of it is not |
 | **No actor administration API** | Deliberate: an actor able to grant itself the approver role would make C-01 unenforceable however carefully `evaluate` is written. A real deployment needs an administered path with its own controls, and that is a brief of its own |
 | **`POST /organisations` is unauthenticated** | It is the bootstrap: there is no actor until an organisation exists to hold one. The alternative was a superuser, which the brief forbids and which would be worse. Stated in the OpenAPI `X-Actor-Id` description |
-| **The wildcard approver limit is unbuildable** | O-1, awaiting a ruling |
-| **`DOMAIN_MODEL.md` §3's ASCII diagram still disagrees with itself** | O-2. Rule 3 and the prose are corrected on this branch; the diagram is left for whoever redraws it |
+| ~~The wildcard approver limit is unbuildable~~ | **Closed.** O-1 ruled a brief defect; fixed by migration `0006` and covered by seven storage-level tests |
+| ~~`DOMAIN_MODEL.md` §3's ASCII diagram disagrees with itself~~ | **Closed.** O-2's residual; the diagram now draws `amend` from both `pending-approval` and `approved` |
 
 ---
 
