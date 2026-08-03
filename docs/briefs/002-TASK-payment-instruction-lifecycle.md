@@ -3,14 +3,14 @@
 | Field | Value |
 |---|---|
 | **Increment** | 3 |
-| **Status** | `IMPLEMENTED` — PR #4 open; one fix instruction outstanding (O-3) |
+| **Status** | `IMPLEMENTED` — PR #4 open and green; O-3 fix applied (`f529663`) |
 | **Depends on** | TASK-001 — needs `clofin.ledger.repository/post-entry!` |
 | **Base branch** | `origin/main` — TASK-001 merged in PR #2 (`f7018a1`), so no stacking is needed; open the PR against `main`, per AGENT_HANDOFF §1b |
 | **Blocks** | TASK-003 |
 | **Requirements** | PR-001…PR-005, PR-040…PR-044 |
 | **Controls touched** | C-06 (duplicate payment prevention) |
 | **Scope** | Large — split into two commits if it helps: (a) state machine + persistence, (b) API + idempotency |
-| **Audit** | Submitted: [002-REQ](../audits/002-REQ-payment-instruction-lifecycle.md) (PR #4); `FEEDBACK-002` outstanding |
+| **Audit** | Submitted: [002-REQ](../audits/002-REQ-payment-instruction-lifecycle.md) (PR #4). External milestone batch audit **deferred until after TASK-003** by decision of 2026-08-03 |
 
 > Status lifecycle: `READY` → `IN PROGRESS` → `IMPLEMENTED` → `AUDITED` → `CLOSED`.
 > Status is maintained by Master Control on the `meta` branch — see AGENT_HANDOFF §1b.
@@ -237,7 +237,7 @@ or a crash between the two leaves a payment made with no record that it was.
 |---|---|
 | O-1 | **Confirmed UAT-004.** The brief pre-assigned a UAT number that TASK-001 had already consumed — a brief-authoring defect, now a standing lesson. |
 | O-2 | **Interpretation confirmed.** `PATCH` edits a draft in place and drives no transition; the `:amend` *event* (pending-approval → draft, invalidating approvals, PR-014) belongs to TASK-003. ADR-0014 stands. |
-| O-3 | **Fix ordered.** Digest scope amended above; fix instruction dispatched to the Worker on `feat/payment-instruction-lifecycle`. |
+| O-3 | **Fix ordered — and applied** in `f529663`: digest now covers `{method, path, body}`, with migration `0004-idempotency-digest-scope.sql` documenting the scope change append-only. |
 | O-4 | **Accepted.** The brief was right, `DOMAIN_MODEL.md` was wrong; the Worker's model correction travels with the code. |
 | O-5 | **Accepted.** C-06 now names the real constraint. |
 | O-6 | **Transcribed** — PR-005 deferral recorded in `ROADMAP.md` increment 3. |

@@ -18,8 +18,8 @@ and this table is stale.
 |---|---|---|---|---|
 | 1 | Foundation and ledger core | — (predates the brief protocol) | ✅ done — merged to `main` at `3bde834` (PR #1; milestone audit waived, see audits register) | green, 303 assertions |
 | 2 | Ledger persistence and account API | [TASK-001](briefs/001-TASK-ledger-persistence-and-account-api.md) | ✅ `IMPLEMENTED` — merged to `main` in PR #2 (`f7018a1`); `FEEDBACK-001` outstanding | green, 757 assertions |
-| 3 | Payment lifecycle and idempotency | [TASK-002](briefs/002-TASK-payment-instruction-lifecycle.md) | 🔨 `IMPLEMENTED` — PR #4 open; O-3 fix outstanding; `FEEDBACK-002` outstanding | green, 1547 assertions |
-| 4 | Authorisation, maker–checker, audit | [TASK-003](briefs/003-TASK-authorisation-and-audit-trail.md) | 📋 `READY`, blocked on 002 | — |
+| 3 | Payment lifecycle and idempotency | [TASK-002](briefs/002-TASK-payment-instruction-lifecycle.md) | 🔨 `IMPLEMENTED` — PR #4 open and green, O-3 fix applied; audit deferred to post-TASK-003 batch | green, 1547+ assertions |
+| 4 | Authorisation, maker–checker, audit | [TASK-003](briefs/003-TASK-authorisation-and-audit-trail.md) | 🔨 `IN PROGRESS` — dispatched; **stacked on PR #4's branch**; migration `0005` | — |
 | 5–9 | Settlement onwards | not yet briefed | 💭 later | — |
 
 **Controls still unenforced.** Four entries in
@@ -83,7 +83,7 @@ to rediscover them:
 
 ## Increment 3 — Payment instruction lifecycle 📋
 
-**Brief:** [TASK-002](briefs/002-TASK-payment-instruction-lifecycle.md) · **Status:** `IMPLEMENTED` — PR #4 open (275 tests / 1547 assertions green); one ruled fix (O-3, digest scope) outstanding
+**Brief:** [TASK-002](briefs/002-TASK-payment-instruction-lifecycle.md) · **Status:** `IMPLEMENTED` — PR #4 open and green; O-3 digest-scope fix applied (`f529663`, migration `0004`)
 
 **Carried forward, deliberately** (from [002-REQ](audits/002-REQ-payment-instruction-lifecycle.md) §6):
 
@@ -106,7 +106,7 @@ to rediscover them:
 
 ## Increment 4 — Authorisation, maker–checker and audit 📋
 
-**Brief:** [TASK-003](briefs/003-TASK-authorisation-and-audit-trail.md) · **Status:** `READY`, blocked on TASK-002
+**Brief:** [TASK-003](briefs/003-TASK-authorisation-and-audit-trail.md) · **Status:** `IN PROGRESS` — dispatched; stacked on `feat/payment-instruction-lifecycle` (PR #4)
 
 *Why next: this is the control an auditor asks about first.*
 

@@ -3,9 +3,9 @@
 | Field | Value |
 |---|---|
 | **Increment** | 4 |
-| **Status** | `READY` (blocked on TASK-002) |
+| **Status** | `IN PROGRESS` — dispatched 2026-08-03 |
 | **Depends on** | TASK-002 — needs the instruction lifecycle to attach approval to |
-| **Base branch** | The TASK-002 feature branch once it exists (stacked, per AGENT_HANDOFF §1b); named here by Master Control at dispatch |
+| **Base branch** | `feat/payment-instruction-lifecycle` at `f529663` — TASK-002 is implemented but unmerged (PR #4), so **stack on its tip and open the PR against that branch**, not `main`, per AGENT_HANDOFF §1b. When PR #4 merges, retarget to `main` and rebase |
 | **Blocks** | Increment 5 (settlement) |
 | **Requirements** | PR-010…PR-015, PR-070…PR-075 |
 | **Controls touched** | C-01, C-02, C-05, C-08 |
@@ -67,7 +67,7 @@ gives inconsistent control strength across currencies.
    caller can branch and a test can enumerate.
 3. **`clofin.authz.repository`**, **`clofin.payments.approval-service`**.
 4. **`clofin.audit`** — append-only event capture and evidence extraction.
-5. **Migration `0004-authorisation-and-audit.sql`**.
+5. **Migration `0005-authorisation-and-audit.sql`** *(was `0004` — the base branch consumed `0004-idempotency-digest-scope.sql` in the O-3 fix; numbered against the whole stack per §1b and lesson L-1)*.
 6. **`clofin.api.approvals`**, **`clofin.api.audit`** + routes + OpenAPI.
 7. Replace every `TODO(TASK-003)` left by TASK-001 and TASK-002 with the real
    authenticated principal. **Grep for them; leaving one is a failed handover.**
@@ -84,7 +84,7 @@ gives inconsistent control strength across currencies.
 
 ## Interfaces
 
-### Migration `0004-authorisation-and-audit.sql`
+### Migration `0005-authorisation-and-audit.sql`
 
 ```sql
 create table actor (
