@@ -80,12 +80,15 @@ that its statements are checkable; that applies to its replies to reviewers too.
 | *(waived)* | Increment 1 / PR #1 | 2026-08-02 | — | Deep architectural audit **explicitly bypassed** by the reviewer to unblock the pipeline, with rigorous review to be enforced from PR #2 onward. Recorded so the assurance history is honest: increment 1 was consciously not audited. |
 | *(pending)* | Increment 2 / PR #2 — `001-REQ` filed by the Worker | requested 2026-08-02 | — | Awaiting `FEEDBACK-001` from the Principal Architect. PR #2 merged to `main` (`f7018a1`) ahead of the audit — reviews do not gate execution; any findings will be dispatched as fix instructions against `main`. |
 | *(pending)* | Increment 3 / PR #4 — [`002-REQ`](002-REQ-payment-instruction-lifecycle.md) | requested 2026-08-03 | — | Eight Worker objections triaged same day; rulings in the brief's changelog. O-3 fix ordered **and applied** (`f529663`). **Milestone batch audit deferred until after TASK-003** by decision of 2026-08-03 — FEEDBACK-001/002/003 expected as one batch review. |
+| *(pending)* | Increment 4 / PR #5 — [`003-REQ`](003-REQ-authorisation-and-audit-trail.md) | requested 2026-08-03 | — | Four Worker objections triaged same day; rulings in [TASK-003's changelog](../briefs/003-TASK-authorisation-and-audit-trail.md). O-1 fix ordered (migration `0006`); O-2 resolution ratified; lessons L-1 widened, L-3 and L-4 added. **TASK-003 is implemented, so the deferred milestone batch audit is now unblocked** — FEEDBACK-001/002/003 awaited as one batch. |
 
 ### Submissions awaiting review
 
 | Submission | Covers | Submitted | Status |
 |---|---|---|---|
 | [001-REQ](001-REQ-ledger-persistence-and-account-api.md) | [TASK-001](../briefs/001-TASK-ledger-persistence-and-account-api.md) | 2026-08-02 | Awaiting audit |
+| [002-REQ](002-REQ-payment-instruction-lifecycle.md) | [TASK-002](../briefs/002-TASK-payment-instruction-lifecycle.md) | 2026-08-03 | Awaiting audit — objections ruled, O-3 fix applied (`f529663`) |
+| [003-REQ](003-REQ-authorisation-and-audit-trail.md) | [TASK-003](../briefs/003-TASK-authorisation-and-audit-trail.md) | 2026-08-03 | Awaiting audit — objections ruled, O-1 fix in flight (migration `0006`) |
 
 ## Standing lessons
 
@@ -94,8 +97,10 @@ names the brief section that now guards against it, so the guard can be checked.
 
 | # | Anti-pattern | Guarded by |
 |---|---|---|
-| L-1 | A brief pre-assigns a sequence number owned by another artifact series without checking the live sequence (TASK-002's DoD named UAT-003, which TASK-001 had already consumed). | Brief authoring: reference artifact series by *next available number* or by name, never by a hard-coded number — and verify against the tree the Worker will actually build on. Surfaced by 002-REQ O-1. |
+| L-1 | A brief pre-assigns a sequence number owned by another artifact series without checking the live sequence (TASK-002's DoD named UAT-003, which TASK-001 had already consumed; TASK-003 renumbered its migration for this very reason and *still* hard-coded UAT-004, which TASK-002 owned — surfaced by 003-REQ O-3). | Brief authoring: reference **every** sequentially-numbered series — migrations, UAT scripts, ADRs, briefs, audits — by *next available number* or by name, never by a hard-coded number, and verify each one against the tree the Worker will actually build on, including unmerged branches in the stack. Widened from migrations-only 2026-08-03. |
 | L-2 | Specifying replay protection as a digest of "the request body" alone scopes the guarantee too narrowly: identical bodies on different endpoints or resources collide, and a replayed response silently substitutes for work never done. Canonical digests include method and path. | Brief 002's idempotency section, as amended by ruling O-3. Any future brief specifying idempotency copies that wording. |
+| L-3 | A brief ships DDL that its target engine cannot honour as written: TASK-003 declared a nullable column inside a primary key, which PostgreSQL silently forces `NOT NULL`, making the brief's own documented null-currency row uninsertable (003-REQ O-1; corrected by ruling — `unique nulls not distinct`, migration `0006`). | Brief authoring: **execute every specified migration against a live PostgreSQL of the target version before dispatch**, and insert one row of every documented shape — a comment describing data the schema cannot hold is a defect the Worker inherits. |
+| L-4 | A brief's acceptance criterion demands behaviour unreachable under an interface the same author specified elsewhere: TASK-003's AC-7 required amending an `approved` instruction while TASK-002's lifecycle table carried no such arrow, and `DOMAIN_MODEL.md`'s rule 3 contradicted its own diagram (003-REQ O-2; ruled in AC-7's favour, ADR-0014 amendment 1 ratified). | Brief authoring: cross-check every AC against the state tables, diagrams and interfaces it exercises — in this brief, its dependency stack, and the domain model — before dispatch. A Worker who finds such a contradiction files it as an objection for arbitration; it is never resolved silently in either direction. |
 
 Until an audit populates this table, the standing constraints are the ones in
 [`../AGENT_HANDOFF.md`](../AGENT_HANDOFF.md) §3 — the rules that must not be

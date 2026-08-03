@@ -3,14 +3,14 @@
 | Field | Value |
 |---|---|
 | **Increment** | 4 |
-| **Status** | `IN PROGRESS` — dispatched 2026-08-03 |
+| **Status** | `IMPLEMENTED` — PR #5 open and green 2026-08-03, stacked on PR #4; O-1 fix (migration `0006`) dispatched, see Changelog |
 | **Depends on** | TASK-002 — needs the instruction lifecycle to attach approval to |
 | **Base branch** | `feat/payment-instruction-lifecycle` at `f529663` — TASK-002 is implemented but unmerged (PR #4), so **stack on its tip and open the PR against that branch**, not `main`, per AGENT_HANDOFF §1b. When PR #4 merges, retarget to `main` and rebase |
 | **Blocks** | Increment 5 (settlement) |
 | **Requirements** | PR-010…PR-015, PR-070…PR-075 |
 | **Controls touched** | C-01, C-02, C-05, C-08 |
 | **Scope** | Large — split into (a) authz + approval, (b) audit trail + evidence |
-| **Audit** | Not yet submitted |
+| **Audit** | [`003-REQ`](../audits/003-REQ-authorisation-and-audit-trail.md) filed and ingested 2026-08-03; milestone batch audit (FEEDBACK-001/002/003) now unblocked |
 
 > Status lifecycle: `READY` → `IN PROGRESS` → `IMPLEMENTED` → `AUDITED` → `CLOSED`.
 > Status is maintained by Master Control on the `meta` branch — see AGENT_HANDOFF §1b.
@@ -105,11 +105,19 @@ create table actor_role (
 
 -- An approver's own ceiling. Null currency = applies to every currency;
 -- see the ADR you write for PRD Q1.
+-- [Amended by ruling O-1, 2026-08-03] The original text declared
+-- `primary key (actor_id, currency)`. PostgreSQL forces every primary-key
+-- column NOT NULL, which makes the documented null-currency row uninsertable —
+-- a defect the Worker proved empirically (003-REQ O-1). Uniqueness is now the
+-- UNIQUE NULLS NOT DISTINCT constraint below (PostgreSQL 15+; this stack runs
+-- 16), which also enforces at most one wildcard row per actor. Migration 0005
+-- shipped the defective DDL verbatim and is checksummed and immutable, so the
+-- correction lands as migration 0006, not as an edit to 0005.
 create table approver_limit (
   actor_id     uuid    not null references actor (id),
   currency     char(3) null references currency (code),
   limit_minor  bigint  not null,
-  primary key (actor_id, currency),
+  constraint approver_limit_key unique nulls not distinct (actor_id, currency),
   constraint approver_limit_positive check (limit_minor > 0)
 );
 
@@ -245,8 +253,9 @@ the test.
       enforcement point and extractable evidence named
 - [ ] `DOMAIN_MODEL.md`: invariants I8 and I9 marked ✅
 - [ ] Completion reported — PR opened against the base branch above, `003-REQ` filed — so Master Control can set this brief to `IMPLEMENTED` on `meta`
-- [ ] UAT script `docs/uat/UAT-004-segregation-of-duties.md` — a reviewer must be
-      able to *attempt* self-approval and watch it fail
+- [ ] UAT script `docs/uat/UAT-005-segregation-of-duties.md` *(was `UAT-004`,
+      which TASK-002 had already consumed — ruling O-3; lesson L-1 widened)* — a
+      reviewer must be able to *attempt* self-approval and watch it fail
 - [ ] **Two ADRs**: (1) threshold currency handling, resolving PRD Q1;
       (2) digests-not-payloads in the audit trail, and what that costs an auditor
 
@@ -278,3 +287,31 @@ becomes an authenticated principal — including `amend!`, where PR-004's "by it
 creator" check belongs. And the audit write (C-05, I9) belongs inside the
 transaction that `clofin.idempotency.repository/execute-once!` already
 establishes — it hands the effect its connection; write the audit event on it.
+
+---
+
+## Changelog — rulings on the [`003-REQ`](../audits/003-REQ-authorisation-and-audit-trail.md) objections (2026-08-03)
+
+All four objections were triaged the day the REQ was filed. Per protocol the
+Worker diverged nowhere silently; every ruling below lands on `meta` and, where
+it changes code, travels to the owning Worker as a fix instruction.
+
+| # | Objection | Ruling |
+|---|---|---|
+| O-1 | The specified `approver_limit` primary key forces `currency NOT NULL`, making the brief's own documented null-currency ("every currency") row uninsertable. | **Confirmed — brief defect; fix ordered.** The Interfaces DDL above is amended: the primary key is replaced by `unique nulls not distinct (actor_id, currency)`. Chosen over the REQ's suggested `coalesce(currency, '***')` expression index because it needs no sentinel value, it is a declared table constraint rather than only an index, and the same declaration that enforces per-currency uniqueness enforces at-most-one wildcard row per actor. Migration `0005` is applied and checksummed, so the correction is **migration `0006`**; the Worker's pinning test (`objection-o-1-…`) is deleted by the fix and replaced with storage-level wildcard tests. |
+| O-2 | AC-7 requires an `:amend` arrow from `approved` that TASK-002's lifecycle table did not carry; `DOMAIN_MODEL.md` rule 3 and its diagram disagreed with each other. | **Confirmed — the Worker's resolution stands; no revert.** AC-7 means what it says: an approved instruction is amendable, every approval is invalidated, status returns to `draft` — that is PR-014's clearest case, and without it the only path off `approved` is cancellation. The added arrow and ADR-0014 amendment 1 are ratified. Both contradicting documents were authored by Master Control, so this is a cross-brief authoring defect, now **lesson L-4**. Residual: the DOMAIN_MODEL §3 diagram must show `:amend` from *both* `pending-approval` and `approved` — folded into the O-1 fix instruction. |
+| O-3 | `UAT-004` was already consumed by TASK-002. | **Accepted.** `UAT-005-segregation-of-duties.md` stands; the DoD above is amended. The Worker's suggestion is taken: lesson **L-1 is widened** from migrations to every sequentially-numbered artefact series (briefs, audits, ADRs, UAT scripts, migrations). This is the second L-1 recurrence inside one brief — the brief renumbered its migration and still hard-coded a stale UAT number. |
+| O-4 | C-02's stated evidence ("the approver's limit at the time") is not producible from the specified schema — `approver_limit` is mutable and unversioned. | **Accepted.** Rewriting C-02 to name only what is extractable *is* the DoD instruction ("extractable evidence named"), not a divergence. The capture columns (`actor_limit_minor`, `approvals_required` on `approval`, written at decision time) are recorded as carried-forward debt on the ROADMAP for a future brief — a schema change belongs in a brief, exactly as the Worker judged. |
+
+Two decisions the Worker took without an ADR, ruled here so they are not
+re-argued:
+
+- **`:no-threshold-configured` as a fifth refusal reason — accepted.** The
+  brief's four-reason list was illustrative, not exhaustive; it had no answer
+  for an unconfigured band table, and the alternatives (invent an approval
+  count, or throw) both weaken or misreport the control. Denying loudly is the
+  ADR-0015 posture applied consistently.
+- **`evaluate` taking an optional `:decision` (default `:approved`) — accepted.**
+  C-01 must be stated exactly once; a separate rejection-evaluation function is
+  where a second, drifting statement would grow. The brief's call shape is
+  unchanged.

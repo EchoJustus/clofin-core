@@ -1,6 +1,6 @@
 # CloFin — Roadmap
 
-**Status:** living document · **Last reviewed:** 2026-08-02
+**Status:** living document · **Last reviewed:** 2026-08-03
 
 Increments are sequenced by **product relevance and regulatory risk**, not by
 implementation convenience. Each increment leaves `main` runnable, migrated,
@@ -19,15 +19,17 @@ and this table is stale.
 | 1 | Foundation and ledger core | — (predates the brief protocol) | ✅ done — merged to `main` at `3bde834` (PR #1; milestone audit waived, see audits register) | green, 303 assertions |
 | 2 | Ledger persistence and account API | [TASK-001](briefs/001-TASK-ledger-persistence-and-account-api.md) | ✅ `IMPLEMENTED` — merged to `main` in PR #2 (`f7018a1`); `FEEDBACK-001` outstanding | green, 757 assertions |
 | 3 | Payment lifecycle and idempotency | [TASK-002](briefs/002-TASK-payment-instruction-lifecycle.md) | 🔨 `IMPLEMENTED` — PR #4 open and green, O-3 fix applied; audit deferred to post-TASK-003 batch | green, 1547+ assertions |
-| 4 | Authorisation, maker–checker, audit | [TASK-003](briefs/003-TASK-authorisation-and-audit-trail.md) | 🔨 `IN PROGRESS` — dispatched; **stacked on PR #4's branch**; migration `0005` | — |
+| 4 | Authorisation, maker–checker, audit | [TASK-003](briefs/003-TASK-authorisation-and-audit-trail.md) | 🔨 `IMPLEMENTED` — PR #5 open and green, **stacked on PR #4**; O-1 fix (migration `0006`) in flight | green, 2314 assertions |
 | 5–9 | Settlement onwards | not yet briefed | 💭 later | — |
 
-**Controls still unenforced.** Four entries in
-[`COMPLIANCE.md`](COMPLIANCE.md) are 📋 *designed, not built* — C-01, C-02,
-C-05 and C-06. TASK-002 delivers C-06; TASK-003 delivers the other three. Until
-then, the honest statement is that CloFin **specifies** maker–checker and
-idempotency and **does not yet implement them**. Do not describe them otherwise
-in a README, a PR description or a conversation.
+**Controls: enforced on the stack, not yet on `main`.** C-06 (idempotency) is
+enforced on PR #4's branch; C-01, C-02, C-05 and C-08 on PR #5's, stacked above
+it. **Nothing in that list is on `main` until those PRs merge**, so the honest
+statement today is that `main` specifies maker–checker and idempotency and the
+open stack implements them. C-05 is ✅ with an explicit scope limit: payment and
+approval writes emit audit events; ledger and organisation writes do not yet
+(003-REQ §6). Do not describe any of this more generously in a README, a PR
+description or a conversation.
 
 ---
 
@@ -104,18 +106,36 @@ to rediscover them:
 - **Risk addressed:** duplicate payments from retries — the failure with the
   most direct financial consequence.
 
-## Increment 4 — Authorisation, maker–checker and audit 📋
+## Increment 4 — Authorisation, maker–checker and audit 🔨
 
-**Brief:** [TASK-003](briefs/003-TASK-authorisation-and-audit-trail.md) · **Status:** `IN PROGRESS` — dispatched; stacked on `feat/payment-instruction-lifecycle` (PR #4)
+**Brief:** [TASK-003](briefs/003-TASK-authorisation-and-audit-trail.md) · **Status:** `IMPLEMENTED` — PR #5 open and green, stacked on PR #4; four objections ruled, O-1 fix (migration `0006`) in flight
 
 *Why next: this is the control an auditor asks about first.*
 
-- Roles, permissions, and per-organisation approval threshold tables
-- Segregation of duties as a domain rule: maker ≠ checker, enforced in code
-- Approval invalidation on amendment
-- Append-only audit trail, written in the same transaction as the change
-- Evidence extraction for a nominated payment
+- ✅ Roles, permissions, and per-organisation approval threshold tables — default
+  deny, no superuser, both build-enforced
+- ✅ Segregation of duties as a pure domain rule (`clofin.authz.approval/evaluate`),
+  tested with no HTTP anywhere in the file
+- ✅ Approval invalidation on amendment; approvals invalidated, never deleted
+- ✅ Append-only audit trail written in the same transaction as the change —
+  `record!` takes a transaction and cannot open one
+- ✅ Evidence extraction for a nominated payment; digests, not payloads (ADR-0016)
 - **Risk addressed:** unauthorised or unattributable movement of money.
+
+**Carried forward, deliberately** (from [003-REQ](audits/003-REQ-authorisation-and-audit-trail.md) §6):
+
+- **Ledger and organisation writes emit no audit events** — C-05's scope
+  paragraph names the gap; closing it touches TASK-001/002 files and needs its
+  own brief.
+- **The approver's limit at decision time is not retained** (O-4): two capture
+  columns on `approval` belong in a future brief.
+- **Authentication does not resist an adversary** — `X-Actor-Id` names a seeded
+  actor; the authorisation model is real, the authentication in front of it is
+  scaffolding, and every relevant doc says so.
+- **No actor administration API** — deliberate; self-granted roles would make
+  C-01 unenforceable.
+- **The wildcard approver limit is unbuildable until migration `0006` lands**
+  (O-1 fix dispatched).
 
 ## Increment 5 — Settlement simulation 💭
 
