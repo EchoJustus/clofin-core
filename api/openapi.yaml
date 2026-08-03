@@ -44,6 +44,30 @@ tags:
       a write, or the `organisationId` query parameter on a read. It is not
       derived from an authenticated principal, because there is not one. Do not
       read the tenancy scoping in these operations as an access control.
+  - name: Payments
+    description: |
+      Payment instructions: intent to pay, with a lifecycle.
+
+      **An instruction is not a journal entry.** The instruction is the
+      request; the entry is the accounting fact. One instruction produces
+      several entries over its life — a release, a fee, a settlement.
+
+      **Every mutating operation requires an `Idempotency-Key`.** A retry
+      carrying the same key and the same body returns the stored response and
+      performs no new work; the same key with a *different* body is `409`. A
+      request with no key at all is `400`. This is the control that stops a
+      timeout on submission from becoming a payment made twice.
+
+      **Approval, settlement and screening are not implemented.** `submit`
+      moves an instruction to `pendingApproval` and stops there — there is no
+      approve operation, because approval by whoever submitted the payment
+      would not be a control. `released`, `settled`, `failed` and `returned`
+      exist in the lifecycle and no operation here drives an instruction into
+      them.
+
+      **Authorisation is not implemented yet**, exactly as for Ledger above.
+      `createdBy` is taken from the request body. It records what a caller
+      claimed, and is not evidence of who did anything.
 
 paths:
   /:
@@ -408,6 +432,319 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
 
+  /payment-instructions:
+    post:
+      tags: [Payments]
+      operationId: createPaymentInstruction
+      summary: Capture a payment instruction
+      description: |
+        Records intent to pay. The instruction is created `draft`; a caller
+        cannot choose the status, because an instruction arriving already
+        approved would be an approval nobody gave.
+
+        **Every failed field is named, not the first one.** A rejected request
+        is `422` and its `errors` object carries one entry per field that
+        failed, keyed by the member the caller sent. An operator correcting a
+        rejected instruction should need one round trip, not one per mistake.
+
+        **A reversal is created here too.** Pass `reversesId` naming a
+        `settled` instruction and the result is a **new** instruction pointing
+        back at it. The original is not modified — a settled payment is never
+        mutated. Reversing anything that is not settled is `409`.
+
+        *Not implemented:* a limit on the total reversed across several
+        reversals of one instruction (PR-044). Nothing here stops a second
+        reversal being raised against the same settled instruction.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreatePaymentInstructionRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/IdempotentReplay"
+        "201":
+          description: Instruction captured, in status `draft`
+          headers:
+            Location:
+              description: |
+                URI of the created instruction, including the `organisationId`
+                query parameter needed to retrieve it.
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaymentInstruction"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "409":
+          $ref: "#/components/responses/IdempotencyConflict"
+        "422":
+          description: |
+            Understood, and cannot be carried out: one or more fields were
+            rejected, or the debtor account is frozen, closed, in another
+            organisation, or holds a different currency. Nothing is persisted,
+            and the `Idempotency-Key` is not consumed — retrying a corrected
+            request under the same key executes normally.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+              examples:
+                threeBadFields:
+                  summary: Every failed field is named
+                  value:
+                    type: "https://clofin.dev/problems/validation"
+                    title: "Request failed validation"
+                    status: 422
+                    detail: "Request failed validation"
+                    errors:
+                      amount: "must be greater than zero"
+                      valueDate: "must not be in the past"
+                      purposeCode: "unknown purpose code: XXXX"
+
+    get:
+      tags: [Payments]
+      operationId: listPaymentInstructions
+      summary: List an organisation's payment instructions
+      description: |
+        Most recently created first, then by id — a total order, so the same
+        query over unchanged data returns the same page every time. Optionally
+        filtered to one lifecycle state.
+
+        Capped rather than paginated, for the reason given on the statement
+        operation. `truncated` is stated on every response, not only when it is
+        true.
+      parameters:
+        - $ref: "#/components/parameters/OrganisationId"
+        - name: status
+          in: query
+          required: false
+          description: Return only instructions in this lifecycle state.
+          schema:
+            $ref: "#/components/schemas/PaymentStatus"
+      responses:
+        "200":
+          description: The instructions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaymentInstructionList"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /payment-instructions/{id}:
+    get:
+      tags: [Payments]
+      operationId: getPaymentInstruction
+      summary: Retrieve a payment instruction
+      description: |
+        Scoped by organisation. An instruction belonging to another
+        organisation is `404`, the same answer a non-existent id receives.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: "#/components/parameters/OrganisationId"
+      responses:
+        "200":
+          description: The instruction
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaymentInstruction"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+    patch:
+      tags: [Payments]
+      operationId: amendPaymentInstruction
+      summary: Amend a draft payment instruction
+      description: |
+        **Only a draft may be amended.** An instruction that has been submitted
+        is `409`: it is under consideration by someone else, and changing what
+        they are considering underneath them is the failure segregation of
+        duties exists to prevent (PR-004).
+
+        Only substance is amendable. `id`, `organisationId`, `status`,
+        `createdBy`, `createdAt` and `reversesId` are not, and naming one is
+        `422` rather than being silently ignored — a caller that sent it
+        believes it changed something.
+
+        `organisationId` is required, and scopes the request rather than
+        amending anything.
+
+        *Not implemented:* PR-004 says a draft may be amended **by its
+        creator**. There is no authenticated principal to check that against
+        yet, and comparing a caller-supplied `createdBy` to a stored one would
+        check that a UUID had been copied correctly while looking, from
+        outside, like an access control. TASK-003 adds it.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AmendPaymentInstructionRequest"
+      responses:
+        "200":
+          description: |
+            The amended instruction. Also the status of a replayed request —
+            see the `Idempotency-Key` parameter.
+          headers:
+            Idempotent-Replayed:
+              $ref: "#/components/headers/IdempotentReplayed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaymentInstruction"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: |
+            The instruction is not a draft and cannot be amended, or the
+            `Idempotency-Key` has already been used for a different request.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
+
+  /payment-instructions/{id}/submission:
+    post:
+      tags: [Payments]
+      operationId: submitPaymentInstruction
+      summary: Submit a payment instruction for approval
+      description: |
+        Moves a `draft` to `pendingApproval`, and **stops there**. Approval is
+        TASK-003; there is no operation in this contract that moves an
+        instruction beyond `pendingApproval`, because a payment that could be
+        approved by whoever submitted it is not a control.
+
+        Submitting anything that is not a draft is `409`, naming the state the
+        instruction is actually in and what would have been permitted from it.
+
+        **This is the operation the `Idempotency-Key` exists for.** A timeout
+        here leaves an operator unable to tell whether the payment went out;
+        retrying with the same key answers that question without submitting
+        twice. Two concurrent submissions of one instruction cannot both
+        succeed — the row is locked for the duration of the state change.
+
+        *Not implemented:* screening. `DOMAIN_MODEL.md` §3 rule 1 requires
+        screening to have completed before submission. Increment 7 adds it;
+        until then submission is gated by the lifecycle alone.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PaymentInstructionActionRequest"
+      responses:
+        "200":
+          description: |
+            The instruction, now `pendingApproval`. Also the status of a
+            replayed request.
+          headers:
+            Idempotent-Replayed:
+              $ref: "#/components/headers/IdempotentReplayed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaymentInstruction"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: |
+            The lifecycle does not permit `submit` from the instruction's
+            current state, or the `Idempotency-Key` has already been used for a
+            different request.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+              examples:
+                alreadySubmitted:
+                  summary: The state machine names what was attempted
+                  value:
+                    type: "https://clofin.dev/problems/conflict"
+                    title: "Conflicting state"
+                    status: 409
+                    detail: "Cannot submit a payment instruction that is settled"
+                    errors:
+                      instruction-status: "settled"
+                      attempted: "submit"
+                      permitted: []
+
+  /payment-instructions/{id}/cancellation:
+    post:
+      tags: [Payments]
+      operationId: cancelPaymentInstruction
+      summary: Cancel a payment instruction
+      description: |
+        Permitted from `draft` and from `approved`: an approved instruction
+        that has not been released is still stoppable. Once released it is not,
+        and the answer is `409` — value has left, and the correction is a
+        reversal rather than a cancellation.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PaymentInstructionActionRequest"
+      responses:
+        "200":
+          description: |
+            The instruction, now `cancelled`. Also the status of a replayed
+            request.
+          headers:
+            Idempotent-Replayed:
+              $ref: "#/components/headers/IdempotentReplayed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaymentInstruction"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: |
+            The lifecycle does not permit `cancel` from the instruction's
+            current state, or the `Idempotency-Key` has already been used for a
+            different request.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+
 components:
   parameters:
     OrganisationId:
@@ -419,6 +756,34 @@ components:
         authorisation does not exist yet — TASK-003 replaces this with the
         authenticated principal. It is not an access control.
       schema: { type: string, format: uuid }
+
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: |
+        A caller-supplied identifier that makes a retry safe. **Mandatory on
+        every mutating operation** (PR-040); a request without one is `400`,
+        rather than being quietly executed, because a caller that has not
+        thought about retries is exactly the caller a retry will hurt.
+
+        One key identifies one request. Replaying it with an identical body
+        returns the stored response and performs no new work; replaying it with
+        a different body is `409` and executes nothing. "Identical" is judged
+        over a canonical form of the body, so a retry that differs only in
+        whitespace or key order is honoured — that is a retry, not a conflict.
+
+        Scoped to the organisation, so two tenants cannot collide. A request
+        that failed does **not** consume its key: fix the body and retry with
+        the same one.
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 255
+        description: |
+          Any non-blank string without control characters. A UUID is the
+          obvious choice and nothing requires one.
+        examples: ["b0c07f5e-6b5e-4f2f-9a1e-2f0d4a7c1e33"]
 
   responses:
     BadRequest:
@@ -440,6 +805,34 @@ components:
         The request was understood and cannot be carried out. Distinct from
         `400`: this is a business outcome to show a human, not a bug in the
         caller.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    IdempotentReplay:
+      description: |
+        This request had already been performed under the same
+        `Idempotency-Key` with the same body, so the stored response is
+        returned unchanged and **nothing new happened**. The status here is the
+        one the original call returned — a replayed creation carries `201` in
+        the stored response, not `200`; this entry documents the replay of an
+        operation whose first response was itself a `200`.
+      headers:
+        Idempotent-Replayed:
+          $ref: "#/components/headers/IdempotentReplayed"
+      content:
+        application/json:
+          schema: {}
+    IdempotencyConflict:
+      description: |
+        The `Idempotency-Key` has already been used for a **different** request
+        body. Nothing was executed.
+
+        This is not a failure to fix by retrying. Either resend the original
+        request unchanged, or — if the change was intended — send it under a new
+        key. Returning the stored response instead would tell a caller that an
+        amount it never sent had been accepted; executing would be the second
+        payment the key exists to prevent.
       content:
         application/problem+json:
           schema:
@@ -723,6 +1116,213 @@ components:
           description: Maximum movements this operation returns.
           examples: [500]
 
+    PaymentStatus:
+      type: string
+      description: |
+        Where an instruction is in its lifecycle. The permitted moves between
+        these are held as data in `clofin.payments.state/transitions` and are
+        tested by enumerating every (state, event) pair — see
+        `DOMAIN_MODEL.md` §3.
+
+        `settled`, `rejected`, `cancelled`, `failed` and `returned` are
+        terminal. A settled payment is never mutated; it is followed by a *new*
+        reversal instruction.
+      enum:
+        - draft
+        - pending-approval
+        - approved
+        - released
+        - settled
+        - rejected
+        - cancelled
+        - failed
+        - returned
+
+    PaymentEvent:
+      type: string
+      description: |
+        A move an instruction may make. Only `submit` and `cancel` have an
+        operation in this contract; the rest belong to approval (TASK-003) and
+        settlement (increment 5), and are part of the model before they are
+        part of the API.
+      enum: [submit, cancel, approve, reject, amend, release, settle, fail, return]
+
+    PurposeCode:
+      type: string
+      description: |
+        Purpose of payment, from a constrained vocabulary. A synthetic subset
+        of ISO 20022 `ExternalPurpose1Code`, chosen to cover the payment types
+        CloFin models. It is **not** corridor-accurate: which codes a real
+        scheme accepts, and which it mandates, differ by scheme and by
+        jurisdiction, and CloFin is connected to neither.
+      enum: [CASH, CHAR, DIVI, GDDS, INSU, INTC, LOAN, PENS, RENT, SALA, SCVE,
+             SUPP, TAXS, TRAD, TREA]
+      examples: ["SUPP"]
+
+    PaymentInstruction:
+      type: object
+      description: |
+        A request to move money. Mutable while `draft`; immutable in substance
+        thereafter.
+
+        Not a journal entry: this is the intent, and the entry is the
+        accounting fact it eventually causes.
+      required: [id, organisationId, debtorAccountId, creditorName,
+                 creditorAccount, amount, valueDate, purposeCode, status,
+                 createdBy, createdAt, permittedTransitions]
+      properties:
+        id: { type: string, format: uuid }
+        organisationId: { type: string, format: uuid }
+        debtorAccountId:
+          type: string
+          format: uuid
+          description: |
+            The ledger account the value comes from. Must be `active` and hold
+            the instruction's currency.
+        creditorName:
+          type: string
+          maxLength: 140
+          description: |
+            Synthetic. No counterparty named in CloFin corresponds to anything
+            real. Bounded at ISO 20022's `Max140Text` so an instruction CloFin
+            accepts is one a scheme message could carry.
+          examples: ["Pacific Rim Logistics Pte Ltd"]
+        creditorAccount:
+          type: string
+          pattern: "^[A-Z0-9][A-Z0-9-]{2,32}[A-Z0-9]$"
+          description: |
+            A synthetic external account identifier. It addresses nothing; the
+            character set is deliberately narrower than any real scheme's.
+          examples: ["SG-SYNTH-88012345"]
+        amount:
+          $ref: "#/components/schemas/Money"
+        valueDate:
+          type: string
+          format: date
+          description: |
+            The date settlement is requested for. A calendar date, not an
+            instant — a value date is the same day in every zone that quotes
+            it. Must not be in the past, judged in UTC.
+          examples: ["2026-08-10"]
+        purposeCode:
+          $ref: "#/components/schemas/PurposeCode"
+        status:
+          $ref: "#/components/schemas/PaymentStatus"
+        createdBy:
+          type: string
+          format: uuid
+          description: |
+            The actor the caller says created this. **Not evidence of who did
+            anything** — there is no authenticated principal yet. TASK-003
+            replaces it.
+        createdAt: { type: string, format: date-time }
+        reversesId:
+          type: string
+          format: uuid
+          description: |
+            Present only on a reversal, naming the settled instruction it was
+            raised against. That instruction is unchanged.
+        permittedTransitions:
+          type: array
+          description: |
+            The events this instruction's current state allows, derived from
+            the lifecycle table. A caller does not have to hold its own copy of
+            the state machine to know what it may do next, and this list cannot
+            advertise an operation the state machine would refuse. Empty on a
+            terminal state.
+          items:
+            $ref: "#/components/schemas/PaymentEvent"
+
+    CreatePaymentInstructionRequest:
+      type: object
+      required: [organisationId, debtorAccountId, creditorName, creditorAccount,
+                 amount, valueDate, purposeCode, createdBy]
+      additionalProperties: false
+      properties:
+        organisationId: { type: string, format: uuid }
+        debtorAccountId: { type: string, format: uuid }
+        creditorName: { type: string, minLength: 1, maxLength: 140 }
+        creditorAccount:
+          type: string
+          pattern: "^[A-Z0-9][A-Z0-9-]{2,32}[A-Z0-9]$"
+        amount:
+          $ref: "#/components/schemas/Money"
+        valueDate:
+          type: string
+          format: date
+          description: |
+            `YYYY-MM-DD`. Must not be in the past, and must be within 365 days
+            — a warehoused payment is a real product; one dated four centuries
+            out is a typo that would otherwise sit in `pendingApproval` forever,
+            indistinguishable from work in progress.
+        purposeCode:
+          $ref: "#/components/schemas/PurposeCode"
+        createdBy:
+          type: string
+          format: uuid
+          description: Caller-asserted until TASK-003. See `PaymentInstruction.createdBy`.
+        reversesId:
+          type: string
+          format: uuid
+          description: |
+            Set to raise this instruction as a reversal of a **settled** one.
+            The result is a new instruction; the original is not modified.
+
+    AmendPaymentInstructionRequest:
+      type: object
+      description: |
+        A partial update of a draft. Only the members below may appear —
+        anything else, including `status` and `createdBy`, is `422` rather than
+        being ignored.
+      required: [organisationId]
+      additionalProperties: false
+      properties:
+        organisationId:
+          type: string
+          format: uuid
+          description: Scopes the request. Not itself amendable.
+        debtorAccountId: { type: string, format: uuid }
+        creditorName: { type: string, minLength: 1, maxLength: 140 }
+        creditorAccount:
+          type: string
+          pattern: "^[A-Z0-9][A-Z0-9-]{2,32}[A-Z0-9]$"
+        amount:
+          $ref: "#/components/schemas/Money"
+        valueDate: { type: string, format: date }
+        purposeCode:
+          $ref: "#/components/schemas/PurposeCode"
+
+    PaymentInstructionActionRequest:
+      type: object
+      description: |
+        The body of a lifecycle operation. It carries the organisation because
+        the idempotency key is scoped to one, and there is no authenticated
+        principal to take it from.
+      required: [organisationId]
+      additionalProperties: false
+      properties:
+        organisationId: { type: string, format: uuid }
+
+    PaymentInstructionList:
+      type: object
+      required: [paymentInstructions, count, limit, truncated]
+      properties:
+        paymentInstructions:
+          type: array
+          items:
+            $ref: "#/components/schemas/PaymentInstruction"
+        count: { type: integer }
+        limit:
+          type: integer
+          description: Maximum rows this operation returns.
+          examples: [500]
+        truncated:
+          type: boolean
+          description: |
+            True when there were more rows than `limit`. Stated on every
+            response, not only when true: a consumer should not have to infer
+            from the absence of a field that nothing was left out.
+
     ServiceInfo:
       type: object
       required: [service, description, environment, disclaimer]
@@ -788,6 +1388,15 @@ components:
           additionalProperties: true
 
   headers:
+    IdempotentReplayed:
+      description: |
+        `true` when this response was replayed from a stored one rather than
+        produced by new work. Present only on a replay, so someone reconciling
+        a retry can see that CloFin replayed rather than acted.
+      schema:
+        type: string
+        enum: ["true"]
+
     XCorrelationId:
       description: |
         Correlation id echoed on every response. A caller-supplied value is
