@@ -10,7 +10,7 @@
 | **Requirements** | PR-010…PR-015, PR-070…PR-075 |
 | **Controls touched** | C-01, C-02, C-05, C-08 |
 | **Scope** | Large — split into (a) authz + approval, (b) audit trail + evidence |
-| **Audit** | [`003-REQ`](../audits/003-REQ-authorisation-and-audit-trail.md) filed and ingested 2026-08-03; milestone batch audit (FEEDBACK-001/002/003) now unblocked |
+| **Audit** | [`003-REQ`](../audits/003-REQ-authorisation-and-audit-trail.md) filed and ingested 2026-08-03 · **audited in [`FEEDBACK-M1`](../audits/FEEDBACK-M1-foundation.md)** — F-001 (blocking), F-002 (blocking, shared with TASK-001), F-005, F-006; all actioned, remediation in flight |
 
 > Status lifecycle: `READY` → `IN PROGRESS` → `IMPLEMENTED` → `AUDITED` → `CLOSED`.
 > Status is maintained by Master Control on the `meta` branch — see AGENT_HANDOFF §1b.

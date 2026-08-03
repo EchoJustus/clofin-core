@@ -96,6 +96,12 @@ the difference.
    `settlement-batch.timeout-swept` to `clofin.audit/actions`, and
    `settlement-batch` to `subject-types`. *(TASK-005 adds terms to the same
    sorted-set literal — whichever lands second rebases; a one-line conflict.)*
+   **Lesson L-8/L-7 discipline applies:** an action named after a transition
+   (`payment.settled`, `settlement-batch.completed`) is emitted **only** in the
+   transaction where that transition commits — a scheme response *recorded* is
+   not a payment *settled*, and a batch with unresolved items is not
+   *completed*. If you need to evidence the recording itself, that is its own
+   term, not a reuse (FEEDBACK-M1 F-005 is the anti-pattern).
 10. **Authorisation**: settlement operations require a `:settlement/execute`
     permission granted to the `controller` role (the role exists in `actor_role`'s
     check constraint; the permission set lives in code, default deny). No role
