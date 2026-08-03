@@ -5,7 +5,7 @@
 | **Increment** | 5 |
 | **Status** | `READY` |
 | **Depends on** | TASK-003 — settlement drives the `release` arrow the authorisation increment left in the table |
-| **Base branch** | `claude/authorisation-audit-trail-r5fzw3` at `6f58857` — TASK-003 is implemented but unmerged (PR #5, itself stacked on PR #4), so **stack on its tip and open the PR against that branch**, not `main`, per AGENT_HANDOFF §1b. If PR #5 retargets or rebases after PR #4 merges, rebase promptly and follow it |
+| **Base branch** | `claude/authorisation-audit-trail-r5fzw3` — TASK-003 unmerged (PR #5, itself stacked on PR #4), so **stack on its tip and open the PR against that branch**, not `main`, per AGENT_HANDOFF §1b. `6f58857` at authoring; the FEEDBACK-M1 remediation moves the tip — **build on the tip as you find it, verified green**. If PR #5 retargets or rebases after PR #4 merges, rebase promptly and follow it |
 | **Blocks** | Increment 6 (reconciliation) |
 | **Requirements** | PRD §5.3 (settlement); NFR-003 |
 | **Controls touched** | C-03, C-04 exercised; **no control moves 📋 → ✅ here** — C-07 (screening before release) stays 📋 and is increment 7's |
@@ -84,10 +84,12 @@ the difference.
 7. **Duplicate and out-of-order responses**: every scheme response is stored
    verbatim; the replay key makes a duplicate detectable and idempotent — same
    answer, no second posting, no second audit event.
-8. **Migration** — *next available number against the tree you build on; at
-   authoring time that is `0007` — verify before you write it (L-1)*. The DDL
-   below is **validated against a live PostgreSQL 16 with migrations 0001–0006
-   applied** (L-3): every documented row shape inserts; every guard refuses.
+8. **Migration** — *next available number against the tree you build on;
+   verify before you write it (L-1) — the FEEDBACK-M1 remediation is expected
+   to consume `0007` on the base branch, which would make yours `0008`*. The
+   DDL below is **validated against a live PostgreSQL 16 with migrations
+   0001–0006 applied** (L-3): every documented row shape inserts; every guard
+   refuses.
 9. **Audit vocabulary**: add `payment.released`, `payment.settled`,
    `payment.failed`, `payment.returned`, `settlement-batch.created`,
    `settlement-batch.submitted`, `settlement-batch.completed`,

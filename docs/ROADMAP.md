@@ -19,7 +19,7 @@ and this table is stale.
 | 1 | Foundation and ledger core | — (predates the brief protocol) | ✅ done — merged to `main` at `3bde834` (PR #1; milestone audit waived, see audits register) | green, 303 assertions |
 | 2 | Ledger persistence and account API | [TASK-001](briefs/001-TASK-ledger-persistence-and-account-api.md) | ✅ `IMPLEMENTED` — merged to `main` in PR #2 (`f7018a1`); `FEEDBACK-001` outstanding | green, 757 assertions |
 | 3 | Payment lifecycle and idempotency | [TASK-002](briefs/002-TASK-payment-instruction-lifecycle.md) | 🔨 `IMPLEMENTED` — PR #4 open and green, O-3 fix applied; audit deferred to post-TASK-003 batch | green, 1547+ assertions |
-| 4 | Authorisation, maker–checker, audit | [TASK-003](briefs/003-TASK-authorisation-and-audit-trail.md) | 🔨 `IMPLEMENTED` — PR #5 open and green at `6f58857`, **stacked on PR #4**; all four rulings actioned, O-1 fix applied | green, 2333 assertions |
+| 4 | Authorisation, maker–checker, audit | [TASK-003](briefs/003-TASK-authorisation-and-audit-trail.md) | 🔨 `IN PROGRESS` — returned from `IMPLEMENTED`: FEEDBACK-M1 blockers F-001/F-002 verified; remediation on PR #5's branch in flight; **PR #4 and PR #5 merges blocked** until it lands | green, 2333 assertions |
 | 4c | Audit coverage completion (C-05 unqualified) | [TASK-005](briefs/005-TASK-audit-coverage-completion.md) | 📋 `READY` — stacks on PR #5's branch | — |
 | 5 | Settlement simulation | [TASK-004](briefs/004-TASK-settlement-simulation.md) | 📋 `READY` — stacks on PR #5's branch; DDL validated per L-3 | — |
 | 6–9 | Reconciliation onwards | not yet briefed | 💭 later | — |

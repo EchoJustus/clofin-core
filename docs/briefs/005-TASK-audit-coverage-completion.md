@@ -5,7 +5,7 @@
 | **Increment** | 4 (completion) — closes debt TASK-003 named, it does not open new product surface |
 | **Status** | `READY` |
 | **Depends on** | TASK-003 — `clofin.audit` and the authenticated principal must exist |
-| **Base branch** | `claude/authorisation-audit-trail-r5fzw3` at `6f58857` (PR #5, stacked on PR #4) — stack on its tip, open the PR against that branch, per AGENT_HANDOFF §1b. If PR #5 retargets or rebases, follow it |
+| **Base branch** | `claude/authorisation-audit-trail-r5fzw3` (PR #5, stacked on PR #4) — stack on its tip, open the PR against that branch, per AGENT_HANDOFF §1b. `6f58857` at authoring; the FEEDBACK-M1 remediation moves the tip — build on the tip as you find it, verified green. If PR #5 retargets or rebases, follow it |
 | **Blocks** | Nothing hard; C-05 stays scope-qualified until this lands |
 | **Requirements** | PR-072 (every state change), C-05 |
 | **Controls touched** | C-05 — from ✅-with-scope-paragraph to **unqualified ✅** |
