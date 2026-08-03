@@ -114,11 +114,19 @@ supplied by the caller. Two consequences that matter in a regulated context:
 **The persistence seam is named, not implied.** One namespace per context may
 require `clofin.db.*`, and it is the one called `repository` —
 `clofin.ledger.repository`, `clofin.organisations.repository`,
-`clofin.payments.repository`, `clofin.idempotency.repository`. Every other
-domain namespace beside it stays pure. The rule is checked by
+`clofin.payments.repository`, `clofin.idempotency.repository`,
+`clofin.authz.repository`, `clofin.audit.repository`. Every other domain
+namespace beside it stays pure. The rule is checked by
 `test/clofin/ledger/purity_test.clj`, which reads the `ns` forms rather than
 trusting review to remember
 ([ADR-0012](docs/ADR/0012-repository-seam-and-posting-time-validation.md)).
+
+**A `service` namespace owns no connection either.** `clofin.payments.approval-service`
+sequences repositories inside a transaction the *caller* owns, and requires no
+`clofin.db.*` namespace at all. That is not tidiness: a service able to open its
+own transaction is a service able to write an audit event outside the change it
+describes, which is the one failure C-05 exists to prevent. The same purity test
+enforces it.
 
 A repository is also where rules that **cannot** be checked purely belong —
 those that are properties of stored state rather than of a value, such as
@@ -204,17 +212,52 @@ saw success
 
 ### 5.5 Audit trail
 
-Every domain event is appended to `audit_event` with actor, action, subject,
-before/after digest, correlation id and timestamp. The table is append-only:
-`UPDATE` and `DELETE` are revoked at the database role level. Audit writes
-participate in the same transaction as the change they describe, so an
-un-audited state change is not representable.
+Every payment instruction and approval state change is appended to
+`audit_event` with actor, action, subject, before/after **digest**, correlation
+id and timestamp. The table is append-only: `UPDATE` and `DELETE` are rejected
+by a row-level trigger, so the constraint holds for the owning role too rather
+than depending on which role happens to be connected.
+
+Audit writes participate in the same transaction as the change they describe, so
+an un-audited state change is not representable. That is made structural rather
+than remembered: `clofin.audit.repository/record!` takes a connection and never
+opens one, so the only connection a caller can hand it is the transaction
+carrying the change.
+
+Digests rather than payloads
+([ADR-0016](docs/ADR/0016-audit-events-store-digests-not-payloads.md)): an
+append-only table holding counterparty names is a second copy of the data C-09
+minimises, and one that can never be cleaned. What that costs an auditor — a
+digest cannot be read back — is stated in the ADR rather than discovered.
+
+Ledger and organisation writes do not yet emit audit events; the gap is named in
+[COMPLIANCE §4](docs/COMPLIANCE.md).
 
 ### 5.6 Multi-tenancy and access
 
-Every business record carries an organisation identifier. Authorisation is
-role-based with explicit permissions, and segregation of duties is enforced as a
-domain rule: the actor who submits a payment cannot be the actor who approves it.
+Every business record carries an organisation identifier, and the organisation a
+request acts on comes from the **authenticated actor**, never from the request.
+An `organisationId` in a body or query string is verified against it and a
+mismatch is refused rather than ignored.
+
+Authorisation is role-based with explicit permissions and **default deny**: an
+absent permission is a denied permission, and there is no superuser role — a
+test asserts that no role holds every permission. Permission sets live in code
+(`clofin.authz.model`) rather than in rows, because a permission set stored as
+data is editable by anyone able to write those rows.
+
+Segregation of duties is enforced as a **domain rule**: the actor who submits a
+payment cannot be the actor who approves it, refused by a pure function that
+takes values and returns a decision. If the only thing stopping self-approval
+were a check in a handler, the control would not exist for any caller that did
+not go through that handler.
+
+Authentication itself is deliberately minimal — a seeded actor named by an
+`X-Actor-Id` header, with no token and no signature. It does not resist an
+adversary and is not presented as doing so ([COMPLIANCE §4](docs/COMPLIANCE.md));
+identity-provider integration is later work. The permission model is the part
+that had to be built first, because it is what everything else is enforced
+against.
 
 ---
 

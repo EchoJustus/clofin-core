@@ -141,6 +141,59 @@ already settled as the meaning of `422`.
   one map, five lines apart, and `clofin.error-test` asserts every category
   renders a status and a title.
 
+## Amendment 1 — `PATCH` now drives `:amend` (2026-08-03, TASK-003)
+
+Decision 4 above said `PATCH /payment-instructions/{id}` is governed by
+`mutable-states` and does **not** drive the `:amend` event. The reason given was
+specific and temporary:
+
+> If `PATCH` drove the `:amend` event, patching a `pending-approval` instruction
+> would succeed and silently pull a submitted payment back to `draft` — with no
+> approval-invalidation logic behind it, because that logic is TASK-003's and
+> does not exist yet.
+
+**That logic now exists.** `clofin.authz.repository/invalidate-approvals-for!`
+invalidates every live approval, and `clofin.payments.repository/amend!` calls
+it inside the transaction that carries the amendment. The condition the
+original decision named has been met, so the restriction it justified is lifted
+rather than carried forward as a rule nobody can explain.
+
+Three changes, and one thing deliberately unchanged.
+
+**A. `:amend :draft` is added to `approved`.** The lifecycle table previously
+carried `:amend` only on `pending-approval`.
+[`DOMAIN_MODEL.md`](../DOMAIN_MODEL.md) §3 draws the arrow from `approved`, and
+**PR-014** — "a change to any instruction field invalidates approvals already
+given" — has its clearest case there: an approved-but-unreleased payment whose
+amount is corrected must lose its approvals. Adding an arrow is not redefining
+one; decision 2's rule ("a later increment adds the endpoint that drives a
+transition; it does not get to redefine where it leads") is respected —
+`:amend` still leads to `draft`.
+
+**B. `PATCH` chooses between the two by reading the table**, not by testing a
+status. If the status is in `mutable-states` the substance is edited in place;
+otherwise, if the lifecycle permits `:amend`, every approval is invalidated and
+the instruction returns to `draft` before the changes are applied; otherwise it
+is the same `409` as before, naming the state. No status conditional is written
+in the handler, which is the property decision 1 exists to protect.
+
+**C. The order within the amendment is fixed and load-bearing.** Approvals are
+invalidated *before* the new values are written. An approver agreed to the
+values that were in front of them, and an invalidation that ran afterwards
+would leave a window — however short — in which an approval stood against
+values nobody had approved.
+
+**Unchanged: `mutable-states` still exists and still means what it meant.**
+Amending a draft leaves it in `draft` and follows no arrow. The two rules
+remain distinct, and the collision of names that decision 4 warned about is now
+resolved by the table rather than by a prohibition.
+
+This does not weaken any control. `:amend` only ever *destroys* approvals; the
+dangerous direction — acquiring them — is unreachable from it. An instruction
+pulled back to `draft` must be resubmitted and reapproved from zero, and PR-004
+restricts the operation to the instruction's creator, which TASK-003 made a real
+check by giving `created-by` an authenticated principal.
+
 ## Verification
 
 - `clofin.payments.state-test` enumerates every `(state, event)` pair over
@@ -155,3 +208,16 @@ already settled as the meaning of `422`.
 - `clofin.ledger.purity-test` lists `clofin.payments.state`,
   `clofin.payments.instruction` and `clofin.payments.posting` as pure, so the
   lifecycle cannot acquire a database dependency and start consulting rows.
+
+Added by amendment 1:
+
+- `clofin.payments.state-test` asserts the table now holds **eleven** permitted
+  pairs out of eighty-one, so an arrow added or lost is a failing test rather
+  than a silent change.
+- `clofin.payments.repository-test` asserts that amending a `pending-approval`
+  instruction returns it to `draft`; that amending an `approved` one invalidates
+  its approvals and returns it to `draft`; that a `settled` one is still `409`;
+  and that only the creator may amend.
+- `clofin.api.approvals-api-test` asserts the whole path end to end, including
+  that the same approver may approve the amended instruction again — which is
+  the reason approvals are invalidated rather than deleted.

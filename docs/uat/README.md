@@ -15,6 +15,7 @@ document.
 | [UAT-002 — Ledger integrity cannot be bypassed](UAT-002-ledger-integrity.md) | Zero-sum invariant and immutability, tested adversarially | PR-020, PR-021, PR-022 |
 | [UAT-003 — Account statement production](UAT-003-account-statement-production.md) | A statement that adds up, produced entirely through the API | PR-020, PR-021, PR-023, PR-024 |
 | [UAT-004 — A retried submission cannot pay twice](UAT-004-idempotent-submission.md) | A double submission performed by hand, and the evidence that it acted once | PR-001, PR-003, PR-004, PR-040, PR-041, PR-042 |
+| [UAT-005 — Segregation of duties, attempted and refused](UAT-005-segregation-of-duties.md) | Self-approval attempted by hand and refused; approval thresholds and limits; an amendment killing its approvals; the audit trail resisting alteration | PR-010, PR-011, PR-012, PR-013, PR-014, PR-015, PR-070, PR-072, PR-073, PR-074, PR-075 |
 
 ## Recording a result
 
