@@ -39,7 +39,7 @@ table and a brief disagree, the brief on `origin/meta` wins.
 | Brief | Increment | Status | Depends on | Requirements | Scope |
 |---|---|---|---|---|---|
 | [001 — Ledger persistence and account API](001-TASK-ledger-persistence-and-account-api.md) | 2 | `IMPLEMENTED` — merged in PR #2; audit outstanding | — | PR-020…024 | Medium |
-| [002 — Payment instruction lifecycle and idempotency](002-TASK-payment-instruction-lifecycle.md) | 3 | `READY` — branch from `main` | 001 ✅ merged | PR-001…005, PR-040…044 | Large |
+| [002 — Payment instruction lifecycle and idempotency](002-TASK-payment-instruction-lifecycle.md) | 3 | `IN PROGRESS` — dispatched; based on `main` | 001 ✅ merged | PR-001…005, PR-040…044 | Large |
 | [003 — Authorisation, maker–checker and audit trail](003-TASK-authorisation-and-audit-trail.md) | 4 | `READY` | 002 | PR-010…015, PR-070…075 | Large |
 
 Sequencing follows **product relevance and regulatory risk**, not implementation

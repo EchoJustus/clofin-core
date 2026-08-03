@@ -18,7 +18,7 @@ and this table is stale.
 |---|---|---|---|---|
 | 1 | Foundation and ledger core | — (predates the brief protocol) | ✅ done — merged to `main` at `3bde834` (PR #1; milestone audit waived, see audits register) | green, 303 assertions |
 | 2 | Ledger persistence and account API | [TASK-001](briefs/001-TASK-ledger-persistence-and-account-api.md) | ✅ `IMPLEMENTED` — merged to `main` in PR #2 (`f7018a1`); `FEEDBACK-001` outstanding | green, 757 assertions |
-| 3 | Payment lifecycle and idempotency | [TASK-002](briefs/002-TASK-payment-instruction-lifecycle.md) | 📋 `READY` — dependency merged; branch from `main` | — |
+| 3 | Payment lifecycle and idempotency | [TASK-002](briefs/002-TASK-payment-instruction-lifecycle.md) | 🔨 `IN PROGRESS` — dispatched; based on `main` | — |
 | 4 | Authorisation, maker–checker, audit | [TASK-003](briefs/003-TASK-authorisation-and-audit-trail.md) | 📋 `READY`, blocked on 002 | — |
 | 5–9 | Settlement onwards | not yet briefed | 💭 later | — |
 
@@ -83,7 +83,7 @@ to rediscover them:
 
 ## Increment 3 — Payment instruction lifecycle 📋
 
-**Brief:** [TASK-002](briefs/002-TASK-payment-instruction-lifecycle.md) · **Status:** `READY` — stack on `claude/ledger-persistence-account-api-p5oi05` (PR #2)
+**Brief:** [TASK-002](briefs/002-TASK-payment-instruction-lifecycle.md) · **Status:** `IN PROGRESS` — dispatched; based on `main` (dependency merged in PR #2)
 
 *Why next: the lifecycle is the spine every control attaches to.*
 

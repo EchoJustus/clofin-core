@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | **Increment** | 3 |
-| **Status** | `READY` |
+| **Status** | `IN PROGRESS` — dispatched 2026-08-03 |
 | **Depends on** | TASK-001 — needs `clofin.ledger.repository/post-entry!` |
 | **Base branch** | `origin/main` — TASK-001 merged in PR #2 (`f7018a1`), so no stacking is needed; open the PR against `main`, per AGENT_HANDOFF §1b |
 | **Blocks** | TASK-003 |
