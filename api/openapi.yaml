@@ -464,16 +464,23 @@ paths:
             schema:
               $ref: "#/components/schemas/CreatePaymentInstructionRequest"
       responses:
-        "200":
-          $ref: "#/components/responses/IdempotentReplay"
         "201":
-          description: Instruction captured, in status `draft`
+          description: |
+            Instruction captured, in status `draft`.
+
+            Also the status of a **replayed** request: a replay returns the
+            status the original call produced, so a retried creation is `201`
+            and never `200`. `Idempotent-Replayed` is how the two are told
+            apart, and the `Location` points at the instruction the original
+            created rather than at a new one.
           headers:
             Location:
               description: |
                 URI of the created instruction, including the `organisationId`
                 query parameter needed to retrieve it.
               schema: { type: string }
+            Idempotent-Replayed:
+              $ref: "#/components/headers/IdempotentReplayed"
           content:
             application/json:
               schema:
@@ -809,20 +816,6 @@ components:
         application/problem+json:
           schema:
             $ref: "#/components/schemas/Problem"
-    IdempotentReplay:
-      description: |
-        This request had already been performed under the same
-        `Idempotency-Key` with the same body, so the stored response is
-        returned unchanged and **nothing new happened**. The status here is the
-        one the original call returned — a replayed creation carries `201` in
-        the stored response, not `200`; this entry documents the replay of an
-        operation whose first response was itself a `200`.
-      headers:
-        Idempotent-Replayed:
-          $ref: "#/components/headers/IdempotentReplayed"
-      content:
-        application/json:
-          schema: {}
     IdempotencyConflict:
       description: |
         The `Idempotency-Key` has already been used for a **different** request
