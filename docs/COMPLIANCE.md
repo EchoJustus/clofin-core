@@ -131,20 +131,51 @@ asserts a rolled-back change leaves no audit event, and vice versa.
 
 ---
 
-### C-06 Duplicate payment prevention 📋
+### C-06 Duplicate payment prevention ✅
 
 **Statement.** A retry cannot cause a second payment.
 
-**Design.** Every mutating operation requires an `Idempotency-Key`. The key,
-caller and a hash of the request body are stored with the resulting response. A
-replay with the same body returns the stored response; a replay with a
-*different* body is `409 Conflict` rather than a silent second payment.
+**Design.** Every mutating operation requires an `Idempotency-Key`. The key, the
+organisation and a digest of the request body are stored with the resulting
+response, **in the same transaction as the effect they protect** — a key stored
+separately from the effect leaves a window in which a crash makes a payment with
+no record that it was made. A replay with the same body returns the stored
+response and performs no new work; a replay with a *different* body is
+`409 Conflict` rather than a silent second payment; a request with no key at all
+is `400`.
 
-**Enforcement point.** Unique constraint on `(organisation_id, idempotency_key)`
-— replay protection is a database guarantee, not a read-then-write race.
-*(Increment 3.)*
+The digest is taken over a *canonical* serialisation of the body, so a retry
+that differs only in whitespace or key order is honoured rather than refused
+([ADR-0013](ADR/0013-canonical-request-digest-for-idempotency.md)). This matters
+as much as the storage does: a `409` on a genuine retry pushes the caller to
+mint a new key, and a new key is a second payment.
 
-**Evidence.** The stored response and its first-seen timestamp.
+**Enforcement points.**
+
+| | |
+|---|---|
+| Primary key `idempotency_key_pkey` on `(organisation_id, key)` | `resources/migrations/0003-payment-instructions.sql`. Two concurrent retries contend on this key: the second blocks until the first commits, fails on it, and returns what the first stored. Replay protection is a database guarantee, **not** a read-then-write in application code — that is a race, and under concurrent retries a race here pays twice. |
+| `clofin.idempotency.repository/execute-once!` | Runs the effect inside the transaction that writes the key, and translates the unique violation into a replay. |
+| `clofin.idempotency/canonical` and `/digest` | Decide whether a replay is the same request. |
+| `SELECT … FOR UPDATE` in `clofin.payments.repository/transition!` | The lifecycle's own defence, for two concurrent state changes carrying *different* keys — where idempotency does not apply and the row lock is what stops both succeeding. |
+
+**Evidence.** The `idempotency_key` row: the digest, the stored response status
+and body, and `created_at` as the first-seen timestamp.
+
+**Tests.** `clofin.api.payments-api-test` covers the externally visible
+contract, including a genuine concurrency test — two threads, a latch, one key —
+asserting that exactly one instruction row exists afterwards and both callers
+receive byte-identical responses. `clofin.idempotency-test` covers the canonical
+form the digest is taken over.
+
+**Not covered by this control.** The digest is computed over the request body
+alone, not the method or path, so one key reused across two *different*
+instructions' sub-resources with identical bodies replays rather than acting.
+Recorded in
+[ADR-0013](ADR/0013-canonical-request-digest-for-idempotency.md) and in
+[`audits/002-REQ-payment-instruction-lifecycle.md`](audits/002-REQ-payment-instruction-lifecycle.md),
+and awaiting a ruling. Stated here rather than left out, because a control
+described without its boundary is a control nobody can rely on.
 
 ---
 

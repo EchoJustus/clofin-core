@@ -14,6 +14,7 @@ document.
 | [UAT-001 — Environment and service scope](UAT-001-environment-and-scope.md) | Stack starts; service states its scope honestly | NFR-001, NFR-005 |
 | [UAT-002 — Ledger integrity cannot be bypassed](UAT-002-ledger-integrity.md) | Zero-sum invariant and immutability, tested adversarially | PR-020, PR-021, PR-022 |
 | [UAT-003 — Account statement production](UAT-003-account-statement-production.md) | A statement that adds up, produced entirely through the API | PR-020, PR-021, PR-023, PR-024 |
+| [UAT-004 — A retried submission cannot pay twice](UAT-004-idempotent-submission.md) | A double submission performed by hand, and the evidence that it acted once | PR-001, PR-003, PR-004, PR-040, PR-041, PR-042 |
 
 ## Recording a result
 
