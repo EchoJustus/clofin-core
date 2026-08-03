@@ -1,13 +1,30 @@
 # Architecture audits and feedback
 
-CloFin is developed asynchronously: worker sessions implement briefs
-continuously, while architecture review happens **offline, at milestones**,
-rather than blocking each increment. This directory is where that review lands
-and becomes durable.
+> **Control plane.** This directory is maintained on the **`meta` branch** by
+> Master Control. `FEEDBACK` files land here on `meta`; `REQ` files are
+> *authored by Workers on their own feature branch* (that is their reporting
+> channel) and copied to `meta` by Master Control at ingestion. Read the
+> current state without checking out:
+> `git fetch origin meta && git show origin/meta:docs/audits/<file>`.
 
-**Naming:** `FEEDBACK-NNN-<subject>.md`, matching the brief number it reviews
-where one applies (`FEEDBACK-001-…` reviews `TASK-001`), or a milestone name for
-a broader audit (`FEEDBACK-M1-foundation.md`).
+CloFin is developed asynchronously: worker sessions implement briefs
+continuously on stacked feature branches, while architecture review happens
+**offline, at milestones, over batches of one to five PRs** — rather than
+blocking each increment. This directory is where that review lands and becomes
+durable.
+
+**Naming:** `REQ` files are `NNN-REQ-<subject>.md` (a Worker's completion
+report and audit request for `TASK-NNN`, including any objections to the brief
+itself). `FEEDBACK` files are `FEEDBACK-NNN-<subject>.md`, matching the brief
+they review, or a milestone name for a broader batch audit
+(`FEEDBACK-M1-foundation.md`).
+
+**Worker objections to a brief** travel in the `REQ`, never as edits to the
+brief. Master Control arbitrates: correct the brief on `meta`, or answer the
+objection with evidence and let the brief stand. Either way the ruling is
+recorded, and if the brief changes, the owning Worker receives a specific fix
+instruction naming the branch, the change, and the acceptance criteria that now
+apply ([`../AGENT_HANDOFF.md`](../AGENT_HANDOFF.md) §1b).
 
 A worker session submits its own increment for review as
 `NNN-REQ-<subject>.md` — what it built, the decisions it took, the edge cases it
@@ -60,7 +77,8 @@ that its statements are checkable; that applies to its replies to reviewers too.
 
 | Feedback | Reviews | Received | Findings (B/S/C) | Disposition |
 |---|---|---|---|---|
-| _(none yet)_ | | | | |
+| *(waived)* | Increment 1 / PR #1 | 2026-08-02 | — | Deep architectural audit **explicitly bypassed** by the reviewer to unblock the pipeline, with rigorous review to be enforced from PR #2 onward. Recorded so the assurance history is honest: increment 1 was consciously not audited. |
+| *(pending)* | Increment 2 / PR #2 — `001-REQ` filed by the Worker | requested 2026-08-02 | — | Awaiting `FEEDBACK-001` from the Principal Architect. PR #2 merged to `main` (`f7018a1`) ahead of the audit — reviews do not gate execution; any findings will be dispatched as fix instructions against `main`. |
 
 ### Submissions awaiting review
 

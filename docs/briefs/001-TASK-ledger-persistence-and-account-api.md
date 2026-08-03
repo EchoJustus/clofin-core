@@ -9,10 +9,10 @@
 | **Requirements** | PR-020, PR-021, PR-022, PR-023, PR-024 |
 | **Controls touched** | C-03, C-04 |
 | **Scope** | Medium |
-| **Audit** | Submitted: [001-REQ](../audits/001-REQ-ledger-persistence-and-account-api.md) |
+| **Audit** | Submitted: [001-REQ](../audits/001-REQ-ledger-persistence-and-account-api.md) — merged in PR #2; `FEEDBACK-001` outstanding |
 
 > Status lifecycle: `READY` → `IN PROGRESS` → `IMPLEMENTED` → `AUDITED` → `CLOSED`.
-> A worker session updates this table in the same commit as the work it describes.
+> Status is maintained by Master Control on the `meta` branch — see AGENT_HANDOFF §1b.
 
 ---
 
@@ -154,8 +154,9 @@ An unbalanced entry is `422` with the per-currency shortfall in `errors`.
 - [x] `api/openapi.yaml` updated in the same commit as the handlers
 - [x] `make verify` and `make test-it` both green — 158 tests, 757 assertions
 - [x] New test namespaces added to `clofin.test-runner`
-- [x] `docs/ROADMAP.md` increment 2 marked done
-- [x] This brief's `Status` set to `IMPLEMENTED`
+- [x] `docs/ROADMAP.md` increment 2 marked done *(done under the pre-`meta`
+      protocol; status is Master Control's on `meta` from here on)*
+- [x] This brief's `Status` set to `IMPLEMENTED` *(likewise)*
 - [x] A UAT script added under `docs/uat/` —
       [UAT-003](../uat/UAT-003-account-statement-production.md)
 - [x] An ADR for any decision a future contributor would otherwise re-derive —
