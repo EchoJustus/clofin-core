@@ -449,7 +449,11 @@
     (payments/transition! tdb/*pool*
                           (java.util.UUID/fromString (get-in f [:org "id"]))
                           (java.util.UUID/fromString (get pi "id"))
-                          event))
+                          event
+                          ;; `:submit` is creator-only (F-001). `new-instruction!`
+                          ;; creates as the fixture's maker, so this walk is one
+                          ;; that actor could really have performed.
+                          {:actor {:id (:maker f)}}))
   pi)
 
 (deftest amending-a-terminal-instruction-is-still-refused

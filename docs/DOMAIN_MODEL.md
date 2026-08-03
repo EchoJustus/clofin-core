@@ -27,8 +27,8 @@ Legend: **✅ built** · **🔨 in progress** · **📋 specified, not built**
 | **Journal Line** | One account's participation in an entry: a direction and a positive amount. | A "transaction". |
 | **Posting** | The act of writing a journal entry. | Sending money. Posting is an accounting act; release is a payment act. |
 | **Balance** | Derived by aggregating an account's journal lines. Never stored as authority. | A stored figure. There isn't one. |
-| **Maker** | The actor who creates and submits an instruction. | The beneficiary. |
-| **Checker** | The actor who approves. Must not be the maker. | A reviewer with no system authority. |
+| **Maker** | The actor who creates an instruction **and the only actor who may submit it** — enforced by `clofin.payments.state/creator-only-events` and `clofin.payments.repository/transition!`, not merely stated here. Without that enforcement, "creates and submits" is two actors described as one, and the Checker rule below stops being a control. | The beneficiary. |
+| **Checker** | The actor who approves. Must not be the maker — refused by `clofin.authz.approval/evaluate`, which compares the approver against `created-by` and relies on the Maker row above for that to be the whole comparison. | A reviewer with no system authority. |
 | **Release** | The act of handing an approved instruction to settlement. | Approval. Approval permits release; it is not release. |
 | **Settlement** | Irrevocable transfer of value through a scheme. | Clearing, which is the exchange of instructions preceding it. |
 | **Reversal** | A new entry mirroring an original, leaving both visible. | Deletion, amendment, or "cancellation" of a posted entry — none of which exist. |

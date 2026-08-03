@@ -229,16 +229,46 @@ movement, and is prevented.
 
 ---
 
-## Teardown
+## Step 6 — Try to empty the journal with `TRUNCATE`
+
+`UPDATE` and `DELETE` were refused above. `TRUNCATE` is a **third** verb, with
+its own trigger event and its own privilege — and until migration `0007` it was
+not covered, so it emptied guarded tables in one statement past every guard
+that had just refused the other two. That was audit finding **F-002**, and this
+step exists so nobody has to take on trust that it is closed.
 
 ```sql
-truncate journal_line, journal_entry, ledger_account, organisation cascade;
+truncate journal_line, journal_entry cascade;
 ```
 
-Note that `truncate` succeeds where `delete` failed: the append-only triggers
-are `for each row` on update and delete. This is deliberate — a schema-level
-reset for test environments must remain possible without weakening the
-row-level control that protects production data.
+**Expected:** `ERROR: Table journal_line is append-only: … never by truncate`.
+
+**Pass criterion:** the ledger cannot be emptied, by any of the three verbs.
+
+> **Earlier versions of this script had it the other way round.** The teardown
+> below used to say that `truncate` succeeding where `delete` failed was
+> "deliberate — a schema-level reset for test environments must remain possible
+> without weakening the row-level control". That sentence certified the defect
+> as a design choice, in the acceptance evidence, signed off. It is recorded
+> here rather than quietly deleted, because a UAT script that once blessed a
+> hole is itself a finding worth remembering.
+
+---
+
+## Teardown
+
+The journal cannot be truncated, and that is the point of step 6. Reset the
+whole environment instead:
+
+```bash
+make db-reset
+```
+
+This drops and recreates the database and re-runs every migration, so the
+guards come back armed. It is a schema-level operation performed by the
+database owner — which is precisely the residual risk
+[`COMPLIANCE.md` §4](../COMPLIANCE.md) names: a trigger is enforced by the
+table, and the table's owner decides what the table is.
 
 ---
 

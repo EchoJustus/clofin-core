@@ -370,12 +370,12 @@ in use by another tenant to anyone able to guess a UUID.
 
 ## Teardown
 
-```bash
-make db-shell
-```
+The journal is append-only against `UPDATE`, `DELETE` **and** `TRUNCATE`
+(migration `0007`), so the tables written by this script cannot be emptied in
+place. Reset the whole environment instead:
 
-```sql
-truncate journal_line, journal_entry, ledger_account, organisation cascade;
+```bash
+make db-reset
 ```
 
 ---

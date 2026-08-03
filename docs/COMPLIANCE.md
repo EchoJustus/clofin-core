@@ -61,8 +61,24 @@ both `:payment/create` and `:payment/approve`, and a test asserts it.
 | | |
 |---|---|
 | `clofin.authz.approval/evaluate` | The rule itself. Refuses with `:self-approval`, with no HTTP layer involved. |
+| `clofin.payments.state/creator-only-events` + `clofin.payments.repository/transition!` | **Only an instruction's creator may submit it.** This is what makes the row above a complete test: `evaluate` compares an approver against `created-by` and nothing else, which is maker–checker only while the submitter and the creator are the same actor. Enforced under the row lock, in the repository rather than the handler, so a caller that reaches `transition!` by another route is refused too. |
 | `clofin.authz.model/role-permissions` | No role is both maker and checker. |
 | `clofin.api.approvals` | Reports the domain's decision; it does **not** make one. The boundary deliberately does not pre-empt `evaluate`'s ranking of the reasons. |
+
+**Where this control had a hole, and for how long.** Until Milestone 1's
+external audit (finding **F-001**), submission was gated by a permission and
+not by provenance. An actor holding `operator` and `approver` could submit
+somebody else's draft — becoming its maker in every sense that mattered — and
+then approve it, because `created-by` still named the other person. The claim
+that this could not happen was written in a docstring and enforced nowhere
+(standing lesson **L-6**). Reproduced end to end before the fix: the control's
+own evidence query below returned a row.
+
+**Boundary of this control.** It holds against the application and against a
+defect in it. It does **not** hold against an adversary who can choose the
+`X-Actor-Id` header, because authentication is a seeded actor with no token and
+no signature — see §4. C-01 is enforced; the identity it is enforced against is
+asserted by the caller.
 
 **Evidence.** `audit_event` rows for `payment.submitted` and `payment.approved`
 carry the actor. The control-failure query returns no rows:
@@ -152,7 +168,8 @@ audit actually need, not merely a technical constraint.
 
 **Enforcement point.**
 - `journal_entry_append_only` and `journal_line_append_only` triggers reject
-  `UPDATE` and `DELETE` at the database ✅
+  `UPDATE`, `DELETE` **and** `TRUNCATE` at the database ✅ — the third verb
+  added by migration `0007` after audit finding F-002 found it uncovered ✅
 - `clofin.ledger.entry/reverse-entry` refuses to reuse the original's id ✅
 - Integration tests attempt both mutations directly in SQL and assert failure ✅
 
@@ -203,7 +220,8 @@ describes, and `clofin.ledger.purity-test` fails the build if it acquires one.
 
 | | |
 |---|---|
-| `audit_event_append_only` | Rejects `UPDATE` and `DELETE` row by row, reusing `reject_mutation()` from migration `0002`. Not revoked privileges — a trigger, so it holds for the owning role too. |
+| `audit_event_append_only` | Rejects `UPDATE` and `DELETE` row by row, reusing `reject_mutation()` from migration `0002`. |
+| `audit_event_no_truncate` | Rejects `TRUNCATE`, statement by statement, reusing the same function (migration `0007`). A separate trigger because `TRUNCATE` is a separate event: it visits no rows, so a `for each row` guard never sees it. Until F-002 this was uncovered, and the audit trail could be emptied in one statement past a guard that had just refused an `UPDATE` and a `DELETE` on the same row. |
 | `approval_no_delete` | An approval may be *invalidated* (`UPDATE`) and never removed. The asymmetry is deliberate and is commented in the migration, because the next reader will want to "fix" it. |
 | `clofin.audit.repository/record!` | Writes on the caller's transaction. Cannot open one. |
 | `clofin.audit/event` | Refuses an action outside the vocabulary — default deny reaching the audit trail, so "show me every approval in August" has a complete answer. |
@@ -221,6 +239,41 @@ failure is the *database* refusing rather than a thrown exception.
 `clofin.db.audit-constraints-test` attempts `UPDATE`, `DELETE`, a bulk delete
 and a no-op update directly in SQL, bypassing the application entirely, and
 asserts each is refused.
+
+**What a trigger cannot do, stated because the previous wording claimed
+otherwise.** This table used to say the guard was "not revoked privileges — a
+trigger, so it holds for the owning role too." That is **false**, and it was
+disproved directly. A trigger is enforced by the table, and the table's *owner*
+decides what the table is. As the owner, all of these succeed:
+
+| Attempt | Result as the owning role |
+|---|---|
+| `alter table audit_event disable trigger …` | permitted |
+| `drop trigger audit_event_no_truncate on audit_event` | permitted |
+| `set session_replication_role = 'replica'` then `delete from audit_event` | permitted — and this defeats the **pre-existing** `UPDATE`/`DELETE` guards too, not only the new one |
+
+CloFin connects as that owner, and in the shipped stack that role is also a
+superuser (`POSTGRES_USER` in `docker-compose.yml`). So the append-only
+guarantee binds the application and any defect in it — which is what the
+control is for — and has never bound an operator with the deployment's own
+credentials.
+
+The fix is a **runtime role split**: the application connects as a role that is
+neither the owner nor a superuser, with `TRUNCATE` and DDL revoked. Migration
+`0002` already foreshadowed it. It is not built, and is named debt in §4 rather
+than left implicit. Under a non-owner role every attempt above is refused —
+verified, not assumed:
+
+```
+ERROR:  permission denied for table audit_event          -- truncate
+ERROR:  must be owner of table audit_event               -- disable trigger
+ERROR:  must be owner of relation audit_event            -- drop trigger
+ERROR:  permission denied to set parameter "session_replication_role"
+```
+
+`clofin.db.audit-constraints-test/f-002-the-residue-a-trigger-cannot-close`
+demonstrates the residue in a rolled-back transaction, so the boundary is a
+passing test rather than a paragraph.
 
 **Scope of this control.** It covers **payment instructions and approvals** —
 every state change either can undergo emits exactly one event. It does **not**
@@ -456,5 +509,6 @@ Being explicit about gaps is part of the control design.
 | Audit coverage of ledger and organisation writes | **Payment instructions and approvals emit audit events; account opening, journal posting and organisation creation do not yet.** A literal reading of PR-072 covers them. See C-05 §Scope |
 | Approver limit at the time of an approval | Not retained. `approver_limit` is mutable and unversioned, so a limit raised after an approval is indistinguishable from one that was always that high (C-02 §Known limit). Raised as objection O-4 and **accepted by ruling**: the capture columns (`actor_limit_minor`, `approvals_required` on `approval`, written at decision time) are carried forward as debt for a future brief, because a schema change belongs in a brief |
 | Actor administration | No endpoint creates an actor, grants a role or sets a limit. Deliberate for this increment — an actor that could grant itself the approver role would make C-01 unenforceable — but a real deployment needs an administered path with its own controls |
+| Runtime role split for append-only enforcement | **Not built.** The append-only triggers on `journal_entry`, `journal_line`, `audit_event` and `approval` refuse `UPDATE`, `DELETE` and `TRUNCATE` — but a trigger cannot bind the table's *owner*, and CloFin connects as the owner (and, in the shipped stack, as a superuser). `DISABLE TRIGGER`, `DROP TRIGGER` and `session_replication_role = 'replica'` all succeed for that role; the last defeats the row-level guards that have existed since migration `0002`, so this residue predates audit finding F-002 rather than being introduced by it. The fix — application role ≠ owner, `TRUNCATE` and DDL revoked — is foreshadowed in `0002`'s own comment and verified to refuse all four attempts. Named here rather than left to be discovered |
 | Automated dependency vulnerability scanning | Candidate for CI |
 | Retention and deletion policy | Not modelled; interacts with C-03 and C-05 immutability and needs a decision |

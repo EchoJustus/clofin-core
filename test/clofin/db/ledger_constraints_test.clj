@@ -190,3 +190,38 @@
           from-domain (update-vals money/currencies :scale)]
       (is (= from-domain from-db)
           "a currency present in one and not the other is a latent production defect"))))
+
+;; ---------------------------------------------------------------------------
+;; F-002 — TRUNCATE, the verb C-03 had never enumerated
+;; ---------------------------------------------------------------------------
+;;
+;; `journal_entry_append_only` and `journal_line_append_only` have refused
+;; `UPDATE` and `DELETE` since migration 0002, and the tests above prove it.
+;; Neither covered `TRUNCATE`, which is a separate trigger event with a
+;; separate privilege — so the ledger's immutability could be undone in one
+;; statement (audit finding F-002, standing lesson L-5). Migration `0007`
+;; closes it; these assert it stays closed.
+;;
+;; The exhaustive table × verb matrix lives in
+;; `clofin.db.audit-constraints-test`. These are here because C-03 is the
+;; ledger's control and its own test file should demonstrate it.
+
+(deftest f-002-a-posted-entry-cannot-be-truncated-away
+  (let [{:keys [org debit credit]} (fixture-accounts)
+        entry-id (random-uuid)]
+    (db/with-transaction [tx tdb/*pool*]
+      (tdb/insert-entry! tx {:id entry-id :organisation-id org})
+      (tdb/insert-line! tx {:entry-id entry-id :line-no 1 :account-id debit
+                            :direction "debit" :amount-minor 125000})
+      (tdb/insert-line! tx {:entry-id entry-id :line-no 2 :account-id credit
+                            :direction "credit" :amount-minor 125000}))
+    (doseq [table ["journal_entry" "journal_line"]]
+      (let [t (try (db/execute! tdb/*pool* [(str "truncate " table " cascade")]) nil
+                   (catch Exception e e))]
+        (is (some? t) (str "truncate " table " must be refused"))
+        (is (re-find #"append-only" (.getMessage ^Exception t)))
+        (is (re-find #"never by truncate" (.getMessage ^Exception t)))))
+    (is (= 2 (:count (db/query-one tdb/*pool*
+                                   ["select count(*) as count from journal_line where entry_id = ?"
+                                    entry-id])))
+        "and the entry is still there")))

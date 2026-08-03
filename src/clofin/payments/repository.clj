@@ -243,25 +243,45 @@
                (throw t)))))))))
 
 (defn- assert-creator!
-  "Only an instruction's creator may amend it (PR-004).
+  "Only an instruction's creator may perform `verb` on it.
 
-  Now a real access control rather than a check that a caller copied a UUID
+  A real access control rather than a check that a caller copied a UUID
   correctly: `actor` is the authenticated principal, and `created-by` is the
   principal that created the instruction. Before there was a principal this
   comparison would have compared two caller-asserted values and looked, from
   outside, exactly like an access control while being none — which is why
   TASK-002 left it undone and said so.
 
+  Used for two operations, for two different reasons:
+
+  - **amend** (PR-004) — a draft belongs to whoever raised it.
+  - **submit** ([C-01], audit finding **F-001**) — this one is load-bearing for
+    a *control*. `clofin.authz.approval/evaluate` refuses an approval by the
+    instruction's `created-by` actor and compares nothing else, so maker–checker
+    holds only while the submitter and the creator are the same actor. Until
+    this check existed, they need not have been.
+
   `403` rather than `404`: the caller has been told this instruction exists —
   they are inside the organisation that owns it and addressed it by id — so
   hiding behind a `404` would only obscure the reason without concealing
-  anything."
-  [existing actor]
+  anything. `401` when there is no actor at all, and it is deliberately not
+  possible to reach this with an absent actor and be permitted: an operation
+  restricted to the creator with nobody to compare against fails closed.
+
+  [C-01]: docs/COMPLIANCE.md"
+  [existing actor verb]
   (when-not (:id actor)
-    (err/fail! :unauthorised "Amending a payment instruction requires an actor" {}))
+    (err/fail! :unauthorised
+               (str "Performing '" verb "' on a payment instruction requires an actor")
+               {:attempted verb}))
   (when-not (= (:id actor) (:created-by existing))
-    (err/forbidden! "Only the actor who created a payment instruction may amend it"
-                    {:instruction-id (str (:id existing))}))
+    (err/forbidden!
+     (str "Only the actor who created a payment instruction may " verb " it")
+     {:instruction-id (str (:id existing))
+      :attempted      verb
+      ;; Named so a caller can tell this apart from a missing permission: the
+      ;; answer is not "ask for a role", it is "this is not your instruction".
+      :rule           "creator-only"}))
   existing)
 
 (defn amend!
@@ -294,7 +314,7 @@
    source
    (fn [tx]
      (let [existing  (lock-instruction! tx organisation-id id)
-           _         (assert-creator! existing actor)
+           _         (assert-creator! existing actor "amend")
            ;; PR-014. Read from the table, so an amendable state added later is
            ;; covered without this function being told about it.
            reverting? (and (not (state/mutable? (:status existing)))
@@ -338,20 +358,46 @@
 
   Both the previous and the next value are returned, because every caller of
   this writes an audit event describing the change and an audit event needs
-  both ends of it."
-  [source organisation-id id event]
-  (db/transactionally
-   source
-   (fn [tx]
-     (let [existing (lock-instruction! tx organisation-id id)
-           next     (state/transition (:status existing) event)]
-       ;; TODO(increment-7): screening gates submission here. `submit` requires
-       ;; screening to have completed — a pending screening blocks submission
-       ;; rather than queuing behind it (DOMAIN_MODEL §3 rule 1). Until
-       ;; increment 7 there is no screening decision to consult, and inventing a
-       ;; partial gate would look like a control that does not exist.
-       (db/execute! tx ["update payment_instruction set status = ?
-                          where organisation_id = ? and id = ?"
-                        (name next) organisation-id id])
-       {:before existing
-        :after  (assoc existing :status next)}))))
+  both ends of it.
+
+  `opts` carries `:actor`, the authenticated principal. For an event in
+  `clofin.payments.state/creator-only-events` — today `:submit` — the actor
+  must be the instruction's creator, checked **here**, under the row lock, in
+  the same transaction as the state change. Not at the HTTP boundary: a
+  provenance rule enforced only in a handler is a rule that stops existing the
+  moment anything else calls this function, which is how audit finding F-001
+  reached an approved payment moved by one human.
+
+  The check is inside the lock for the same reason the lifecycle check is: an
+  instruction whose `created-by` was read outside the lock is provenance read
+  from a row that another transaction may be changing."
+  ([source organisation-id id event] (transition! source organisation-id id event {}))
+  ([source organisation-id id event {:keys [actor]}]
+   (db/transactionally
+    source
+    (fn [tx]
+      (let [existing (lock-instruction! tx organisation-id id)
+            ;; Provenance BEFORE the lifecycle, mirroring `amend!` — which
+            ;; asserts the creator and only then asks whether the status
+            ;; permits the change. An actor with no business touching this
+            ;; instruction is told that, rather than being handed its current
+            ;; state and the list of events that would have been permitted.
+            ;;
+            ;; The opposite order is right in `approval-service`, and
+            ;; deliberately so: an `approve` on a settled payment is a `409`
+            ;; whoever sent it, and answering `403` first would suggest that
+            ;; fixing permissions would help. Here it would not — no grant
+            ;; makes a non-creator the creator.
+            _        (when (state/creator-only? event)
+                       (assert-creator! existing actor (name event)))
+            next     (state/transition (:status existing) event)]
+        ;; TODO(increment-7): screening gates submission here. `submit` requires
+        ;; screening to have completed — a pending screening blocks submission
+        ;; rather than queuing behind it (DOMAIN_MODEL §3 rule 1). Until
+        ;; increment 7 there is no screening decision to consult, and inventing
+        ;; a partial gate would look like a control that does not exist.
+        (db/execute! tx ["update payment_instruction set status = ?
+                           where organisation_id = ? and id = ?"
+                         (name next) organisation-id id])
+        {:before existing
+         :after  (assoc existing :status next)})))))

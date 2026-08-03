@@ -36,20 +36,107 @@
   (migrate/migrate! *pool*)
   (f))
 
+(def append-only-tables
+  "Tables whose destructive verbs are refused by `reject_mutation()` triggers.
+
+  Named here as a statement of what this file expects the schema to guard.
+  `clean-business-data!` does not read it to decide what to disarm — it
+  discovers that from `pg_trigger` — but it does assert the two agree, so a
+  migration that adds or removes a guard fails here loudly rather than leaving
+  a cleanup that silently stops resetting a table."
+  ["journal_entry" "journal_line" "audit_event" "approval"])
+
 (defn clean-business-data!
-  "Truncate business tables between tests, leaving reference data and the
-  migration registry alone. `truncate` bypasses the append-only triggers, which
-  are `for each row` on update and delete — deliberately, so that a test can
-  reset without weakening the production constraint."
+  "Reset business tables between tests, leaving reference data and the
+  migration registry alone.
+
+  **This function is the schema-owner adversary that `COMPLIANCE.md` §4 names,
+  and it is worth understanding rather than copying.**
+
+  Every destructive verb on the append-only tables is refused —
+  `UPDATE`, `DELETE` and, since migration `0007`, `TRUNCATE`. That is the point
+  of the control (C-03, C-05), and it means a test cannot reset those tables by
+  any ordinary means. What is left is what a table's *owner* can always do:
+  disarm the triggers. Tests run as the owning role, so this works.
+
+  Two things follow, and both are deliberate:
+
+  1. **The production control is not weakened.** There is no escape hatch in
+     `reject_mutation()` and no session flag it consults — proposals to add one
+     were rejected, because a guard with a documented bypass is a guard whose
+     bypass eventually appears in an incident. The application cannot do this
+     by writing SQL; it can only do it by being the owner.
+  2. **It is a live demonstration of the residual risk.** Audit finding F-002
+     closed the verb gap; it did not — and a trigger cannot — bind an adversary
+     holding the owner's credentials. The fix for that is the runtime role
+     split named as debt in `COMPLIANCE.md` §4, under which *this very
+     function* would stop working. That is the intended outcome, not a
+     regression. No test asserts that today — there is no non-owner role in the
+     test schema to assert it with — so this paragraph is a statement of intent,
+     not of covered behaviour.
+
+  Disable, truncate and re-enable happen in **one transaction**, so a failure
+  anywhere rolls the disable back with everything else and cannot leave the
+  guards down for the next test.
+
+  Only the `BEFORE TRUNCATE` guards are disarmed, and each is named
+  individually. `disable trigger user` would be shorter and is wrong: it also
+  disarms `journal_entry_must_balance`, the deferred constraint trigger behind
+  C-03. Verified — with the row guards down, an unbalanced journal entry
+  commits, because a deferred trigger that was disabled at INSERT queues no
+  event to fire at commit, so re-enabling before COMMIT does not save it.
+  Nothing is inserted inside the window today, so nothing is broken today; the
+  point is that the narrow form cannot break if that ever stops being true."
   [pool]
-  ;; `cascade` would reach the payment tables through their foreign keys, but
-  ;; they are named anyway: a test that leaves rows behind because a table was
-  ;; only ever truncated by implication is a test that fails somewhere else.
-  (db/execute! pool ["truncate audit_event, approval, approver_limit,
-                              approval_threshold, actor_role, actor,
-                              idempotency_key, payment_instruction,
-                              journal_line, journal_entry, ledger_account,
-                              organisation cascade"]))
+  (db/with-transaction [tx pool]
+    (let [guards (db/query tx ["select c.relname as table_name, t.tgname as trigger_name,
+                                      t.tgenabled::text as enabled
+                                 from pg_trigger t
+                                 join pg_class c on c.oid = t.tgrelid
+                                 join pg_namespace n on n.oid = c.relnamespace
+                                where n.nspname = 'public'
+                                  and not t.tgisinternal
+                                  and (t.tgtype & 32) <> 0"])]
+      ;; Discovered rather than listed, so a migration that guards a new table
+      ;; is disarmed here without anyone remembering to edit this function —
+      ;; and cross-checked against the declared list, so one that guards a table
+      ;; nobody expected is loud rather than silent.
+      ;;
+      ;; `throw`, not `assert`: `clojure.core/assert` compiles to nothing when
+      ;; `*assert*` is false, and a drift guard that can be compiled away is not
+      ;; a guard. That is the same shape as the finding this file exists to
+      ;; accommodate.
+      (when-not (= (set append-only-tables) (set (map :table-name guards)))
+        (throw (ex-info "TRUNCATE guards have drifted from `append-only-tables`"
+                        {:declared (vec (sort append-only-tables))
+                         :found    (vec (sort (map :table-name guards)))})))
+      (doseq [{:keys [table-name trigger-name]} guards]
+        (db/execute! tx [(str "alter table " table-name " disable trigger " trigger-name)]))
+      ;; `cascade` would reach the payment tables through their foreign keys, but
+      ;; they are named anyway: a test that leaves rows behind because a table was
+      ;; only ever truncated by implication is a test that fails somewhere else.
+      (db/execute! tx ["truncate audit_event, approval, approver_limit,
+                                 approval_threshold, actor_role, actor,
+                                 idempotency_key, payment_instruction,
+                                 journal_line, journal_entry, ledger_account,
+                                 organisation cascade"])
+      ;; Restore each trigger to the state it was found in, rather than to
+      ;; `ENABLE`. The two differ: `enable trigger` sets `tgenabled` to `'O'`
+      ;; (origin), while `enable always` sets `'A'`, and only `'A'` survives a
+      ;; superuser setting `session_replication_role = 'replica'`. Today every
+      ;; guard is `'O'`, so this is identical in effect — but a fixture that
+      ;; hard-coded `enable` would silently downgrade a guard the day a
+      ;; migration strengthens one, leaving the suite green and the control
+      ;; quietly weaker. That is exactly F-002's shape, and it is not worth
+      ;; re-creating here to save a word.
+      (doseq [{:keys [table-name trigger-name enabled]} guards]
+        (db/execute! tx [(str "alter table " table-name
+                              (case enabled
+                                "A" " enable always trigger "
+                                "R" " enable replica trigger "
+                                "D" " disable trigger "
+                                " enable trigger ")
+                              trigger-name)])))))
 
 (defn with-clean-data
   [f]

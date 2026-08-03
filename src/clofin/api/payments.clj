@@ -442,7 +442,13 @@
           (idempotently
            pool request organisation-id
            (fn [tx]
-             (let [{:keys [before after]} (payments/transition! tx organisation-id id event)]
+             (let [{:keys [before after]}
+                   ;; The actor travels down so `transition!` can enforce
+                   ;; provenance for a creator-only event (F-001). The check
+                   ;; lives there, under the row lock, not here — a rule
+                   ;; enforced only at this boundary stops existing for any
+                   ;; caller that does not come through it.
+                   (payments/transition! tx organisation-id id event {:actor actor})]
                ;; Same transaction as the status change (C-05, PR-075). This is
                ;; the pairing AC-10 asserts: roll the transaction back and
                ;; neither the new status nor this event survives.
@@ -460,10 +466,18 @@
 (defn submit
   "`POST /payment-instructions/:id/submission` — submit a draft for approval.
 
+  **Only the instruction's creator may submit it**, and that restriction is
+  what makes C-01 hold. The approvals endpoint refuses the actor named in
+  `createdBy` and compares nothing else, so maker–checker is only a control
+  while the submitter and the creator are the same actor. Until audit finding
+  F-001, they need not have been: an actor holding both `operator` and
+  `approver` could submit somebody else's draft — becoming, in every sense that
+  mattered, its maker — and then approve it, because `createdBy` still named
+  the other person. Enforced in `clofin.payments.repository/transition!` under
+  the row lock, via `clofin.payments.state/creator-only-events`.
+
   A submitted instruction stops at `pending-approval`. Moving it further is
-  `POST /payment-instructions/:id/approvals`, which refuses the actor who
-  submitted it — a payment that could be approved by whoever submitted it is
-  not a control (C-01)."
+  `POST /payment-instructions/:id/approvals`."
   [pool]
   (transition-handler pool :submit :payment/submit "payment.submitted"))
 

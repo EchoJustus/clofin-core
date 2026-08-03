@@ -231,3 +231,160 @@
         (is (= 1 (db/execute! tdb/*pool*
                               ["insert into approver_limit (actor_id, currency, limit_minor)
                                 values (?, null, 7)" other])))))))
+
+;; ---------------------------------------------------------------------------
+;; F-002 — the full destructive verb set, on every guarded table
+;; ---------------------------------------------------------------------------
+;;
+;; Milestone 1's external audit found that append-only enforcement had been
+;; specified and tested against `UPDATE` and `DELETE` only. `TRUNCATE` is a
+;; distinct verb with its own trigger event and its own privilege, and it
+;; emptied the audit table in one statement past a guard that had just refused
+;; an `UPDATE` and a `DELETE` on the same row (standing lesson **L-5**).
+;;
+;; The lesson is not "add TRUNCATE". It is that a guarantee stated over a
+;; partial verb set is a guarantee about the verbs somebody happened to think
+;; of. So this is a matrix: every guarded table × every verb the engine offers,
+;; enumerated rather than sampled — the same argument
+;; `clofin.payments.state-test` makes for the lifecycle.
+
+(def ^:private guarded-tables
+  "Every table `reject_mutation()` protects, and which verbs it must refuse.
+
+  `approval` permits `UPDATE` — that is how PR-014 invalidates an approval —
+  and refuses the two verbs that destroy a decision. The asymmetry is
+  deliberate and is commented in migration `0005`."
+  [{:table "journal_entry" :refuses #{:update :delete :truncate}}
+   {:table "journal_line"  :refuses #{:update :delete :truncate}}
+   {:table "audit_event"   :refuses #{:update :delete :truncate}}
+   {:table "approval"      :refuses #{:delete :truncate} :permits #{:update}}])
+
+(defn- seeded-row!
+  "One row in `table`, so that row-level triggers have something to fire on.
+
+  A `DELETE` against an empty table succeeds trivially — nothing to refuse —
+  so a verb probe with no row in place proves nothing."
+  [table {:keys [org actor]}]
+  (case table
+    "audit_event"
+    (tdb/insert-audit-event! tdb/*pool* {:organisation-id org :actor-id actor})
+
+    ("journal_entry" "journal_line")
+    (let [debit  (tdb/insert-account! tdb/*pool* {:id (random-uuid) :organisation-id org
+                                                  :code (str "1100-A-" (rand-int 1000000))})
+          credit (tdb/insert-account! tdb/*pool* {:id (random-uuid) :organisation-id org
+                                                  :code (str "2100-B-" (rand-int 1000000))
+                                                  :type "liability"})
+          entry  (random-uuid)]
+      (db/with-transaction [tx tdb/*pool*]
+        (tdb/insert-entry! tx {:id entry :organisation-id org})
+        (tdb/insert-line! tx {:entry-id entry :line-no 1 :account-id debit
+                              :direction "debit" :amount-minor 1000})
+        (tdb/insert-line! tx {:entry-id entry :line-no 2 :account-id credit
+                              :direction "credit" :amount-minor 1000}))
+      entry)
+
+    "approval"
+    (let [account (tdb/insert-account! tdb/*pool* {:id (random-uuid) :organisation-id org
+                                                   :code (str "1100-C-" (rand-int 1000000))})
+          instruction (random-uuid)]
+      (db/execute! tdb/*pool*
+                   ["insert into payment_instruction
+                       (id, organisation_id, debtor_account_id, creditor_name, creditor_account,
+                        amount_minor, currency, value_date, purpose_code, status, created_by)
+                     values (?, ?, ?, 'Pacific Rim Logistics Pte Ltd', 'SG-SYNTH-88012345',
+                             125000, 'SGD', '2026-12-01', 'SUPP', 'pending-approval', ?)"
+                    instruction org account actor])
+      (tdb/insert-approval! tdb/*pool* {:instruction-id instruction :actor-id actor}))))
+
+(defn- attempt
+  "Issue `verb` against `table` in raw SQL. Returns the exception, or nil."
+  [table verb]
+  (caught #(db/execute! tdb/*pool*
+                        [(case verb
+                           ;; `id` is the one column all four tables share. A
+                           ;; no-op update still fires a BEFORE trigger — there
+                           ;; is no "harmless" update.
+                           :update   (str "update " table " set id = id")
+                           :delete   (str "delete from " table)
+                           :truncate (str "truncate " table " cascade"))])))
+
+(deftest f-002-every-append-only-table-refuses-every-destructive-verb
+  (testing "raw SQL, application bypassed — what a defect, a migration script or
+            a maintenance session would actually do"
+    ;; One organisation for the whole matrix: every probe below is expected to
+    ;; be refused, so nothing it does can disturb a later row.
+    (let [f (fixture)]
+      (doseq [{:keys [table refuses permits]} guarded-tables]
+        (seeded-row! table f)
+        (doseq [verb refuses]
+          (let [t (attempt table verb)]
+            (is (some? t) (str table " must refuse " (name verb)))
+            (is (re-find #"append-only" (.getMessage ^Exception t))
+                (str table " + " (name verb) " refused for the wrong reason: "
+                     (some-> t .getMessage)))
+            (is (re-find (re-pattern (str "never by " (name verb))) (.getMessage ^Exception t))
+                "the message names the verb that was attempted")))
+        (doseq [verb permits]
+          (is (nil? (attempt table verb))
+              (str table " must still permit " (name verb)
+                   " — `approval` is updated to set invalidated_at (PR-014)")))))))
+
+(deftest f-002-truncate-cannot-be-laundered-through-an-unguarded-parent
+  (testing "`TRUNCATE ... CASCADE` on a table with no guard of its own reaches
+            the guarded children by foreign key, and fires their triggers —
+            so the guard cannot be sidestepped by aiming one level up"
+    (let [f (fixture)]
+      (seeded-row! "audit_event" f)
+      (let [t (caught #(db/execute! tdb/*pool* ["truncate organisation cascade"]))]
+        (is (some? t))
+        (is (re-find #"append-only" (.getMessage ^Exception t)))))))
+
+(deftest f-002-every-guard-is-armed-after-the-test-fixture-has-run
+  (testing "`clean-business-data!` disarms the TRUNCATE guards to reset between
+            tests — it is the schema-owner adversary COMPLIANCE §4 names — and
+            must restore every one of them, in the state it found them.
+
+            This assertion is what makes that non-regressable: a fixture that
+            silently downgraded a guard would leave the suite green and the
+            control weaker, which is F-002's own shape."
+      ;; `with-clean-data` has already run for this test, so this observes the
+      ;; database exactly as the fixture left it.
+    (let [guards (db/query tdb/*pool*
+                           ["select c.relname as table_name, t.tgname as trigger_name,
+                                    t.tgenabled::text as enabled
+                               from pg_trigger t
+                               join pg_class c on c.oid = t.tgrelid
+                              where not t.tgisinternal
+                                and c.relname in ('journal_entry','journal_line','audit_event','approval')
+                              order by 1, 2"])]
+      (is (= 9 (count guards))
+          (str "expected 8 append-only guards plus journal_entry_must_balance, found "
+               (pr-str (mapv (juxt :table-name :trigger-name) guards))))
+      (doseq [{:keys [table-name trigger-name enabled]} guards]
+        (is (contains? #{"O" "A"} enabled)
+            (str table-name "." trigger-name " is not armed (tgenabled=" enabled ")"))))))
+
+(deftest f-002-the-residue-a-trigger-cannot-close
+  (testing "COMPLIANCE §4 names this, and here it is demonstrated rather than
+            merely described: a trigger is enforced by the table, and the
+            table's owner decides what the table is. CloFin connects as that
+            owner, so these guards bind the application and any defect in it —
+            not an adversary holding the owner's credentials. The fix is the
+            runtime role split named as debt, under which this test would stop
+            passing, which is the point."
+    (let [f (fixture)]
+      (seeded-row! "audit_event" f)
+      (let [emptied?
+            ;; Deliberately rolled back: the demonstration must leave no trace,
+            ;; and no other test may observe a disarmed guard.
+            (caught #(db/with-transaction [tx tdb/*pool*]
+                       (db/execute! tx ["alter table audit_event disable trigger audit_event_no_truncate"])
+                       (db/execute! tx ["truncate audit_event cascade"])
+                       (throw (ex-info "rollback: the residue is demonstrated, not performed" {}))))]
+        (is (= "rollback: the residue is demonstrated, not performed" (ex-message emptied?))
+            "the owner reached TRUNCATE — it was the deliberate abort that stopped it, not the guard"))
+      (testing "and after the rollback the guard is armed again"
+        (let [t (caught #(db/execute! tdb/*pool* ["truncate audit_event cascade"]))]
+          (is (some? t))
+          (is (re-find #"append-only" (.getMessage ^Exception t))))))))

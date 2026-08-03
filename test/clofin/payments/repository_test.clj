@@ -170,7 +170,8 @@
 (deftest submitting-a-draft-persists-the-new-state
   (let [f (fixture)
         created (payments/create-instruction! tdb/*pool* (candidate f) opts)
-        moved (:after (payments/transition! tdb/*pool* (:organisation-id f) (:id created) :submit))]
+        moved (:after (payments/transition! tdb/*pool* (:organisation-id f) (:id created)
+                                            :submit {:actor (:actor f)}))]
     (is (= :pending-approval (:status moved)))
     (is (= :pending-approval (:status (payments/find-instruction
                                        tdb/*pool* (:organisation-id f) (:id created))))
@@ -179,9 +180,10 @@
 (deftest a-transition-the-lifecycle-refuses-changes-nothing
   (let [f (fixture)
         created (payments/create-instruction! tdb/*pool* (candidate f) opts)]
-    (payments/transition! tdb/*pool* (:organisation-id f) (:id created) :submit)
+    (payments/transition! tdb/*pool* (:organisation-id f) (:id created) :submit {:actor (:actor f)})
     (is (= :conflict (error-type #(payments/transition! tdb/*pool* (:organisation-id f)
-                                                        (:id created) :submit))))
+                                                        (:id created) :submit
+                                                        {:actor (:actor f)}))))
     (is (= :pending-approval (:status (payments/find-instruction
                                        tdb/*pool* (:organisation-id f) (:id created)))))))
 
@@ -207,7 +209,7 @@
                   (swap! outcomes conj
                          (try
                            (payments/transition! tdb/*pool* (:organisation-id f)
-                                                 (:id created) :submit)
+                                                 (:id created) :submit {:actor (:actor f)})
                            :submitted
                            (catch Exception t
                              (or (:clofin/error (ex-data t)) :defect))))
@@ -238,12 +240,65 @@
     (is (= :draft (:status found)) "an amendment is not a transition")
     (is (= (:id created) (:id found)) "and not a new instruction either")))
 
+(deftest f-001-only-the-creator-may-submit
+  (testing "audit finding F-001. Enforced here rather than in the handler: a
+            provenance rule that lives at the HTTP boundary stops existing for
+            every caller that does not come through it — and this function is
+            called directly by `approval-service` and by test fixtures."
+    (let [f (fixture)
+          created (payments/create-instruction! tdb/*pool* (candidate f) opts)
+          someone-else (tdb/insert-actor! tdb/*pool* {:organisation-id (:organisation-id f)
+                                                      :display-name "Second operator"
+                                                      :roles [:operator]})]
+      (is (= :forbidden
+             (error-type #(payments/transition! tdb/*pool* (:organisation-id f) (:id created)
+                                                :submit {:actor {:id someone-else}}))))
+      (is (= :draft (:status (payments/find-instruction tdb/*pool* (:organisation-id f) (:id created))))
+          "and the instruction did not move"))))
+
+(deftest f-001-submitting-with-no-actor-fails-closed
+  (testing "an operation restricted to the creator, with nobody to compare
+            against, refuses rather than permitting"
+    (let [f (fixture)
+          created (payments/create-instruction! tdb/*pool* (candidate f) opts)]
+      (is (= :unauthorised
+             (error-type #(payments/transition! tdb/*pool* (:organisation-id f) (:id created)
+                                                :submit))))
+      (is (= :draft (:status (payments/find-instruction tdb/*pool* (:organisation-id f) (:id created))))))))
+
+(deftest f-001-provenance-is-checked-before-the-lifecycle
+  (testing "mirroring `amend!`: a non-creator is told it is not their instruction
+            rather than being handed its state and permitted events"
+    (let [f (fixture)
+          created (payments/create-instruction! tdb/*pool* (candidate f) opts)
+          someone-else (tdb/insert-actor! tdb/*pool* {:organisation-id (:organisation-id f)
+                                                      :display-name "Second operator"
+                                                      :roles [:operator]})]
+      (payments/transition! tdb/*pool* (:organisation-id f) (:id created) :submit {:actor (:actor f)})
+      ;; Already `pending-approval`, so the lifecycle would also refuse.
+      (is (= :forbidden
+             (error-type #(payments/transition! tdb/*pool* (:organisation-id f) (:id created)
+                                                :submit {:actor {:id someone-else}})))
+          "403 wins over 409 — no grant makes a non-creator the creator"))))
+
+(deftest f-001-a-non-creator-may-still-cancel
+  (testing "the rule is on the event, not on the caller: `:cancel` is not
+            creator-only, so a controller can stop a payment it did not raise"
+    (let [f (fixture)
+          created (payments/create-instruction! tdb/*pool* (candidate f) opts)
+          controller (tdb/insert-actor! tdb/*pool* {:organisation-id (:organisation-id f)
+                                                    :display-name "Controller"
+                                                    :roles [:controller]})]
+      (is (= :cancelled
+             (:status (:after (payments/transition! tdb/*pool* (:organisation-id f) (:id created)
+                                                    :cancel {:actor {:id controller}}))))))))
+
 (deftest amending-a-submitted-instruction-returns-it-to-draft
   (testing "PR-014, AC-7. TASK-002 refused this because the approval-invalidation
             behind it did not exist; it does now (ADR-0014 amendment 1)."
     (let [f (fixture)
           created (payments/create-instruction! tdb/*pool* (candidate f) opts)]
-      (payments/transition! tdb/*pool* (:organisation-id f) (:id created) :submit)
+      (payments/transition! tdb/*pool* (:organisation-id f) (:id created) :submit {:actor (:actor f)})
       (let [{:keys [before after]}
             (payments/amend! tdb/*pool* (:organisation-id f) (:id created)
                              {:amount (money/of "SGD" 1)} (assoc opts :actor (:actor f)))]
@@ -260,7 +315,7 @@
           checker (tdb/insert-actor! tdb/*pool* {:organisation-id (:organisation-id f)
                                                  :display-name "Checker"
                                                  :roles [:approver] :limits {"SGD" 10000000}})]
-      (payments/transition! tdb/*pool* (:organisation-id f) (:id created) :submit)
+      (payments/transition! tdb/*pool* (:organisation-id f) (:id created) :submit {:actor (:actor f)})
       (tdb/insert-approval! tdb/*pool* {:instruction-id (:id created) :actor-id checker})
       (payments/transition! tdb/*pool* (:organisation-id f) (:id created) :approve)
 
@@ -280,7 +335,7 @@
     (let [f (fixture)
           created (payments/create-instruction! tdb/*pool* (candidate f) opts)]
       (doseq [event [:submit :approve :release :settle]]
-        (payments/transition! tdb/*pool* (:organisation-id f) (:id created) event))
+        (payments/transition! tdb/*pool* (:organisation-id f) (:id created) event {:actor (:actor f)}))
       (is (= :conflict (error-type #(payments/amend! tdb/*pool* (:organisation-id f)
                                                      (:id created)
                                                      {:amount (money/of "SGD" 1)}
@@ -328,7 +383,10 @@
   the fixture cannot reach a state the state machine would not have permitted."
   [f id]
   (doseq [event [:submit :approve :release :settle]]
-    (payments/transition! tdb/*pool* (:organisation-id f) id event))
+    ;; `:actor` matters only for `:submit`, which is creator-only (F-001); the
+    ;; fixture's actor is the creator, so the walk is one an operator could
+    ;; actually have performed rather than one only a fixture can reach.
+    (payments/transition! tdb/*pool* (:organisation-id f) id event {:actor (:actor f)}))
   id)
 
 (deftest a-settled-instruction-can-be-reversed-by-a-new-instruction
@@ -386,7 +444,7 @@
         first-id (:id (payments/create-instruction! tdb/*pool* (candidate a) opts))
         second-id (:id (payments/create-instruction! tdb/*pool* (candidate a) opts))
         _ (payments/create-instruction! tdb/*pool* (candidate b) opts)]
-    (payments/transition! tdb/*pool* (:organisation-id a) first-id :submit)
+    (payments/transition! tdb/*pool* (:organisation-id a) first-id :submit {:actor (:actor a)})
 
     (let [{:keys [instructions truncated?]}
           (payments/list-instructions tdb/*pool* (:organisation-id a) {})]

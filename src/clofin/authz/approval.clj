@@ -183,11 +183,15 @@
   The checks narrow, most fundamental first, so that a refused caller is told
   the reason that will still be true after everything else is fixed:
 
-  1. `:self-approval` — the actor submitted this instruction. Checked **first**
-     because it is the only refusal that can never be resolved: an actor may be
-     granted a role or a larger limit, but the maker never becomes a valid
-     checker for their own payment. An actor who is both the maker and an
-     approver is told the reason that actually governs (C-01, PR-010).
+  1. `:self-approval` — the actor created this instruction, and therefore also
+     submitted it: submission is restricted to the creator by
+     `clofin.payments.state/creator-only-events` and
+     `clofin.payments.repository/transition!`, which is what makes a comparison
+     against `created-by` alone a complete maker–checker test. Checked
+     **first** because it is the only refusal that can never be resolved: an
+     actor may be granted a role or a larger limit, but the maker never becomes
+     a valid checker for their own payment. An actor who is both the maker and
+     an approver is told the reason that actually governs (C-01, PR-010).
   2. `:not-an-approver` — the actor has no approval authority at all (C-08).
   3. `:above-actor-limit` — they have authority, but not this much (C-02,
      PR-012).
@@ -232,10 +236,24 @@
                     :actor-limit-minor  ceiling
                     :currency           currency}]
     (cond
-      ;; C-01. First, and never waivable. Note that this compares the actor to
-      ;; the instruction's *creator*: `DOMAIN_MODEL.md` §1 defines the maker as
-      ;; the actor who creates and submits, and CloFin does not let those be
-      ;; different actors — `created-by` is therefore the whole of provenance.
+      ;; C-01. First, and never waivable.
+      ;;
+      ;; This compares the actor to the instruction's `created-by` and to
+      ;; nothing else, which is sufficient **only because**
+      ;; `clofin.payments.state/creator-only-events` puts `:submit` beyond any
+      ;; other actor, enforced in `clofin.payments.repository/transition!`.
+      ;; `DOMAIN_MODEL.md` §1 defines the maker as the actor who creates *and*
+      ;; submits; that sentence is a description of what those two functions
+      ;; make true, not an assumption this one may rest on.
+      ;;
+      ;; It rested on the assumption until audit finding **F-001**: submission
+      ;; was gated by a permission and not by provenance, so an actor holding
+      ;; `operator` and `approver` could submit someone else's draft — becoming
+      ;; its maker in every sense that matters — and then approve it here,
+      ;; because `created-by` still named the other person. The premise was
+      ;; documented in this comment and enforced nowhere (standing lesson
+      ;; **L-6**). Do not widen this comparison without first checking that
+      ;; enforcement point still exists.
       (= (:id actor) (:created-by instruction))
       (refused :self-approval (assoc context :created-by (:created-by instruction)))
 

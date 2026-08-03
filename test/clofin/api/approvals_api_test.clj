@@ -173,6 +173,113 @@
     (is (= "approved" (status-of f pi)))))
 
 ;; ---------------------------------------------------------------------------
+;; F-001 — the maker–checker bypass, asserted dead
+;; ---------------------------------------------------------------------------
+;;
+;; Milestone 1's external audit found that `submit` applied a permission and no
+;; provenance check, while `evaluate` refused approval by `created-by` alone on
+;; the strength of a docstring claim that creator and submitter could not
+;; differ. Nothing enforced that claim, so an actor holding `operator` and
+;; `approver` could submit somebody else's draft — becoming its maker in every
+;; sense that mattered — and then approve it, because `created-by` still named
+;; the other person.
+;;
+;; The chain below is the exploit as reported. It succeeded end to end; it now
+;; stops at step 2.
+
+(deftest f-001-a-second-actor-cannot-submit-someone-elses-draft
+  (testing "provenance, not permission: B holds :payment/submit and is still refused"
+    (let [f (setup)
+          other-operator (tdb/insert-actor! tdb/*pool* {:organisation-id (:org f)
+                                                        :display-name "Second operator"
+                                                        :roles [:operator]})
+          pi (create! f)
+          {:keys [status json]}
+          (call :post (str "/payment-instructions/" (get pi "id") "/submission")
+                {:actor other-operator :idempotency-key (key!) :body {}})]
+      (is (= 403 status))
+      (is (= "https://clofin.dev/problems/forbidden" (get json "type")))
+      (is (= "creator-only" (get-in json ["errors" "rule"]))
+          "named so a caller can tell this from a missing permission: the answer
+           is not 'ask for a role', it is 'this is not your instruction'")
+      (is (= "submit" (get-in json ["errors" "attempted"])))
+      (is (= "draft" (status-of f pi)) "and the instruction did not move"))))
+
+(deftest f-001-the-full-exploit-chain-is-dead
+  (testing "A creates; B — holding operator AND approver, with a limit — tries to
+            submit and then approve. One human, two roles, an approved payment."
+    (let [f (setup)
+          both (tdb/insert-actor! tdb/*pool* {:organisation-id (:org f)
+                                              :display-name "B (operator+approver)"
+                                              :roles [:operator :approver]
+                                              :limits {"SGD" 99999999}})
+          pi (create! f)]                                   ; created by A (:maker f)
+      (is (= (str (:maker f)) (get pi "createdBy")))
+
+      (testing "step 2 — B submits A's draft"
+        (let [{:keys [status]} (call :post (str "/payment-instructions/" (get pi "id") "/submission")
+                                     {:actor both :idempotency-key (key!) :body {}})]
+          (is (= 403 status) "this is where the chain now breaks")))
+
+      (testing "step 3 — and with the instruction still a draft, B cannot approve either"
+        (let [{:keys [status]} (approve! f pi both)]
+          (is (= 409 status) "the lifecycle refuses `approve` on a draft")))
+
+      (is (= "draft" (status-of f pi)))
+      (is (zero? (:count (db/query-one tdb/*pool* ["select count(*) as count from approval"]))))
+
+      (testing "and C-01's own documented evidence query returns no rows"
+        ;; COMPLIANCE C-01 publishes this query and states that it returns
+        ;; nothing. Before the fix it returned a row for this very chain.
+        (is (empty? (db/query tdb/*pool*
+                              ["select s.subject_id
+                                  from audit_event s
+                                  join audit_event a
+                                    on a.subject_id = s.subject_id and a.actor_id = s.actor_id
+                                 where s.action = 'payment.submitted'
+                                   and a.action = 'payment.approved'"])))))))
+
+(deftest f-001-provenance-is-refused-before-the-lifecycle-is-consulted
+  (testing "a non-creator gets 403, not a 409 that hands them the instruction's
+            state and the list of events that would have been permitted"
+    (let [f (setup)
+          other-operator (tdb/insert-actor! tdb/*pool* {:organisation-id (:org f)
+                                                        :display-name "Second operator"
+                                                        :roles [:operator]})
+          pi (pending! f)]                                  ; already submitted
+      (let [{:keys [status json]}
+            (call :post (str "/payment-instructions/" (get pi "id") "/submission")
+                  {:actor other-operator :idempotency-key (key!) :body {}})]
+        (is (= 403 status))
+        (is (nil? (get-in json ["errors" "permitted"]))
+            "the lifecycle's `permitted` list is not disclosed to an actor the
+             operation is closed to")))))
+
+(deftest f-001-cancel-remains-open-to-a-controller
+  (testing "the guard is on the event, not the handler. A controller holds
+            :payment/cancel and can never hold :payment/create, so gating cancel
+            on the creator would make that grant unexercisable — and cancelling
+            can never produce an approval."
+    (let [f (setup)
+          controller (tdb/insert-actor! tdb/*pool* {:organisation-id (:org f)
+                                                    :display-name "Controller"
+                                                    :roles [:controller]})
+          pi (create! f)
+          {:keys [status]} (call :post (str "/payment-instructions/" (get pi "id") "/cancellation")
+                                 {:actor controller :idempotency-key (key!) :body {}})]
+      (is (= 200 status) "a controller stops a payment it did not raise")
+      (is (= "cancelled" (status-of f pi))))))
+
+(deftest f-001-the-creator-can-still-submit
+  (testing "the obvious half, so a fix that refused everyone would be caught"
+    (let [f (setup)
+          pi (create! f)
+          {:keys [status json]} (call :post (str "/payment-instructions/" (get pi "id") "/submission")
+                                      {:actor (:maker f) :idempotency-key (key!) :body {}})]
+      (is (= 200 status))
+      (is (= "pending-approval" (get json "status"))))))
+
+;; ---------------------------------------------------------------------------
 ;; AC-3 — the approver's own limit
 ;; ---------------------------------------------------------------------------
 

@@ -215,8 +215,19 @@ saw success
 Every payment instruction and approval state change is appended to
 `audit_event` with actor, action, subject, before/after **digest**, correlation
 id and timestamp. The table is append-only: `UPDATE` and `DELETE` are rejected
-by a row-level trigger, so the constraint holds for the owning role too rather
-than depending on which role happens to be connected.
+by a row-level trigger and `TRUNCATE` by a statement-level one, so all three of
+PostgreSQL's destructive verbs are refused. `TRUNCATE` was added by migration
+`0007` after an audit found it uncovered — it visits no rows, so a `for each
+row` guard never saw it, and it emptied the table past a guard that had just
+refused the other two.
+
+A trigger binds the application, not the table's **owner**: an owner can
+disable or drop it, and a superuser can turn all triggers off with
+`session_replication_role`. CloFin currently connects as that owner, so the
+guarantee holds against the application and against defects in it, and not
+against an operator with the deployment's credentials. Closing that needs a
+runtime role split, which is named debt in
+[COMPLIANCE §4](docs/COMPLIANCE.md).
 
 Audit writes participate in the same transaction as the change they describe, so
 an un-audited state change is not representable. That is made structural rather

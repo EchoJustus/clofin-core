@@ -8,7 +8,7 @@
 | **PR base** | `feat/payment-instruction-lifecycle` — TASK-002 is implemented but unmerged (PR #4), per AGENT_HANDOFF §1b |
 | **Controls** | C-01, C-02, C-05, C-08 → ✅ |
 | **Requirements** | PR-010…PR-015, PR-070…PR-075 |
-| **Status** | Implemented. All four objections ruled on 2026-08-03; O-1's fix delivered as migration `0006`, O-2 ratified, O-3 and O-4 accepted as filed |
+| **Status** | Implemented. Four Worker objections ruled 2026-08-03 (O-1 fixed in `0006`, O-2 ratified, O-3/O-4 accepted). Returned to `IN PROGRESS` by the Milestone 1 batch audit; **both blocking findings remediated — see §8** |
 
 ---
 
@@ -464,3 +464,284 @@ Named here and in `COMPLIANCE.md` §4, not left for a reader to discover.
   changes, bump `clofin.audit/canonicalisation-version` in the same commit, or
   every digest written after the change becomes silently incomparable to every
   one written before it.
+
+
+---
+
+## 8. Remediation addendum — Milestone 1 audit findings F-001 and F-002
+
+Filed 2026-08-03, after `FEEDBACK-M1-foundation` returned two blocking findings,
+both independently verified by Master Control, with PR #4 and PR #5 held pending
+this work.
+
+Both findings are the same shape, and it is worth naming before the detail: **a
+guarantee stated over a partial set.** F-001 rested on a premise about identity
+that nothing enforced; F-002 enumerated two of PostgreSQL's three destructive
+verbs. Neither was a coding error. Both were claims that read as true and were
+tested as true, over a domain narrower than the claim.
+
+I reproduced both before changing anything, rather than working from the report.
+
+### F-001 — maker–checker bypass
+
+**Reproduced.** Actor A (operator) creates a draft; actor B, holding `operator`
+*and* `approver` with a limit, submits it and then approves it:
+
+```
+1. A creates draft      -> 201 createdBy=<A>
+2. B submits A's draft  -> 200 pending-approval
+3. B approves it        -> 201 approved
+```
+
+One human, an approved payment, every individual check passing. `evaluate`
+permitted step 3 correctly on its own terms: B is not `created-by`.
+
+The sharpest evidence is that **C-01's own published evidence query returned a
+row** — the query this document tells an auditor to run to prove the control
+holds:
+
+```sql
+select s.subject_id, s.actor_id
+  from audit_event s
+  join audit_event a on a.subject_id = s.subject_id and a.actor_id = s.actor_id
+ where s.action = 'payment.submitted' and a.action = 'payment.approved';
+-- 1 row
+```
+
+**Fixed.** `:submit` is now creator-only.
+
+| | |
+|---|---|
+| `clofin.payments.state/creator-only-events` | The rule, as a named set beside the lifecycle table — the same shape as `mutable-states` and `reversible-states`, per ADR-0014 decision 3. A provenance rule written into a handler is one the next handler restates differently, or omits. |
+| `clofin.payments.repository/transition!` | Enforces it, under the row lock, in the transaction that carries the state change — **not** at the HTTP boundary. `transition!` is called directly by `approval-service` and by fixtures; a rule enforced only in a handler stops existing for every other caller. |
+| `assert-creator!` | Generalised from amend-only to take the verb, so C-01's submit rule and PR-004's amend rule are one statement, not two that can drift. |
+
+Ordering: provenance is checked **before** the lifecycle, mirroring `amend!`. A
+non-creator gets `403` rather than a `409` carrying the instruction's status and
+the list of events that would have been permitted. The opposite order is right
+in `approval-service` and stays — an `approve` on a settled payment is a `409`
+whoever sent it, and answering `403` first would suggest that fixing permissions
+would help. Here it would not: no grant makes a non-creator the creator.
+
+Absent actor fails **closed** (`401`), so a caller that reaches `transition!`
+without a principal cannot submit.
+
+**`:cancel` is deliberately not creator-only**, and this is the one judgement in
+the fix that could reasonably have gone the other way. PR-004 names cancellation
+alongside amendment as a creator's act — but only for a *draft*, and the
+lifecycle also permits `cancel` from `approved`, which PR-004 never contemplates.
+`controller` holds `:payment/cancel` and can never hold `:payment/create`, so
+gating cancel on the creator would make that grant unexercisable. Cancellation
+also destroys no control: it reaches a terminal state and can never yield an
+approval. **Open question for Master Control**, recorded rather than settled:
+*should cancellation of a `draft` be creator-restricted, and how does that
+reconcile with `controller`'s `:payment/cancel`?* Widening it is a product
+decision about who may stop a payment.
+`state_test/cancel-is-deliberately-not-creator-only` exists so the decision is
+reversed on purpose rather than by someone tidying the set.
+
+The alternative the ruling named — recording a separate submitter and refusing
+both — was not taken, as instructed. Noted as future work: it is the design that
+would allow draft handoff between operators, which the creator-only rule
+forecloses. If an organisation needs one operator to prepare and another to
+submit, that is the shape to build, and it needs `submitted_by` on the row.
+
+**Docstrings now cite the enforcement point instead of asserting the invariant**
+(the L-6 instruction): `evaluate`'s comment, `evaluate`'s docstring, and
+`DOMAIN_MODEL.md` §1's Maker and Checker rows.
+
+### F-002 — TRUNCATE bypasses append-only
+
+**Reproduced.** `UPDATE` refused, `DELETE` refused, then:
+
+```
+clofin=> truncate audit_event;
+TRUNCATE TABLE
+clofin=> select count(*) from audit_event;  -- 0
+```
+
+**Fixed** by migration `0007`: `before truncate … for each statement execute
+function reject_mutation()` on `journal_entry`, `journal_line`, `audit_event`
+and `approval`. The function is reused unchanged — it reads only
+`tg_table_name` and `lower(tg_op)` and touches neither NEW nor OLD, so it is
+already safe at statement level and renders "never by truncate".
+
+Verified against a live PostgreSQL 16 **from an empty schema**, applying all
+seven migrations in order (lesson L-3), before the migration was written and
+again after: `TRUNCATE` and `TRUNCATE … CASCADE` both refuse, and a `CASCADE`
+from an *unguarded* parent (`truncate organisation cascade`) fires the guarded
+children's triggers — so the guard cannot be sidestepped by aiming one level up.
+
+### The residue, named rather than implied
+
+The ruling required stating plainly that triggers do not bind a schema-owner
+adversary. They do not, and I verified exactly what that means rather than
+describing it in the abstract. As the owning role — which CloFin connects as,
+and which is also a superuser in the shipped `docker-compose.yml` — all of these
+succeed:
+
+| Attempt | As owner | As a non-owner, non-superuser role |
+|---|---|---|
+| `truncate audit_event` | permitted after disabling the trigger | `permission denied for table audit_event` |
+| `alter table … disable trigger …` | permitted | `must be owner of table audit_event` |
+| `drop trigger …` | permitted | `must be owner of relation audit_event` |
+| `set session_replication_role = 'replica'` | permitted | `permission denied to set parameter` |
+
+**One of these deserves particular attention, and I want it on the record rather
+than buried.** `session_replication_role = 'replica'` disables the triggers
+wholesale, which defeats the **pre-existing** `UPDATE` and `DELETE` guards as
+well as the new `TRUNCATE` one — verified: `delete from audit_event` removed
+every row under replica mode. So the append-only guarantee has never held
+against a superuser connection, since migration `0002`. That predates F-002
+rather than being introduced by it.
+
+**I considered raising this as a separate finding (F-003) and concluded it is
+not one.** `session_replication_role` is `context = superuser`, so it is
+unavailable to any role that is not already able to `DROP TRIGGER` outright. It
+is one more instance of the residue the ruling ordered me to name, not a new
+class. Recorded here so that Master Control can overrule that reading if it
+prefers a separate finding.
+
+**I also considered and rejected `ENABLE ALWAYS` on the guards**, which would
+make them fire under replica mode. Rejected because it diverges from the DDL the
+ruling specified, and because it closes one superuser action while `DISABLE
+TRIGGER` and `DROP TRIGGER` remain open to the same actor — raising the bar
+without closing the class. It belongs in the role-split brief, where it is a
+sensible belt-and-braces addition, not here.
+
+Named debt is now in `COMPLIANCE.md` §4 with the verified evidence, C-05's
+enforcement table, `ARCHITECTURE.md` §5.5, migration `0007`'s header, and
+`clofin.db.audit-constraints-test/f-002-the-residue-a-trigger-cannot-close`,
+which demonstrates it in a rolled-back transaction so the boundary is a passing
+test rather than a paragraph.
+
+**A false claim was removed, not just extended.** C-05's enforcement table said
+the guard was "not revoked privileges — a trigger, so it holds for the owning
+role too". That was wrong, I wrote it, and it is now replaced with the table
+above. `ARCHITECTURE.md` §5.5 carried the same sentence.
+
+### The riskiest part of this change was the test harness
+
+`clofin.test-db/clean-business-data!` reset state between tests by TRUNCATEing
+the very tables `0007` now guards — and its docstring said, in as many words,
+that it relied on TRUNCATE bypassing the triggers. **Adding the guards broke
+every integration test**, which is how a fix like this goes wrong quietly: the
+tempting repairs all weaken the control.
+
+Rejected: a session flag or GUC escape hatch in `reject_mutation()` (a guard
+with a documented bypass is a guard whose bypass appears in an incident);
+`session_replication_role` (superuser-only, and it would silently stop working
+if the guards were ever strengthened to `ALWAYS`); `DELETE` (also refused, by
+design).
+
+Taken: disable only the **named TRUNCATE triggers**, discovered from
+`pg_trigger`, inside one transaction, restoring each to the state it was found
+in. Four properties, each verified:
+
+1. **Narrow.** `disable trigger user` — my first attempt — would also have
+   disarmed `journal_entry_must_balance`, the deferred trigger behind C-03.
+   Verified that this matters: with it down, an unbalanced entry commits,
+   because a deferred trigger disabled at INSERT queues no event to fire at
+   commit. Nothing is inserted inside the window today; the narrow form cannot
+   break if that stops being true.
+2. **Atomic.** Disable, truncate and re-enable share one transaction, so a
+   failure rolls the disable back with everything else. Verified by simulating a
+   mid-cleanup failure: the guards were armed afterwards and TRUNCATE was still
+   refused.
+3. **State-preserving.** It restores each trigger to the `tgenabled` it found,
+   not to `ENABLE`. Today every guard is `'O'` so this is identical in effect —
+   but a fixture that hard-coded `enable` would downgrade an `ALWAYS` guard the
+   day one is introduced, leaving the suite green and the control quietly
+   weaker. That is F-002's own shape, and it is not worth re-creating to save a
+   word.
+4. **Drift-detecting, and not compilable away.** The declared table list is
+   cross-checked against what `pg_trigger` reports, and the check `throw`s
+   rather than `assert`s — `clojure.core/assert` compiles to nothing when
+   `*assert*` is false, and a guard that can be compiled away is not a guard.
+
+The docstring now says plainly that this function *is* the schema-owner
+adversary COMPLIANCE §4 names, and that under the role-split it would stop
+working — which is the intended outcome, not a regression.
+
+### Tests added
+
+18 tests, 90 assertions.
+
+| Test | Finding |
+|---|---|
+| `api.approvals-api-test/f-001-the-full-exploit-chain-is-dead` | The reported chain, step by step, including C-01's evidence query returning no rows |
+| `.../f-001-a-second-actor-cannot-submit-someone-elses-draft` | 403 with `errors.rule = creator-only` |
+| `.../f-001-provenance-is-refused-before-the-lifecycle-is-consulted` | 403 beats 409; `permitted` is not disclosed |
+| `.../f-001-cancel-remains-open-to-a-controller` | The regression guard for the cancel decision |
+| `.../f-001-the-creator-can-still-submit` | So a fix that refused everyone would be caught |
+| `payments.repository-test/f-001-*` (4) | The same rules below HTTP, where they are actually enforced |
+| `payments.state-test/creator-only-events-is-exactly-submit` and 3 more | The set itself, including that no event `approval-service` drives is creator-only — which would invert C-01 |
+| `db.audit-constraints-test/f-002-every-append-only-table-refuses-every-destructive-verb` | The full table × verb matrix, enumerated rather than sampled, asserting the message names the verb |
+| `.../f-002-truncate-cannot-be-laundered-through-an-unguarded-parent` | `CASCADE` from `organisation` |
+| `.../f-002-every-guard-is-armed-after-the-test-fixture-has-run` | Makes the fixture's restore non-regressable |
+| `.../f-002-the-residue-a-trigger-cannot-close` | The owner bypass, demonstrated and rolled back |
+| `db.ledger-constraints-test/f-002-a-posted-entry-cannot-be-truncated-away` | C-03's own file demonstrates its own control |
+
+### Documentation
+
+`COMPLIANCE.md` C-01 (new enforcement row, the hole and its duration, the
+`X-Actor-Id` boundary), C-03 and C-05 (verb sets; the false owner clause
+replaced), §4 (role-split debt with verified evidence); `DOMAIN_MODEL.md` §1;
+`ARCHITECTURE.md` §5.5; `api/openapi.yaml` (submit description, `401`/`403` on
+submit **and** on amend — the latter has returned 403 since TASK-003 and was
+never declared; the stale amend `409` text corrected); migration `0007`.
+
+**`UAT-002` needs singling out.** Its teardown ran `truncate journal_line,
+journal_entry … cascade` under a note reading: *"Note that `truncate` succeeds
+where `delete` failed … **This is deliberate** — a schema-level reset for test
+environments must remain possible without weakening the row-level control."*
+F-002 was written down as an intended design choice, in the acceptance evidence,
+signed off. It is now a step that **asserts the refusal**, with the old sentence
+quoted in a callout rather than deleted — a UAT script that once blessed a hole
+is itself worth remembering. `UAT-003`'s teardown had the same statement.
+`UAT-005`, the acceptance script *for C-01*, had no step in which a second actor
+submits somebody else's draft — the hole sat between two passing steps — and no
+TRUNCATE probe. Both added, plus a step demonstrating the owner residue.
+
+### Verification
+
+```
+$ clojure -M:test        # what `make test` runs
+Ran 223 tests containing 1257 assertions.   0 failures, 0 errors.
+
+$ clojure -M:test:it
+Ran 440 tests containing 2425 assertions.   0 failures, 0 errors.
+
+$ sh scripts/check-doc-links.sh
+Documentation links OK (40 markdown files checked).
+
+$ grep -rn "TODO(TASK-003)" src/    # still empty
+```
+
+| | Before remediation | After | Added |
+|---|---|---|---|
+| Unit | 219 / 1252 | **223 / 1257** | +4 / +5 |
+| With integration | 422 / 2335 | **440 / 2425** | +18 / +90 |
+
+Migrations re-applied from an empty schema, all seven in order, before and after.
+
+### Left open
+
+- **Cancellation provenance** — the open question above. Needs a ruling; the
+  test that pins the current decision is named.
+- **`session_replication_role`** — read as part of F-002's residue rather than a
+  new finding. Master Control may prefer it recorded as F-003.
+- **`ENABLE ALWAYS`** — considered, rejected as out of scope, recommended for
+  the role-split brief.
+- **A refused submission leaves no audit event.** Audit writes happen inside the
+  idempotent effect, so a rejected attempt produces no trace. Whether an
+  *attempted* control violation should be recorded is a C-05 question this
+  remediation did not decide, and it is not currently tested either way. Worth a
+  brief: an audit trail that records only successes cannot answer "did anyone
+  try?".
+- **`clofin.http.response/error->problem`** puts all remaining `ex-data` on the
+  wire, so `errors.rule` and `errors.attempted` are now part of the 403 contract
+  (declared in OpenAPI). Its docstring still claims only "explicitly-declared
+  public data" reaches the caller, which has been inaccurate since TASK-001.
+  Not fixed here — it is TASK-001 code and outside this remediation — but it
+  should be corrected or made true.

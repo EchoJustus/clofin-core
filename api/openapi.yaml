@@ -99,9 +99,11 @@ tags:
       timeout on submission from becoming a payment made twice.
 
       **Approval exists; settlement and screening do not.** `submit` moves an
-      instruction to `pendingApproval`, and `POST
-      /payment-instructions/{id}/approvals` moves it on from there — refusing
-      the actor who submitted it. `released`, `settled`, `failed` and
+      instruction to `pendingApproval` — and only its creator may do so — and
+      `POST /payment-instructions/{id}/approvals` moves it on from there,
+      refusing the actor named in `createdBy`. The two halves are one control:
+      restricting submission to the creator is what makes refusing `createdBy` a
+      complete maker–checker test. `released`, `settled`, `failed` and
       `returned` exist in the lifecycle and no operation here drives an
       instruction into them.
 
@@ -664,12 +666,25 @@ paths:
                 $ref: "#/components/schemas/PaymentInstruction"
         "400":
           $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          description: |
+            The actor is not this instruction's creator (PR-004), or does not
+            hold `payment/amend`. `errors.rule` is `creator-only` in the first
+            case.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
         "404":
           $ref: "#/components/responses/NotFound"
         "409":
           description: |
-            The instruction is not a draft and cannot be amended, or the
-            `Idempotency-Key` has already been used for a different request.
+            The lifecycle does not permit `amend` from the instruction's current
+            state — a `settled`, `cancelled`, `rejected` or `released`
+            instruction cannot be amended — or the `Idempotency-Key` has already
+            been used for a different request.
           content:
             application/problem+json:
               schema:
@@ -683,10 +698,20 @@ paths:
       operationId: submitPaymentInstruction
       summary: Submit a payment instruction for approval
       description: |
-        Moves a `draft` to `pendingApproval`, and **stops there**. Approval is
-        TASK-003; there is no operation in this contract that moves an
-        instruction beyond `pendingApproval`, because a payment that could be
-        approved by whoever submitted it is not a control.
+        Moves a `draft` to `pendingApproval`.
+
+        **Only the actor named in `createdBy` may submit an instruction.**
+        Anyone else is `403`, whatever permissions they hold, with
+        `errors.rule` = `creator-only` — an answer distinct from a missing
+        permission, because the remedy is not to be granted a role.
+
+        That restriction is what makes maker–checker a control rather than a
+        convention. The approvals operation refuses the actor named in
+        `createdBy` and compares nothing else, so it is a complete test only
+        while the submitter and the creator are the same actor. They need not
+        have been until this restriction existed: an actor holding both
+        `operator` and `approver` could submit somebody else's draft and then
+        approve it.
 
         Submitting anything that is not a draft is `409`, naming the state the
         instruction is actually in and what would have been permitted from it.
@@ -726,13 +751,37 @@ paths:
                 $ref: "#/components/schemas/PaymentInstruction"
         "400":
           $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          description: |
+            The actor is not this instruction's creator, or does not hold
+            `payment/submit`. `errors.rule` is `creator-only` in the first case,
+            which a client should not retry by requesting a permission.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+              examples:
+                notTheCreator:
+                  summary: Provenance, not permission
+                  value:
+                    type: "https://clofin.dev/problems/forbidden"
+                    title: "Not permitted"
+                    status: 403
+                    detail: "Only the actor who created a payment instruction may submit it"
+                    errors:
+                      rule: "creator-only"
+                      attempted: "submit"
         "404":
           $ref: "#/components/responses/NotFound"
         "409":
           description: |
             The lifecycle does not permit `submit` from the instruction's
             current state, or the `Idempotency-Key` has already been used for a
-            different request.
+            different request. Provenance is checked **first**, so a caller who
+            is not the creator gets `403` rather than this — the instruction's
+            state is not disclosed to an actor the operation is closed to.
           content:
             application/problem+json:
               schema:

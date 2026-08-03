@@ -10,3 +10,4 @@
 0004-idempotency-digest-scope.sql
 0005-authorisation-and-audit.sql
 0006-approver-limit-wildcard-currency.sql
+0007-append-only-truncate-guards.sql

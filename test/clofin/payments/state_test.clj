@@ -190,3 +190,36 @@
 (deftest a-refused-transition-is-rendered-as-409
   (testing "the state machine's refusal must reach a caller as a conflict"
     (is (= 409 (:status (get err/error-types :conflict))))))
+
+;; ---------------------------------------------------------------------------
+;; Provenance — audit finding F-001
+;; ---------------------------------------------------------------------------
+
+(deftest creator-only-events-is-exactly-submit
+  (testing "C-01 rests on this set. `clofin.authz.approval/evaluate` compares an
+            approver against `created-by` and nothing else, which is a complete
+            maker–checker test only while submission is closed to everyone but
+            the creator."
+    (is (= #{:submit} state/creator-only-events))
+    (is (true? (state/creator-only? :submit)))))
+
+(deftest cancel-is-deliberately-not-creator-only
+  (testing "`controller` holds :payment/cancel and never :payment/create, so it
+            can never be an instruction's creator — gating cancel on the creator
+            would make that grant unexercisable. Cancellation also destroys no
+            control: it reaches a terminal state and can never yield an approval.
+            This test exists so the decision is reversed on purpose, not by
+            someone tidying the set."
+    (is (false? (state/creator-only? :cancel)))))
+
+(deftest no-event-driven-by-the-approval-service-is-creator-only
+  (testing "`clofin.payments.approval-service` calls `transition!` without an
+            actor for :approve and :reject. Were either creator-only, that call
+            would fail closed at runtime with nothing at compile time to catch
+            it — and creator-only approval would invert C-01 outright."
+    (is (empty? (filter state/creator-only? [:approve :reject])))))
+
+(deftest every-creator-only-event-is-an-event-the-table-knows
+  (doseq [event state/creator-only-events]
+    (is (contains? state/events event)
+        (str event " is creator-only but is not in the lifecycle at all"))))

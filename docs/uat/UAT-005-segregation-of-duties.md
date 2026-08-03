@@ -4,7 +4,8 @@
 privilege, and the audit trail behind them
 **Requirements:** PR-010, PR-011, PR-012, PR-013, PR-014, PR-015, PR-070,
 PR-072, PR-073, PR-074, PR-075
-**Controls:** [C-01](../COMPLIANCE.md), C-02, C-05, C-08
+**Controls:** [C-01](../COMPLIANCE.md), C-02, C-03, C-05, C-08
+**Audit findings covered:** F-001 (step 4b), F-002 (step 11)
 
 > **Numbered 005, not 004.** The brief for this work asked for
 > `UAT-004-segregation-of-duties.md`; `UAT-004` was already taken by the
@@ -209,6 +210,95 @@ curl -sS -X POST $BASE/payment-instructions/$PI/submission \
 ```
 
 **Expected:** `"status":"pendingApproval"`.
+
+---
+
+## Step 4b — **Attempt to submit someone else's draft, and watch it fail**
+
+This step did not exist when this script was first written, and its absence is
+why audit finding **F-001** reached production code. The script tested that a
+maker could not *approve* their own payment, and never tested who could
+*submit* one — so the hole sat between two passing steps.
+
+Seed a second operator:
+
+```sql
+insert into actor (id, organisation_id, display_name)
+  values ('66666666-6666-6666-6666-666666666666', :'org', 'Tom (second operator)');
+insert into actor_role (actor_id, role)
+  values ('66666666-6666-6666-6666-666666666666', 'operator');
+```
+
+```sh
+export TOM=66666666-6666-6666-6666-666666666666
+```
+
+Raise a fresh draft as Priya (repeat step 4, keeping the id in `$PI3`), then
+have Tom try to submit it:
+
+```sh
+curl -sS -i -X POST $BASE/payment-instructions/$PI3/submission \
+  -H "X-Actor-Id: $TOM" -H 'content-type: application/json' \
+  -H "Idempotency-Key: $(uuidgen)" -d '{}'
+```
+
+**Expected:** `403`, with `"rule": "creator-only"` in the `errors` object.
+
+Tom holds `operator`, which carries `payment/submit`. **He is refused anyway.**
+That is the distinction this step exists to show: the answer is not "ask for a
+permission", it is "this is not your instruction". Confirm the draft has not
+moved:
+
+```sh
+curl -sS $BASE/payment-instructions/$PI3 -H "X-Actor-Id: $PRIYA"
+```
+
+**Expected:** still `"status": "draft"`.
+
+### Why this matters more than it looks
+
+Grant Tom the approver role as well, and run the original exploit:
+
+```sql
+insert into actor_role (actor_id, role)
+  values ('66666666-6666-6666-6666-666666666666', 'approver');
+insert into approver_limit (actor_id, currency, limit_minor)
+  values ('66666666-6666-6666-6666-666666666666', 'SGD', 99999999);
+```
+
+Tom now holds both roles. Before the fix, he could submit Priya's draft — making
+himself its maker in every sense that mattered — and then approve it, because
+`createdBy` still said Priya. One human, an approved payment, and every
+individual check passing.
+
+```sh
+curl -sS -i -X POST $BASE/payment-instructions/$PI3/submission \
+  -H "X-Actor-Id: $TOM" -H 'content-type: application/json' \
+  -H "Idempotency-Key: $(uuidgen)" -d '{}'
+```
+
+**Expected:** still `403`. The chain breaks at its first step.
+
+Then check the query C-01 publishes as its evidence:
+
+```sql
+select s.subject_id
+  from audit_event s
+  join audit_event a
+    on a.subject_id = s.subject_id and a.actor_id = s.actor_id
+ where s.action = 'payment.submitted' and a.action = 'payment.approved';
+```
+
+**Expected:** no rows. Before the fix this returned one for the chain above —
+the control's own evidence reported the control failing.
+
+Remove the extra grants before continuing:
+
+```sql
+delete from approver_limit where actor_id = '66666666-6666-6666-6666-666666666666';
+delete from actor_role
+  where actor_id = '66666666-6666-6666-6666-666666666666' and role = 'approver';
+```
 
 ---
 
@@ -438,11 +528,60 @@ entry with a reversing entry, never by update`.
 delete from audit_event;
 ```
 
-**Expected:** refused, for every row. Then confirm nothing was lost:
+**Expected:** refused, for every row.
+
+Now the verb that was *missing* from this script, and from the schema, until
+audit finding **F-002**:
+
+```sql
+truncate audit_event;
+```
+
+**Expected:** `ERROR: Table audit_event is append-only: … never by truncate`.
+
+Until migration `0007` this **succeeded**, emptying the audit trail in one
+statement immediately after the `UPDATE` and `DELETE` above had been correctly
+refused. `TRUNCATE` is a separate trigger event with a separate privilege, and
+the guard enumerated only two of the three verbs. Try it on the other guarded
+tables too — all four must refuse:
+
+```sql
+truncate approval;
+truncate journal_entry cascade;
+truncate organisation cascade;   -- reaches the guarded tables by foreign key
+```
+
+**Expected:** all refused. The last one matters on its own: a `CASCADE` from an
+*unguarded* parent still fires the children's triggers, so the guard cannot be
+sidestepped by aiming one level up.
+
+Then confirm nothing was lost:
 
 ```sql
 select count(*) from audit_event;
 ```
+
+### What none of this stops
+
+Every step above runs as the database **owner**, and a trigger cannot bind the
+owner of the table it is on:
+
+```sql
+alter table audit_event disable trigger audit_event_no_truncate;
+truncate audit_event;   -- succeeds
+```
+
+**Expected:** it works. **This is not a defect in the fix** — it is the
+residual risk [`COMPLIANCE.md` §4](../COMPLIANCE.md) names, and the reason the
+runtime role split is recorded as debt. Under an application role that is
+neither owner nor superuser, all of it is refused. Roll back rather than
+leaving the guard down:
+
+```sql
+alter table audit_event enable trigger audit_event_no_truncate;
+```
+
+Record both results. A control's boundary is part of the control.
 
 ---
 
