@@ -5,6 +5,7 @@
 | **Increment** | 4 |
 | **Status** | `READY` (blocked on TASK-002) |
 | **Depends on** | TASK-002 — needs the instruction lifecycle to attach approval to |
+| **Base branch** | The TASK-002 feature branch once it exists (stacked, per AGENT_HANDOFF §1b); named here by Master Control at dispatch |
 | **Blocks** | Increment 5 (settlement) |
 | **Requirements** | PR-010…PR-015, PR-070…PR-075 |
 | **Controls touched** | C-01, C-02, C-05, C-08 |
@@ -12,6 +13,7 @@
 | **Audit** | Not yet submitted |
 
 > Status lifecycle: `READY` → `IN PROGRESS` → `IMPLEMENTED` → `AUDITED` → `CLOSED`.
+> Status is maintained by Master Control on the `meta` branch — see AGENT_HANDOFF §1b.
 
 ---
 
@@ -242,7 +244,7 @@ the test.
 - [ ] `COMPLIANCE.md`: C-01, C-02, C-05, C-08 moved 📋 → ✅, each with its
       enforcement point and extractable evidence named
 - [ ] `DOMAIN_MODEL.md`: invariants I8 and I9 marked ✅
-- [ ] `docs/ROADMAP.md` increment 4 marked done; this brief set to `IMPLEMENTED`
+- [ ] Completion reported — PR opened against the base branch above, `003-REQ` filed — so Master Control can set this brief to `IMPLEMENTED` on `meta`
 - [ ] UAT script `docs/uat/UAT-004-segregation-of-duties.md` — a reviewer must be
       able to *attempt* self-approval and watch it fail
 - [ ] **Two ADRs**: (1) threshold currency handling, resolving PRD Q1;

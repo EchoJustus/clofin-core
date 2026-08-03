@@ -3,16 +3,16 @@
 | Field | Value |
 |---|---|
 | **Increment** | 2 |
-| **Status** | `READY` |
+| **Status** | `IMPLEMENTED` |
 | **Depends on** | — (increment 1 is merged and green) |
 | **Blocks** | TASK-002, TASK-003 |
 | **Requirements** | PR-020, PR-021, PR-022, PR-023, PR-024 |
 | **Controls touched** | C-03, C-04 |
 | **Scope** | Medium |
-| **Audit** | Not yet submitted |
+| **Audit** | Requested — `001-REQ` filed by the Worker on `claude/ledger-persistence-account-api-p5oi05` (PR #2); `FEEDBACK-001` outstanding |
 
 > Status lifecycle: `READY` → `IN PROGRESS` → `IMPLEMENTED` → `AUDITED` → `CLOSED`.
-> A worker session updates this table in the same commit as the work it describes.
+> Status is maintained by Master Control on the `meta` branch — see AGENT_HANDOFF §1b.
 
 ---
 
@@ -154,8 +154,8 @@ An unbalanced entry is `422` with the per-currency shortfall in `errors`.
 - [ ] `api/openapi.yaml` updated in the same commit as the handlers
 - [ ] `make verify` and `make test-it` both green
 - [ ] New test namespaces added to `clofin.test-runner`
-- [ ] `docs/ROADMAP.md` increment 2 marked done
-- [ ] This brief's `Status` set to `IMPLEMENTED`
+- [ ] Completion reported — PR opened, `001-REQ` filed — so Master Control can
+      set this brief to `IMPLEMENTED` and update `ROADMAP.md` on `meta`
 - [ ] A UAT script added under `docs/uat/`
 - [ ] An ADR for any decision a future contributor would otherwise re-derive —
       most likely: how a statement's running balance is computed, and what the

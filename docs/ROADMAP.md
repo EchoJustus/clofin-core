@@ -16,9 +16,9 @@ and this table is stale.
 
 | Increment | Theme | Brief | Status | CI |
 |---|---|---|---|---|
-| 1 | Foundation and ledger core | — (predates the brief protocol) | ✅ done | green, 303 assertions |
-| 2 | Ledger persistence and account API | [TASK-001](briefs/001-TASK-ledger-persistence-and-account-api.md) | 📋 `READY` | — |
-| 3 | Payment lifecycle and idempotency | [TASK-002](briefs/002-TASK-payment-instruction-lifecycle.md) | 📋 `READY`, blocked on 001 | — |
+| 1 | Foundation and ledger core | — (predates the brief protocol) | ✅ done — merged to `main` at `3bde834` (PR #1; milestone audit waived, see audits register) | green, 303 assertions |
+| 2 | Ledger persistence and account API | [TASK-001](briefs/001-TASK-ledger-persistence-and-account-api.md) | 🔨 `IMPLEMENTED` — PR #2 open, audit requested | green (6/6 checks) |
+| 3 | Payment lifecycle and idempotency | [TASK-002](briefs/002-TASK-payment-instruction-lifecycle.md) | 📋 `READY` — stack on PR #2's branch | — |
 | 4 | Authorisation, maker–checker, audit | [TASK-003](briefs/003-TASK-authorisation-and-audit-trail.md) | 📋 `READY`, blocked on 002 | — |
 | 5–9 | Settlement onwards | not yet briefed | 💭 later | — |
 
@@ -51,7 +51,7 @@ in a README, a PR description or a conversation.
 
 ## Increment 2 — Ledger persistence and account API 📋
 
-**Brief:** [TASK-001](briefs/001-TASK-ledger-persistence-and-account-api.md) · **Status:** `READY`
+**Brief:** [TASK-001](briefs/001-TASK-ledger-persistence-and-account-api.md) · **Status:** `IMPLEMENTED` — PR #2 open, audit requested
 
 *Why next: the domain model exists but cannot yet be exercised through the API,
 so nothing above it can be built.*
@@ -67,7 +67,7 @@ so nothing above it can be built.*
 
 ## Increment 3 — Payment instruction lifecycle 📋
 
-**Brief:** [TASK-002](briefs/002-TASK-payment-instruction-lifecycle.md) · **Status:** `READY`, blocked on TASK-001
+**Brief:** [TASK-002](briefs/002-TASK-payment-instruction-lifecycle.md) · **Status:** `READY` — stack on `claude/ledger-persistence-account-api-p5oi05` (PR #2)
 
 *Why next: the lifecycle is the spine every control attaches to.*
 

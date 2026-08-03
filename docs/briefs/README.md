@@ -1,37 +1,45 @@
 # Task briefs — the delegation backlog
 
+> **Control plane.** This directory is maintained on the **`meta` branch** by
+> Master Control, in batches of one to five briefs. The copy on `origin/meta`
+> is the current one; read it without checking out:
+> `git fetch origin meta && git show origin/meta:docs/briefs/<file>`.
+> Copies on `main` or feature branches are historical snapshots. Workers never
+> commit to `meta` — see [`../AGENT_HANDOFF.md`](../AGENT_HANDOFF.md) §1b.
+
 A brief specifies one unit of work precisely enough that an **independent
 session, with no access to the conversation that produced it**, can execute it.
-Scope, interfaces, acceptance criteria and — critically — what is *out* of scope
-and why.
+Scope, interfaces, acceptance criteria, the **base branch to build on** (which,
+in a stacked batch, may be an unmerged feature branch rather than `main`) and —
+critically — what is *out* of scope and why.
 
 Briefs are written **ahead of execution**, so the backlog stays healthy and no
 worker session ever waits on planning. A brief blocked by a dependency is still
-written; it simply names what it is blocked on.
+written; it simply names what it is blocked on and where to stack.
 
 **Naming:** `NNN-TASK-<short-feature>.md`, numbered sequentially, never renumbered.
-Feedback from an architecture audit lands in [`../audits/`](../audits).
+Feedback from an architecture audit lands in [`../audits/`](../audits) on `meta`.
 
 ## Status lifecycle
 
 | Status | Meaning |
 |---|---|
-| `READY` | Specified and executable. If `Depends on` is unmet, it is queued rather than startable. |
-| `IN PROGRESS` | A session has claimed it. Set this in your first commit, so two sessions do not collide. |
-| `IMPLEMENTED` | Code merged, acceptance criteria tested, CI green. Awaiting audit. |
+| `READY` | Specified and executable. If `Depends on` is unmet, the brief names the branch to stack on. |
+| `IN PROGRESS` | Dispatched to a Worker. Set by Master Control on `meta` at dispatch — being handed the brief **is** the claim. |
+| `IMPLEMENTED` | Worker reported done: PR open, acceptance criteria tested, CI green, `REQ` filed. Awaiting audit. |
 | `AUDITED` | A `FEEDBACK` file has been ingested and any findings actioned or explicitly accepted. |
-| `CLOSED` | Done. Kept, never deleted — the record of how the increment was specified. |
+| `CLOSED` | Merged to `main`. Kept, never deleted — the record of how the increment was specified. |
 
-The status table at the top of each brief is updated **in the same commit** as
-the work it describes. The repository is the only source of truth about what is
-in flight (see [`../AGENT_HANDOFF.md`](../AGENT_HANDOFF.md)).
+Only Master Control moves a brief between states, on `meta`. A Worker who thinks
+a status is wrong says so in its `REQ`; it does not edit the brief. If this
+table and a brief disagree, the brief on `origin/meta` wins.
 
 ## Backlog
 
 | Brief | Increment | Status | Depends on | Requirements | Scope |
 |---|---|---|---|---|---|
-| [001 — Ledger persistence and account API](001-TASK-ledger-persistence-and-account-api.md) | 2 | `READY` | — | PR-020…024 | Medium |
-| [002 — Payment instruction lifecycle and idempotency](002-TASK-payment-instruction-lifecycle.md) | 3 | `READY` | 001 | PR-001…005, PR-040…044 | Large |
+| [001 — Ledger persistence and account API](001-TASK-ledger-persistence-and-account-api.md) | 2 | `IMPLEMENTED` — PR #2, audit requested | — | PR-020…024 | Medium |
+| [002 — Payment instruction lifecycle and idempotency](002-TASK-payment-instruction-lifecycle.md) | 3 | `READY` — stack on PR #2's branch | 001 | PR-001…005, PR-040…044 | Large |
 | [003 — Authorisation, maker–checker and audit trail](003-TASK-authorisation-and-audit-trail.md) | 4 | `READY` | 002 | PR-010…015, PR-070…075 | Large |
 
 Sequencing follows **product relevance and regulatory risk**, not implementation

@@ -3,8 +3,9 @@
 | Field | Value |
 |---|---|
 | **Increment** | 3 |
-| **Status** | `READY` (blocked on TASK-001) |
+| **Status** | `READY` |
 | **Depends on** | TASK-001 — needs `clofin.ledger.repository/post-entry!` |
+| **Base branch** | `claude/ledger-persistence-account-api-p5oi05` — TASK-001 is implemented but unmerged (PR #2), so stack on its tip and open the PR against it, per AGENT_HANDOFF §1b |
 | **Blocks** | TASK-003 |
 | **Requirements** | PR-001…PR-005, PR-040…PR-044 |
 | **Controls touched** | C-06 (duplicate payment prevention) |
@@ -12,6 +13,7 @@
 | **Audit** | Not yet submitted |
 
 > Status lifecycle: `READY` → `IN PROGRESS` → `IMPLEMENTED` → `AUDITED` → `CLOSED`.
+> Status is maintained by Master Control on the `meta` branch — see AGENT_HANDOFF §1b.
 
 ---
 
@@ -202,7 +204,7 @@ threads, a latch, one shared key. A test that calls sequentially proves nothing.
 - [ ] New test namespaces added to `clofin.test-runner`
 - [ ] `DOMAIN_MODEL.md` invariants I10 marked ✅
 - [ ] `COMPLIANCE.md` C-06 moved from 📋 to ✅ with its enforcement point named
-- [ ] `docs/ROADMAP.md` increment 3 marked done; this brief set to `IMPLEMENTED`
+- [ ] Completion reported — PR opened against the base branch above, `002-REQ` filed — so Master Control can set this brief to `IMPLEMENTED` on `meta`
 - [ ] UAT script `docs/uat/UAT-003-idempotent-submission.md` — including a
       manual double-submit that a reviewer can perform with `curl`
 - [ ] ADR for the canonical-digest decision (what is included, what is ignored,
