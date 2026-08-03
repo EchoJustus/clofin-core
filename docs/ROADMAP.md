@@ -17,8 +17,8 @@ and this table is stale.
 | Increment | Theme | Brief | Status | CI |
 |---|---|---|---|---|
 | 1 | Foundation and ledger core | — (predates the brief protocol) | ✅ done — merged to `main` at `3bde834` (PR #1; milestone audit waived, see audits register) | green, 303 assertions |
-| 2 | Ledger persistence and account API | [TASK-001](briefs/001-TASK-ledger-persistence-and-account-api.md) | 🔨 `IMPLEMENTED` — PR #2 open, audit requested | green (6/6 checks) |
-| 3 | Payment lifecycle and idempotency | [TASK-002](briefs/002-TASK-payment-instruction-lifecycle.md) | 📋 `READY` — stack on PR #2's branch | — |
+| 2 | Ledger persistence and account API | [TASK-001](briefs/001-TASK-ledger-persistence-and-account-api.md) | ✅ `IMPLEMENTED` — merged to `main` in PR #2 (`f7018a1`); `FEEDBACK-001` outstanding | green, 757 assertions |
+| 3 | Payment lifecycle and idempotency | [TASK-002](briefs/002-TASK-payment-instruction-lifecycle.md) | 📋 `READY` — dependency merged; branch from `main` | — |
 | 4 | Authorisation, maker–checker, audit | [TASK-003](briefs/003-TASK-authorisation-and-audit-trail.md) | 📋 `READY`, blocked on 002 | — |
 | 5–9 | Settlement onwards | not yet briefed | 💭 later | — |
 
@@ -49,21 +49,37 @@ in a README, a PR description or a conversation.
 - ✅ Property tests for ledger and money invariants; database constraint tests;
   end-to-end HTTP test; OpenAPI contract test
 
-## Increment 2 — Ledger persistence and account API 📋
+## Increment 2 — Ledger persistence and account API ✅
 
-**Brief:** [TASK-001](briefs/001-TASK-ledger-persistence-and-account-api.md) · **Status:** `IMPLEMENTED` — PR #2 open, audit requested
+**Brief:** [TASK-001](briefs/001-TASK-ledger-persistence-and-account-api.md) · **Status:** `IMPLEMENTED` — merged in PR #2, `FEEDBACK-001` outstanding
 
-*Why next: the domain model exists but cannot yet be exercised through the API,
-so nothing above it can be built.*
+*Why it came next: the domain model existed but could not be exercised through
+the API, so nothing above it could be built.*
 
-- Ledger repository: persist and load entries and accounts
-- Balance and statement queries — opening balance, movements, closing balance
-- `POST /organisations`, `POST /accounts`, `GET /accounts/:id`
-- `POST /journal-entries`, `GET /accounts/:id/statement`
-- Synthetic chart of accounts as a seedable fixture
-- Acceptance criteria and UAT script for statement production
-- **Risk addressed:** derived balances must be correct and performant before
-  anything relies on them.
+- ✅ Ledger repository: persist and load entries and accounts, scoped by organisation
+- ✅ Balance and statement queries — opening balance, movements, closing balance,
+  every figure derived from the journal
+- ✅ `POST /organisations`, `GET /organisations/:id`
+- ✅ `POST /accounts`, `GET /accounts`, `GET /accounts/:id`
+- ✅ `POST /journal-entries`, `GET /journal-entries/:id`, `GET /accounts/:id/statement`
+- ✅ Posting-time rules that need database state: account exists in the
+  organisation, accepts postings, and agrees on currency
+- ✅ [UAT-003](uat/UAT-003-account-statement-production.md) for statement production
+- ✅ [ADR-0011](ADR/0011-statement-periods-ordering-and-row-caps.md) and
+  [ADR-0012](ADR/0012-repository-seam-and-posting-time-validation.md)
+- **Risk addressed:** derived balances must be correct before anything relies on
+  them. Performance is *not* yet addressed — see below.
+
+**Carried forward, deliberately.** Named here so the next session does not have
+to rediscover them:
+
+- **No pagination.** List and statement responses cap at 500 rows and set
+  `truncated`. A cursor contract designed without a consumer would be guesswork.
+- **No performance measurement.** The statement's composite sort is unindexed
+  beyond `journal_line (account_id)`. ADR-0008 permits a snapshot table as an
+  explicitly derived cache — only after measurement, never before.
+- **Account lifecycle is not an API operation.** Freezing and closing are done
+  in SQL; the transitions belong with authorisation and audit in TASK-003.
 
 ## Increment 3 — Payment instruction lifecycle 📋
 

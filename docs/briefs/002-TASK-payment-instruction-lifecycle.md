@@ -5,7 +5,7 @@
 | **Increment** | 3 |
 | **Status** | `READY` |
 | **Depends on** | TASK-001 — needs `clofin.ledger.repository/post-entry!` |
-| **Base branch** | `claude/ledger-persistence-account-api-p5oi05` — TASK-001 is implemented but unmerged (PR #2), so stack on its tip and open the PR against it, per AGENT_HANDOFF §1b |
+| **Base branch** | `origin/main` — TASK-001 merged in PR #2 (`f7018a1`), so no stacking is needed; open the PR against `main`, per AGENT_HANDOFF §1b |
 | **Blocks** | TASK-003 |
 | **Requirements** | PR-001…PR-005, PR-040…PR-044 |
 | **Controls touched** | C-06 (duplicate payment prevention) |

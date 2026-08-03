@@ -149,6 +149,49 @@
         (is (str/includes? (get-in response [:body "detail"]) "hunter2"))))))
 
 ;; ---------------------------------------------------------------------------
+;; Query parameters
+;; ---------------------------------------------------------------------------
+
+(defn- query-params
+  "The `:query-params` a request ends up with."
+  [query-string]
+  (let [captured (atom nil)
+        handler ((mw/wrap-query-params (fn [r] (reset! captured (:query-params r)) {:status 200}))
+                 {:request-method :get :uri "/accounts" :query-string query-string :headers {}})]
+    (is (= 200 (:status handler)))
+    @captured))
+
+(deftest query-parameters-are-parsed
+  (is (= {"organisationId" "abc" "from" "2026-02-01T00:00:00Z"}
+         (query-params "organisationId=abc&from=2026-02-01T00:00:00Z")))
+  (testing "a request with no query string still gets a map, not nil"
+    (is (= {} (query-params nil)))
+    (is (= {} (query-params "")))))
+
+(deftest query-parameters-are-percent-decoded
+  (testing "an instant's colons and a name's spaces survive the round trip"
+    (is (= {"from" "2026-02-01T00:00:00Z"} (query-params "from=2026-02-01T00%3A00%3A00Z")))
+    (is (= {"name" "Client funds"} (query-params "name=Client+funds")))
+    (is (= {"name" "Client funds"} (query-params "name=Client%20funds")))))
+
+(deftest a-parameter-without-a-value-is-empty-rather-than-missing
+  (is (= {"organisationId" ""} (query-params "organisationId=")))
+  (is (= {"flag" ""} (query-params "flag"))))
+
+(deftest a-repeated-parameter-keeps-its-first-value
+  (testing "silently using the last one is how a caller's typo becomes a different query"
+    (is (= {"organisationId" "first"} (query-params "organisationId=first&organisationId=second")))))
+
+(deftest a-malformed-query-string-is-a-domain-error-not-a-defect
+  (testing "so the error boundary renders it as a 400 rather than a 500"
+    (let [handler (mw/wrap (fn [_] {:status 200 :headers {} :body {}}) prod-config)
+          response (handler {:request-method :get :uri "/accounts"
+                             :query-string "organisationId=%ZZ" :headers {}})]
+      (is (= 400 (:status response)))
+      (is (= "https://clofin.dev/problems/validation"
+             (get (json/read-str (:body response)) "type"))))))
+
+;; ---------------------------------------------------------------------------
 ;; The assembled chain
 ;; ---------------------------------------------------------------------------
 

@@ -26,6 +26,11 @@ recorded, and if the brief changes, the owning Worker receives a specific fix
 instruction naming the branch, the change, and the acceptance criteria that now
 apply ([`../AGENT_HANDOFF.md`](../AGENT_HANDOFF.md) §1b).
 
+A worker session submits its own increment for review as
+`NNN-REQ-<subject>.md` — what it built, the decisions it took, the edge cases it
+found, and the debt it knowingly left. The `REQ` is the *submission*; the
+`FEEDBACK` is the reply. Both are kept.
+
 > A review that exists only in a conversation does not exist. If an audit
 > finding is worth acting on, it is worth committing here — otherwise the next
 > session re-introduces the same anti-pattern, and the one after that re-argues
@@ -73,7 +78,13 @@ that its statements are checkable; that applies to its replies to reviewers too.
 | Feedback | Reviews | Received | Findings (B/S/C) | Disposition |
 |---|---|---|---|---|
 | *(waived)* | Increment 1 / PR #1 | 2026-08-02 | — | Deep architectural audit **explicitly bypassed** by the reviewer to unblock the pipeline, with rigorous review to be enforced from PR #2 onward. Recorded so the assurance history is honest: increment 1 was consciously not audited. |
-| *(pending)* | Increment 2 / PR #2 — `001-REQ` filed by the Worker | requested 2026-08-02 | — | Awaiting `FEEDBACK-001` from the Principal Architect. |
+| *(pending)* | Increment 2 / PR #2 — `001-REQ` filed by the Worker | requested 2026-08-02 | — | Awaiting `FEEDBACK-001` from the Principal Architect. PR #2 merged to `main` (`f7018a1`) ahead of the audit — reviews do not gate execution; any findings will be dispatched as fix instructions against `main`. |
+
+### Submissions awaiting review
+
+| Submission | Covers | Submitted | Status |
+|---|---|---|---|
+| [001-REQ](001-REQ-ledger-persistence-and-account-api.md) | [TASK-001](../briefs/001-TASK-ledger-persistence-and-account-api.md) | 2026-08-02 | Awaiting audit |
 
 ## Standing lessons
 

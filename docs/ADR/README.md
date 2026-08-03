@@ -21,6 +21,8 @@ is a justification, not a decision.
 | [0008](0008-double-entry-journal-as-source-of-truth.md) | Double-entry journal as source of truth | Accepted |
 | [0009](0009-forward-only-sql-migrations.md) | Forward-only SQL migrations | Accepted |
 | [0010](0010-thin-ring-compatible-http-adapter.md) | Thin Ring-compatible HTTP adapter | Accepted |
+| [0011](0011-statement-periods-ordering-and-row-caps.md) | Statement periods, movement ordering and the row cap | Accepted |
+| [0012](0012-repository-seam-and-posting-time-validation.md) | Repository namespaces as the persistence seam, and where posting-time validation lives | Accepted |
 
 ## Conventions
 

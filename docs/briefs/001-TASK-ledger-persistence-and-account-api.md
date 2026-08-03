@@ -9,7 +9,7 @@
 | **Requirements** | PR-020, PR-021, PR-022, PR-023, PR-024 |
 | **Controls touched** | C-03, C-04 |
 | **Scope** | Medium |
-| **Audit** | Requested — `001-REQ` filed by the Worker on `claude/ledger-persistence-account-api-p5oi05` (PR #2); `FEEDBACK-001` outstanding |
+| **Audit** | Submitted: [001-REQ](../audits/001-REQ-ledger-persistence-and-account-api.md) — merged in PR #2; `FEEDBACK-001` outstanding |
 
 > Status lifecycle: `READY` → `IN PROGRESS` → `IMPLEMENTED` → `AUDITED` → `CLOSED`.
 > Status is maintained by Master Control on the `meta` branch — see AGENT_HANDOFF §1b.
@@ -150,16 +150,20 @@ An unbalanced entry is `422` with the per-currency shortfall in `errors`.
 
 ## Definition of done
 
-- [ ] Every acceptance criterion has a named test
-- [ ] `api/openapi.yaml` updated in the same commit as the handlers
-- [ ] `make verify` and `make test-it` both green
-- [ ] New test namespaces added to `clofin.test-runner`
-- [ ] Completion reported — PR opened, `001-REQ` filed — so Master Control can
-      set this brief to `IMPLEMENTED` and update `ROADMAP.md` on `meta`
-- [ ] A UAT script added under `docs/uat/`
-- [ ] An ADR for any decision a future contributor would otherwise re-derive —
-      most likely: how a statement's running balance is computed, and what the
-      row cap means for the API contract
+- [x] Every acceptance criterion has a named test
+- [x] `api/openapi.yaml` updated in the same commit as the handlers
+- [x] `make verify` and `make test-it` both green — 158 tests, 757 assertions
+- [x] New test namespaces added to `clofin.test-runner`
+- [x] `docs/ROADMAP.md` increment 2 marked done *(done under the pre-`meta`
+      protocol; status is Master Control's on `meta` from here on)*
+- [x] This brief's `Status` set to `IMPLEMENTED` *(likewise)*
+- [x] A UAT script added under `docs/uat/` —
+      [UAT-003](../uat/UAT-003-account-statement-production.md)
+- [x] An ADR for any decision a future contributor would otherwise re-derive —
+      [ADR-0011](../ADR/0011-statement-periods-ordering-and-row-caps.md) for the
+      statement's period boundaries, movement ordering and row cap;
+      [ADR-0012](../ADR/0012-repository-seam-and-posting-time-validation.md) for
+      the persistence seam and where posting-time validation lives
 
 ## Notes for whoever picks this up
 
@@ -168,3 +172,31 @@ ADR-0008 exists because that shortcut is the most common cause of unexplainable
 balances in financial systems, and the schema has no such column by design. If
 statement performance is genuinely a problem, measure it, then propose a
 `*_snapshot` table in an ADR — as a cache, never as authority.
+
+### Added while implementing this brief
+
+Traps found in execution, recorded so the next session does not re-derive them.
+
+- **Do not sum the returned movements to get a closing balance.** It is correct
+  until a period exceeds the row cap, and then every capped statement reports a
+  wrong closing balance with nothing in the response to say so. Aggregate it
+  separately (ADR-0011).
+- **`occurred_at` is caller-supplied and therefore not unique.** Ordering a
+  statement by it alone makes the running balance non-deterministic between two
+  runs over unchanged data, which quietly disqualifies the document as evidence.
+  The total order is `(occurred_at, recorded_at, entry_id, line_no)`.
+- **An unbalanced entry is `422`, not the `400` the domain constructor throws.**
+  `clofin.ledger.entry/entry` raises `:validation`; the API contract needs
+  `:unprocessable` with the per-currency shortfall. The HTTP layer checks
+  `entry/imbalance` first and raises the 422 itself — it does **not** change
+  what the constructor throws. See ADR-0012.
+- **The three zero-sum checks are not duplication to be cleaned up.** Pure
+  constructor, HTTP layer, deferred database trigger. Each fails for a different
+  reason and each has a test. Removing any of them is a regression.
+- **Scope account lookups by organisation in the SQL**, not by checking the
+  organisation after loading. An account belonging to another tenant must be
+  indistinguishable from one that does not exist, or the API confirms which
+  UUIDs are in use elsewhere.
+- **A `201` needs somewhere to point.** `POST /journal-entries` and
+  `POST /organisations` both got a `GET` in this increment for that reason; a
+  `Location` header that 404s is a broken contract.
