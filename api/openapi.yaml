@@ -39,11 +39,51 @@ tags:
       disagrees with the movements that produced it is not a state this API can
       represent.
 
-      **Authorisation is not implemented yet.** Until it is, an operation acts
-      on the organisation named in the request — `organisationId` in the body of
-      a write, or the `organisationId` query parameter on a read. It is not
-      derived from an authenticated principal, because there is not one. Do not
-      read the tenancy scoping in these operations as an access control.
+      **Authorisation applies here.** Opening an account and posting a journal
+      entry are `controller` rights; reading accounts and entries is broader,
+      because an operator who cannot see the chart of accounts cannot raise a
+      payment against one. The organisation acted on comes from the
+      authenticated actor — `organisationId` may still be sent and is
+      *verified* against it, never trusted.
+  - name: Approvals
+    description: |
+      Maker–checker. The actor who created a payment instruction can never
+      approve it, the number of approvals required rises with the amount, and
+      no approver may act beyond their own limit.
+
+      **These are domain rules, not interface rules.** They are decided by a
+      pure function that takes the instruction, the actor, the approvals
+      already given and the organisation's threshold table, and returns a
+      decision — with no database and no HTTP involved. This API reports that
+      decision; it does not make it. A refusal always carries a machine-readable
+      `errors.reason`, one of `selfApproval`, `notAnApprover`,
+      `aboveActorLimit`, `alreadyApproved` or `noThresholdConfigured`
+      (rendered in kebab-case), so a client branches on the control rather than
+      on prose that may be reworded.
+
+      **Rows an actor may not approve are shown in the queue, with the reason**,
+      rather than hidden. A control implemented by hiding a row is not a
+      control, and hiding would leave a maker unable to see that their own
+      payment is waiting.
+
+  - name: Audit
+    description: |
+      The audit trail, and evidence extraction from it.
+
+      **Every state change appends an event in the same transaction as the
+      change itself**, so a rolled-back change leaves no event and a committed
+      one leaves exactly one. An unaudited state change is not representable.
+
+      **Events carry digests, not payloads.** An event proves *that* something
+      changed and — compared against a value the auditor already holds —
+      *what* it changed to. It does not carry the counterparty name: an
+      append-only table holding one is a second copy of the data being
+      minimised, and it can never be cleaned. Each digest is prefixed with the
+      canonicalisation version that produced it, so a later change to the
+      canonical form cannot make two incomparable digests look comparable.
+
+      The table rejects `UPDATE` and `DELETE` at the database, row by row.
+
   - name: Payments
     description: |
       Payment instructions: intent to pay, with a lifecycle.
@@ -58,16 +98,22 @@ tags:
       request with no key at all is `400`. This is the control that stops a
       timeout on submission from becoming a payment made twice.
 
-      **Approval, settlement and screening are not implemented.** `submit`
-      moves an instruction to `pendingApproval` and stops there — there is no
-      approve operation, because approval by whoever submitted the payment
-      would not be a control. `released`, `settled`, `failed` and `returned`
-      exist in the lifecycle and no operation here drives an instruction into
-      them.
+      **Approval exists; settlement and screening do not.** `submit` moves an
+      instruction to `pendingApproval`, and `POST
+      /payment-instructions/{id}/approvals` moves it on from there — refusing
+      the actor who submitted it. `released`, `settled`, `failed` and
+      `returned` exist in the lifecycle and no operation here drives an
+      instruction into them.
 
-      **Authorisation is not implemented yet**, exactly as for Ledger above.
-      `createdBy` is taken from the request body. It records what a caller
-      claimed, and is not evidence of who did anything.
+      **`createdBy` is the authenticated actor**, not a value the caller sends;
+      a request that sets it is refused rather than quietly overridden. It is
+      therefore evidence of who raised the payment, which is what makes it
+      usable as the maker side of segregation of duties.
+
+      **Amending is not only for drafts.** A `draft` is edited in place. A
+      `pendingApproval` or `approved` instruction is returned to `draft` and
+      **every approval given so far is invalidated** — an approver agreed to
+      values that are no longer the instruction's.
 
 paths:
   /:
@@ -752,16 +798,371 @@ paths:
               schema:
                 $ref: "#/components/schemas/Problem"
 
+  /payment-instructions/{id}/approvals:
+    post:
+      tags: [Approvals]
+      operationId: approvePaymentInstruction
+      summary: Approve or reject a payment instruction
+      description: |
+        Records one actor's decision on one instruction, and moves the
+        instruction on when that decision completes the requirement.
+
+        **The actor who created the instruction is refused, always.** Not
+        because a button is hidden — because the domain function that decides
+        approvals refuses it, with no HTTP layer involved. That refusal cannot
+        be resolved by granting a role or raising a limit, which is why it is
+        reported in preference to every other reason when more than one
+        applies.
+
+        **How many approvals are required depends on the amount**, against the
+        organisation's per-currency band table. `from` bounds are inclusive, so
+        an amount exactly on a boundary falls in the higher band — the side
+        that asks for more scrutiny. A first approval on a two-approval band
+        returns `satisfied: false` and leaves the instruction `pendingApproval`,
+        so an approver is never left guessing whether theirs was the last one
+        needed. An organisation with no band covering the amount cannot have it
+        approved at all: guessing a requirement is how a control silently
+        weakens.
+
+        **A rejection requires a reason**, which is retained. One rejection
+        ends the instruction. A rejection is not bounded by the approver's
+        limit — a ceiling is authority to permit a payment of a size, not to
+        refuse one.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: "#/components/parameters/ActorId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ApprovalDecisionRequest"
+      responses:
+        "201":
+          description: |
+            The decision as recorded, the instruction in whatever state it now
+            holds, and the counting context. Also the status of a replayed
+            request.
+          headers:
+            Idempotent-Replayed:
+              $ref: "#/components/headers/IdempotentReplayed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApprovalOutcome"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          description: |
+            The actor may not record this decision. `errors.reason` names which
+            control refused it.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+              examples:
+                selfApproval:
+                  summary: The maker cannot be the checker
+                  value:
+                    type: "https://clofin.dev/problems/forbidden"
+                    title: "Not permitted"
+                    status: 403
+                    detail: "The actor who created this payment instruction may not approve it (segregation of duties)"
+                    errors:
+                      reason: "self-approval"
+                aboveActorLimit:
+                  summary: The amount exceeds this approver's own ceiling
+                  value:
+                    type: "https://clofin.dev/problems/forbidden"
+                    title: "Not permitted"
+                    status: 403
+                    detail: "This payment instruction's amount is above this actor's approval limit"
+                    errors:
+                      reason: "above-actor-limit"
+                      actor-limit-minor: 100000
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: |
+            The lifecycle does not permit `approve` from the instruction's
+            current state, the actor has already recorded a decision on it, or
+            the `Idempotency-Key` has been used for a different request.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: |
+            Understood, and cannot be carried out: a rejection with no reason,
+            or no approval threshold configured for the organisation and
+            currency.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+
+  /payment-instructions/{id}/approvals/{approvalId}:
+    delete:
+      tags: [Approvals]
+      operationId: withdrawApproval
+      summary: Withdraw an approval already given
+      description: |
+        Marks an approval as no longer standing. **The record is not deleted** —
+        `invalidatedAt` is set and the decision stays visible, because an
+        approval that was given and then withdrawn is exactly the history an
+        investigation needs. The database refuses a `DELETE` on the table in
+        any case.
+
+        Only the actor who gave an approval may withdraw it; otherwise the
+        approval count would say nothing about who agreed to what. And only
+        while the instruction is still `pendingApproval`: once the requirement
+        is met the way back is to amend, which invalidates every approval and
+        returns the instruction to `draft`. Unwinding an approved instruction
+        one approval at a time would leave it approved with fewer approvals
+        than its band requires.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: approvalId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: "#/components/parameters/ActorId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "200":
+          description: The approval, now invalidated, and the instruction.
+          headers:
+            Idempotent-Replayed:
+              $ref: "#/components/headers/IdempotentReplayed"
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [approval, paymentInstruction]
+                properties:
+                  approval:
+                    $ref: "#/components/schemas/Approval"
+                  paymentInstruction:
+                    $ref: "#/components/schemas/PaymentInstruction"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: |
+            The instruction is no longer `pendingApproval`, or the approval has
+            already been invalidated.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+
+  /approvals/queue:
+    get:
+      tags: [Approvals]
+      operationId: getApprovalQueue
+      summary: List instructions awaiting approval with the context to decide them
+      description: |
+        Every instruction in the actor's organisation that is
+        `pendingApproval`, each carrying what an approver needs in order to
+        decide: the amount, the counterparty, the purpose, the approvals
+        already given and how many more are required.
+
+        A queue that showed only an id would push the approver into another
+        system to find out what they were agreeing to, and an approval given
+        without context is a rubber stamp.
+
+        **Rows this actor may not approve are included**, with `canApprove:
+        false` and a `refusalReason`. The reason is produced by the same
+        function that would refuse the approval itself, so the queue does not
+        hold a second copy of the rule.
+
+        JSON, not a UI. Screening outcome is absent because screening does not
+        exist yet; the approval queue screen is a later increment.
+      parameters:
+        - $ref: "#/components/parameters/ActorId"
+        - $ref: "#/components/parameters/OptionalOrganisationId"
+      responses:
+        "200":
+          description: The queue.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApprovalQueue"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /audit/events:
+    get:
+      tags: [Audit]
+      operationId: listAuditEvents
+      summary: List an organisation's audit events
+      description: |
+        The audit trail, most recent first, narrowed by `action`, `subjectId`
+        and a period.
+
+        The period is **half-open** — `from` is included, `to` is not — the
+        same convention the account statement uses, so consecutive extractions
+        chain exactly rather than double-counting whatever landed on the
+        boundary.
+
+        Capped rather than paginated, with the cap and a `truncated` flag on
+        every response. An audit answer that silently stopped at a limit would
+        be the worst possible place for that to happen.
+
+        Requires `audit/read`, which operators and approvers do not hold: an
+        operator able to read the whole trail could see which approvers act on
+        what and when, which is reconnaissance rather than transparency.
+      parameters:
+        - $ref: "#/components/parameters/ActorId"
+        - $ref: "#/components/parameters/OptionalOrganisationId"
+        - name: action
+          in: query
+          required: false
+          description: Restrict to one action from the audit vocabulary.
+          schema:
+            $ref: "#/components/schemas/AuditAction"
+        - name: subjectId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+        - name: from
+          in: query
+          required: false
+          description: Inclusive start of the period, as an ISO 8601 instant.
+          schema: { type: string, format: date-time }
+        - name: to
+          in: query
+          required: false
+          description: Exclusive end of the period, as an ISO 8601 instant.
+          schema: { type: string, format: date-time }
+      responses:
+        "200":
+          description: The matching events.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuditEventList"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /audit/evidence/{subjectId}:
+    get:
+      tags: [Audit]
+      operationId: getEvidencePack
+      summary: Extract a complete evidence pack for one subject
+      description: |
+        Every state change of one payment instruction or approval, in the order
+        it happened, each entry carrying the actor who caused it.
+
+        The pack **states its own boundaries** — the period it spans and
+        whether it hit the row cap — so an auditor never has to infer
+        completeness from the absence of a warning.
+
+        A subject with no events is `404` rather than an empty pack. An
+        evidence pack that is silently empty is worse than none at all, because
+        it reads as proof that nothing happened.
+      parameters:
+        - name: subjectId
+          in: path
+          required: true
+          description: A payment instruction id, or an approval id.
+          schema: { type: string, format: uuid }
+        - $ref: "#/components/parameters/ActorId"
+        - $ref: "#/components/parameters/OptionalOrganisationId"
+      responses:
+        "200":
+          description: The evidence pack.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EvidencePack"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
 components:
   parameters:
     OrganisationId:
       name: organisationId
       in: query
+      required: false
+      description: |
+        The organisation the caller believes it is acting for.
+
+        **Verified, not trusted.** The organisation a request acts on comes
+        from the authenticated actor's own record; this value, when sent, is
+        compared against it and a mismatch is `403`. Refusing rather than
+        ignoring matters: silently reinterpreting the request as being about
+        the caller's own organisation would let a caller believe it had acted
+        on another tenant's data and been told it succeeded.
+
+        Optional. A caller that omits it gets its own organisation, which is
+        the only one it could ever have acted on.
+      schema: { type: string, format: uuid }
+
+    OptionalOrganisationId:
+      name: organisationId
+      in: query
+      required: false
+      description: |
+        Optional, and verified against the authenticated actor's organisation
+        rather than trusted. See `OrganisationId`.
+      schema: { type: string, format: uuid }
+
+    ActorId:
+      name: X-Actor-Id
+      in: header
       required: true
       description: |
-        The organisation the request acts on. Supplied by the caller because
-        authorisation does not exist yet — TASK-003 replaces this with the
-        authenticated principal. It is not an access control.
+        The actor this request acts as, resolved against the seeded `actor`
+        table. Absent or unknown is `401`.
+
+        **This is not authentication that resists an adversary, and it is not
+        presented as such.** There is no identity provider, no token and no
+        signature: anyone who can reach the service can claim to be any seeded
+        actor. Identity-provider integration is deliberately out of scope — the
+        permission *model* is the interesting part and provider wiring is
+        plumbing.
+
+        What it does deliver is a real principal with a real organisation and a
+        real permission set, so that segregation of duties and least privilege
+        are decided against an identity the application holds rather than one
+        the request asserts. The organisation a request acts on, and the
+        `createdBy` recorded against a payment, both come from here.
+
+        There is no endpoint that creates an actor, grants a role or sets a
+        limit. Actors are seeded: an actor that could grant itself the approver
+        role would make segregation of duties unenforceable however carefully
+        the rest of this is written. `POST /organisations` is the one
+        unauthenticated operation, because there is no actor until an
+        organisation exists to hold one.
       schema: { type: string, format: uuid }
 
     IdempotencyKey:
@@ -808,6 +1209,27 @@ components:
             $ref: "#/components/schemas/Problem"
     NotFound:
       description: No such resource in this organisation
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    Unauthenticated:
+      description: |
+        No `X-Actor-Id` header, or it names no actor. `401` rather than `404`
+        for an unknown id: confirming which UUIDs name real actors would let
+        anyone able to guess one enumerate the actor table.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    Forbidden:
+      description: |
+        The actor is authenticated and may not do this. An absent permission is
+        a denied permission; there is no implicit grant and no superuser role
+        in the model.
+
+        The missing permission is named. The permissions the actor *does* hold
+        are not — that would turn a refusal into a capability listing.
       content:
         application/problem+json:
           schema:
@@ -1210,9 +1632,12 @@ components:
           type: string
           format: uuid
           description: |
-            The actor the caller says created this. **Not evidence of who did
-            anything** — there is no authenticated principal yet. TASK-003
-            replaces it.
+            The actor that raised this instruction, taken from the
+            authenticated principal. A caller that sends it is refused rather
+            than quietly overridden.
+
+            This is the maker side of segregation of duties: the approval
+            endpoint refuses this actor.
         createdAt: { type: string, format: date-time }
         reversesId:
           type: string
@@ -1293,10 +1718,10 @@ components:
     PaymentInstructionActionRequest:
       type: object
       description: |
-        The body of a lifecycle operation. It carries the organisation because
-        the idempotency key is scoped to one, and there is no authenticated
-        principal to take it from.
-      required: [organisationId]
+        The body of a lifecycle operation. `organisationId` is optional and,
+        when sent, is verified against the authenticated actor's organisation
+        rather than trusted — the idempotency key is scoped to the actor's own
+        organisation either way.
       additionalProperties: false
       properties:
         organisationId: { type: string, format: uuid }
@@ -1320,6 +1745,288 @@ components:
             True when there were more rows than `limit`. Stated on every
             response, not only when true: a consumer should not have to infer
             from the absence of a field that nothing was left out.
+
+    Approval:
+      type: object
+      description: |
+        One actor's decision on one payment instruction.
+
+        A decision is never deleted — the database refuses it. An approval that
+        stops standing, because the instruction was amended or because its
+        actor withdrew it, keeps its row and gains an `invalidatedAt`.
+      required: [id, instructionId, actorId, decision, decidedAt, live]
+      properties:
+        id: { type: string, format: uuid }
+        instructionId: { type: string, format: uuid }
+        actorId:
+          type: string
+          format: uuid
+          description: The actor who decided. Authenticated, not asserted.
+        decision:
+          type: string
+          enum: [approved, rejected]
+        reason:
+          type: string
+          description: |
+            Mandatory on a rejection and retained, because a refused payment
+            that nobody can explain afterwards is a gap in the record. Absent
+            on an approval unless one was given.
+          examples: ["Counterparty not verified for this corridor"]
+        decidedAt: { type: string, format: date-time }
+        live:
+          type: boolean
+          description: |
+            False once the decision has been invalidated. Stated on every
+            approval, not only when false: a consumer should not have to infer
+            from an absent field that a decision still stands.
+        invalidatedAt:
+          type: string
+          format: date-time
+          description: |
+            Present when the decision no longer stands — set by an amendment
+            (which invalidates every approval) or by the approver withdrawing
+            it.
+
+    ApprovalDecisionRequest:
+      type: object
+      required: [decision]
+      additionalProperties: false
+      properties:
+        organisationId:
+          type: string
+          format: uuid
+          description: Optional, and verified against the actor's organisation.
+        decision:
+          type: string
+          enum: [approved, rejected]
+          description: |
+            No default. A decision CloFin does not recognise is refused rather
+            than defaulted, because the safe default would have to be one of
+            these two and either choice is a decision nobody made.
+        reason:
+          type: string
+          minLength: 1
+          description: |
+            Required when `decision` is `rejected`; a blank one is `422`. The
+            database enforces it again, so a rejection with no reason is not
+            representable rather than merely rejected by this layer.
+
+    ApprovalOutcome:
+      type: object
+      required: [approval, paymentInstruction, approvalsHeld, satisfied]
+      properties:
+        approval:
+          $ref: "#/components/schemas/Approval"
+        paymentInstruction:
+          $ref: "#/components/schemas/PaymentInstruction"
+        approvalsRequired:
+          type: integer
+          description: |
+            How many approvals this amount needs, from the organisation's band
+            table for its currency.
+          examples: [2]
+        approvalsHeld:
+          type: integer
+          description: How many now stand, including the one just recorded.
+          examples: [1]
+        satisfied:
+          type: boolean
+          description: |
+            True when this decision completed the requirement and the
+            instruction moved. False leaves it `pendingApproval` — stated
+            explicitly so an approver is never left guessing whether theirs was
+            the last one needed.
+
+    ApprovalQueueRow:
+      type: object
+      required: [paymentInstruction, priorApprovals, approvalsHeld, canApprove]
+      properties:
+        paymentInstruction:
+          $ref: "#/components/schemas/PaymentInstruction"
+        priorApprovals:
+          type: array
+          description: |
+            The approvals that already stand, so the next approver can see who
+            agreed before them rather than deciding blind.
+          items:
+            $ref: "#/components/schemas/Approval"
+        approvalsHeld: { type: integer, examples: [1] }
+        approvalsRequired:
+          type: integer
+          description: |
+            Absent when the organisation has configured no band covering this
+            amount — in which case it cannot be approved at all.
+          examples: [2]
+        approvalsRemaining: { type: integer, examples: [1] }
+        canApprove:
+          type: boolean
+          description: |
+            Whether *this* actor may approve *this* row, decided by the same
+            function that would refuse the approval itself.
+        refusalReason:
+          $ref: "#/components/schemas/ApprovalRefusalReason"
+
+    ApprovalRefusalReason:
+      type: string
+      description: |
+        Why an approval was or would be refused. A closed vocabulary, so a
+        client can branch on the control rather than on prose that may be
+        reworded.
+
+        `selfApproval` is reported in preference to every other reason when
+        more than one applies: it is the only one that can never be resolved,
+        because a maker never becomes a valid checker for their own payment.
+      enum:
+        - self-approval
+        - not-an-approver
+        - above-actor-limit
+        - already-approved
+        - no-threshold-configured
+
+    ApprovalQueue:
+      type: object
+      required: [approvalQueue, count, actor, truncated]
+      properties:
+        approvalQueue:
+          type: array
+          items:
+            $ref: "#/components/schemas/ApprovalQueueRow"
+        count: { type: integer }
+        actor:
+          $ref: "#/components/schemas/Actor"
+        truncated: { type: boolean }
+
+    Actor:
+      type: object
+      description: |
+        As much of an actor as any caller needs to see.
+
+        Roles and limits are deliberately absent. A caller that can read
+        another actor's limit knows exactly how large a payment to split an
+        amount into, and an endpoint listing an organisation's approvers and
+        their ceilings is a reconnaissance tool. The display name is here
+        because a queue showing only UUIDs is unreadable to the person meant to
+        act on it.
+      required: [id, displayName, status]
+      properties:
+        id: { type: string, format: uuid }
+        displayName:
+          type: string
+          description: Synthetic. No actor in CloFin corresponds to a real individual.
+          examples: ["Wei (checker)"]
+        status:
+          type: string
+          enum: [active, suspended]
+
+    AuditAction:
+      type: string
+      description: |
+        A constrained vocabulary rather than free text. An audit trail that has
+        to be searched with `like '%approv%'` is an audit trail nobody can
+        produce a complete answer from.
+      enum:
+        - payment.created
+        - payment.submitted
+        - payment.amended
+        - payment.cancelled
+        - payment.approved
+        - payment.rejected
+        - approval.withdrawn
+
+    AuditEvent:
+      type: object
+      description: |
+        One state change: who, what, to which subject, when, and — as digests —
+        what it changed from and to.
+
+        Written in the same transaction as the change it describes, so a
+        rolled-back change leaves no event and a committed one leaves exactly
+        one.
+      required: [id, organisationId, action, subjectType, subjectId, occurredAt]
+      properties:
+        id: { type: string, format: uuid }
+        organisationId: { type: string, format: uuid }
+        actorId:
+          type: string
+          format: uuid
+          description: |
+            Absent only where there is genuinely no authenticated actor. Today
+            that is the bootstrap case alone; absent on a payment action would
+            be a defect.
+        action:
+          $ref: "#/components/schemas/AuditAction"
+        subjectType:
+          type: string
+          enum: [payment-instruction, approval]
+        subjectId: { type: string, format: uuid }
+        beforeDigest:
+          type: string
+          description: |
+            Digest of the subject before the change; absent when it did not
+            exist, which is what distinguishes a creation from an update.
+
+            **Not the value.** A digest proves that something changed, and what
+            it changed to when compared against a value the auditor already
+            holds. It cannot be read back — that is the trade, and it is what
+            keeps counterparty names out of a table that can never be cleaned.
+
+            Prefixed with the canonicalisation version that produced it, so a
+            later change to the canonical form cannot make two incomparable
+            digests look comparable.
+          examples: ["v1:3f786850e387550fdab836ed7e6dc881de23001b0f6b6be0d38e93d5a3d3d3d3"]
+        afterDigest:
+          type: string
+          description: Digest of the subject after the change.
+        correlationId:
+          type: string
+          description: |
+            Joins this event to the log line and to the response the caller
+            received.
+        occurredAt: { type: string, format: date-time }
+
+    AuditEventList:
+      type: object
+      required: [auditEvents, count, limit, truncated]
+      properties:
+        auditEvents:
+          type: array
+          items:
+            $ref: "#/components/schemas/AuditEvent"
+        count: { type: integer }
+        limit: { type: integer, examples: [500] }
+        truncated: { type: boolean }
+
+    EvidencePack:
+      type: object
+      description: |
+        Every state change of one subject, in order, with its actor — and the
+        pack's own boundaries, so completeness never has to be inferred.
+      required: [subjectId, subjectType, from, to, events, count, limit, truncated]
+      properties:
+        subjectId: { type: string, format: uuid }
+        subjectType:
+          type: string
+          enum: [payment-instruction, approval]
+        from:
+          type: string
+          format: date-time
+          description: When the first event in the pack occurred.
+        to:
+          type: string
+          format: date-time
+          description: When the last one did.
+        events:
+          type: array
+          items:
+            $ref: "#/components/schemas/AuditEvent"
+        count: { type: integer }
+        limit: { type: integer, examples: [500] }
+        truncated:
+          type: boolean
+          description: |
+            True when the subject has more events than the cap. Stated on every
+            pack: an auditor should never have to infer completeness from the
+            absence of a warning.
 
     ServiceInfo:
       type: object

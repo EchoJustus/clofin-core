@@ -28,7 +28,10 @@
   A rejected request does not consume its key. The effect and the key row share
   a transaction, so a throw takes both down and a caller that fixes its body and
   retries under the same key gets a fresh execution rather than a `409`."
-  (:require [clofin.api.wire :as wire]
+  (:require [clofin.api.principal :as principal]
+            [clofin.api.wire :as wire]
+            [clofin.audit :as audit]
+            [clofin.audit.repository :as audit-store]
             [clofin.error :as err]
             [clofin.http.response :as resp]
             [clofin.idempotency :as idem]
@@ -60,8 +63,6 @@
     :read #(java.util.UUID/fromString %) :unreadable "must be a UUID"}
    {:key :debtor-account-id :wire "debtorAccountId"
     :read #(java.util.UUID/fromString %) :unreadable "must be a UUID"}
-   {:key :created-by        :wire "createdBy"
-    :read #(java.util.UUID/fromString %) :unreadable "must be a UUID"}
    {:key :reverses-id       :wire "reversesId"
     :read #(java.util.UUID/fromString %) :unreadable "must be a UUID"}
    {:key :creditor-name     :wire "creditorName"}
@@ -77,8 +78,22 @@
 
   Names differ on purpose — the domain speaks kebab-case keywords and the wire
   speaks camelCase — and translating in one place means renaming a domain key
-  never silently changes what a caller sees in an `errors` object."
-  (into {} (map (juxt :key :wire)) field-readers))
+  never silently changes what a caller sees in an `errors` object.
+
+  `:created-by` is not a reader — it comes from the authenticated principal and
+  a caller may not send it — but it keeps its wire name here so that a domain
+  failure mentioning it is still reported under the name a caller would
+  recognise."
+  (assoc (into {} (map (juxt :key :wire)) field-readers)
+         :created-by "createdBy"))
+
+(def ^:private caller-may-not-set
+  "Members a caller is refused for sending, with the reason.
+
+  Rejected rather than ignored. Silently dropping `createdBy` would leave a
+  caller believing it had recorded who raised a payment, which is exactly the
+  belief that made the field worthless before there was a principal."
+  {"createdBy" "is taken from the authenticated actor and cannot be set by the caller"})
 
 (defn- read-members
   "Parse every member of `body` that `field-readers` knows about.
@@ -192,14 +207,21 @@
                 ;; bodiless mutation must still digest to something stable.
                 "body"   (or (:json-body request) {})}))
 
+(defn- reject-caller-set-members!
+  "Refuse a body naming a member the caller is not allowed to set."
+  [body]
+  (let [offending (select-keys caller-may-not-set (keys body))]
+    (when (seq offending)
+      (err/fail! :field-validation "Request failed validation"
+                 (into (array-map) (sort-by key offending))))))
+
 (defn- idempotently
   "Run `effect` at most once for this request's `Idempotency-Key`.
 
-  The key is scoped to the organisation, so `organisationId` is read before
-  anything else happens — which is also why a request whose `organisationId` is
-  unreadable is `400` rather than one field on a `422`: without it there is no
-  key to be idempotent under, and executing anyway is the failure this whole
-  mechanism exists to prevent."
+  The key is scoped to the organisation, and the organisation now comes from
+  the authenticated principal rather than from the request — so a caller cannot
+  choose which tenant's key space its retry lands in. That was always the
+  intent of scoping it; before TASK-003 there was nothing to enforce it with."
   [pool request organisation-id effect]
   (idem-store/execute-once!
    pool
@@ -246,11 +268,17 @@
 
   A reversal is an ordinary creation carrying `reversesId` (PR-043). It is a
   **new** instruction — the settled one it names is not touched, because a
-  settled payment is never mutated (`DOMAIN_MODEL.md` §3 rule 4)."
+  settled payment is never mutated (`DOMAIN_MODEL.md` §3 rule 4).
+
+  `createdBy` is the authenticated actor. It is now evidence of who raised the
+  payment, which is what makes it usable as the maker side of C-01 — and a
+  caller that tries to set it is refused rather than quietly overridden."
   [pool]
   (fn [request]
-    (let [body            (wire/read-object request)
-          organisation-id (wire/read-organisation-id request body)
+    (let [body (wire/read-object request)
+          [actor organisation-id]
+          (principal/for-request pool request :payment/create body)
+          _ (reject-caller-set-members! body)
           outcome
           (idempotently
            pool request organisation-id
@@ -265,19 +293,25 @@
                    ;; "is required" is not.
                    candidate (assoc values
                                     :organisation-id organisation-id
+                                    :created-by (:id actor)
                                     :status state/initial-state)
                    errors (merge (instruction/field-errors candidate opts) unreadable)
                    _ (when (seq errors) (invalid-fields! errors))
                    created (wire-named
                             #(payments/create-instruction!
-                              tx
-                              ;; TODO(TASK-003): `createdBy` came from the body,
-                              ;; because there is no authenticated principal to
-                              ;; take it from. It is not evidence of who did
-                              ;; anything, and every read of it is a place
-                              ;; TASK-003 has to change.
-                              (assoc candidate :id (random-uuid))
-                              opts))]
+                              tx (assoc candidate :id (random-uuid)) opts))]
+               ;; Same transaction as the insert (C-05, PR-075, invariant I9).
+               ;; `execute-once!` owns it and hands it here as `tx`; a write
+               ;; after this function returns would be a payment captured with
+               ;; no record that it was.
+               (audit-store/record! tx {:organisation-id organisation-id
+                                        :actor-id        (:id actor)
+                                        :action          "payment.created"
+                                        :subject-type    "payment-instruction"
+                                        :subject-id      (:id created)
+                                        :before          nil
+                                        :after           (audit/instruction-subject created)
+                                        :correlation-id  (:correlation-id request)})
                {:status 201 :body (wire/instruction->wire created)})))]
       (respond outcome {"location" (location (:data outcome))}))))
 
@@ -290,7 +324,7 @@
   anyone able to guess a UUID."
   [pool]
   (fn [request]
-    (let [organisation-id (wire/read-organisation-id request)
+    (let [[_ organisation-id] (principal/for-request pool request :payment/read)
           id (wire/read-uuid (get-in request [:path-params :id]) "id")]
       (if-let [found (payments/find-instruction pool organisation-id id)]
         (resp/ok (wire/instruction->wire found))
@@ -305,7 +339,7 @@
   partial one (ADR-0011)."
   [pool]
   (fn [request]
-    (let [organisation-id (wire/read-organisation-id request)
+    (let [[_ organisation-id] (principal/for-request pool request :payment/read)
           status (when-let [raw (get-in request [:query-params "status"])]
                    (wire/read-enum raw "status" state/states))
           {:keys [instructions truncated?]}
@@ -316,20 +350,32 @@
                 "truncated" (boolean truncated?)}))))
 
 (defn amend
-  "`PATCH /payment-instructions/:id` — edit a draft in place.
+  "`PATCH /payment-instructions/:id` — amend an instruction, by its creator.
 
-  Only a draft may be amended, and only its substance: identity, provenance and
-  lifecycle are not editable. Amending anything that is not a draft is `409`
-  (PR-004).
+  Only its substance may change: identity, provenance and lifecycle are not
+  editable, and a member the caller may not change is rejected rather than
+  ignored — silently dropping it would leave the caller believing it had
+  amended something.
 
-  This does **not** drive the `amend` event in the lifecycle table. That event
-  returns a `pending-approval` instruction to `draft` and invalidates the
-  approvals already given (PR-014); it belongs to TASK-003's approval workflow,
-  and wiring it here would pull a submitted payment back to draft with no
-  approval-invalidation behind it. See ADR-0014.
+  **What happens to the status depends on the status**, and the lifecycle table
+  decides which of two things this is (ADR-0014, amendment 1):
 
-  A member the caller may not change is rejected rather than ignored. Silently
-  dropping it would leave the caller believing it had amended something.
+  - A `draft` is edited in place and stays `draft`. That is `mutable-states`,
+    and no arrow on the diagram is followed.
+  - A `pending-approval` or `approved` instruction is returned to `draft` and
+    **every approval given so far is invalidated** (PR-014, AC-7). An approver
+    agreed to the values that were in front of them; after an amendment those
+    are not the instruction's values any more.
+  - Anything else is `409`, naming the state.
+
+  TASK-002 deliberately left `PATCH` unable to drive the second case, because
+  the approval-invalidation behind it did not exist yet and pulling a submitted
+  payment back to `draft` without it would have been a silent hole. It exists
+  now, in `clofin.payments.repository/amend!` and
+  `clofin.authz.repository/invalidate-approvals-for!`.
+
+  Only the instruction's creator may amend it (PR-004) — a real check now that
+  `createdBy` is an authenticated principal rather than a caller's assertion.
 
   Failures are reported in two passes rather than one: members that could not
   be read at all, then — once the stored instruction has been loaded under its
@@ -337,14 +383,15 @@
   asks for is a property of creation, where every field arrives at once."
   [pool]
   (fn [request]
-    (let [body            (wire/read-object request)
-          organisation-id (wire/read-organisation-id request body)
-          id              (wire/read-uuid (get-in request [:path-params :id]) "id")
+    (let [body (wire/read-object request)
+          [actor organisation-id]
+          (principal/for-request pool request :payment/amend body)
+          id (wire/read-uuid (get-in request [:path-params :id]) "id")
           outcome
           (idempotently
            pool request organisation-id
            (fn [tx]
-             (let [opts (today)
+             (let [opts (assoc (today) :actor actor)
                    [values unreadable] (read-members body)
                    ;; `organisationId` scopes the request rather than amending
                    ;; anything; every other member must name a field an
@@ -357,12 +404,20 @@
                  (err/fail! :field-validation "Request failed validation"
                             (by-member (zipmap rejected (repeat "cannot be amended")))))
                (when (seq unreadable) (invalid-fields! unreadable))
-               {:status 200
-                :body (wire/instruction->wire
-                       (wire-named
-                        #(payments/amend! tx organisation-id id
-                                          (select-keys values instruction/amendable-fields)
-                                          opts)))})))]
+               (let [{:keys [before after]}
+                     (wire-named
+                      #(payments/amend! tx organisation-id id
+                                        (select-keys values instruction/amendable-fields)
+                                        opts))]
+                 (audit-store/record! tx {:organisation-id organisation-id
+                                          :actor-id        (:id actor)
+                                          :action          "payment.amended"
+                                          :subject-type    "payment-instruction"
+                                          :subject-id      id
+                                          :before          (audit/instruction-subject before)
+                                          :after           (audit/instruction-subject after)
+                                          :correlation-id  (:correlation-id request)})
+                 {:status 200 :body (wire/instruction->wire after)}))))]
       (respond outcome))))
 
 (defn- transition-handler
@@ -371,29 +426,46 @@
   Each event has its own sub-resource rather than a `status` field a caller
   writes. A caller naming the state it wants would be a caller holding a second
   copy of the state machine; naming the *event* leaves the lifecycle table the
-  only thing that decides where an instruction goes next (ADR-0014)."
-  [pool event]
+  only thing that decides where an instruction goes next (ADR-0014).
+
+  `permission` is named per event rather than shared, because submitting a
+  payment and cancelling one are different authorities (C-08) and an
+  organisation may reasonably grant one without the other. `action` is the
+  audit vocabulary term the resulting event is recorded under."
+  [pool event permission action]
   (fn [request]
-    (let [body            (wire/read-object request)
-          organisation-id (wire/read-organisation-id request body)
-          id              (wire/read-uuid (get-in request [:path-params :id]) "id")
+    (let [body (wire/read-object request)
+          [actor organisation-id]
+          (principal/for-request pool request permission body)
+          id (wire/read-uuid (get-in request [:path-params :id]) "id")
           outcome
           (idempotently
            pool request organisation-id
            (fn [tx]
-             {:status 200
-              :body (wire/instruction->wire
-                     (payments/transition! tx organisation-id id event))}))]
+             (let [{:keys [before after]} (payments/transition! tx organisation-id id event)]
+               ;; Same transaction as the status change (C-05, PR-075). This is
+               ;; the pairing AC-10 asserts: roll the transaction back and
+               ;; neither the new status nor this event survives.
+               (audit-store/record! tx {:organisation-id organisation-id
+                                        :actor-id        (:id actor)
+                                        :action          action
+                                        :subject-type    "payment-instruction"
+                                        :subject-id      id
+                                        :before          (audit/instruction-subject before)
+                                        :after           (audit/instruction-subject after)
+                                        :correlation-id  (:correlation-id request)})
+               {:status 200 :body (wire/instruction->wire after)})))]
       (respond outcome))))
 
 (defn submit
   "`POST /payment-instructions/:id/submission` — submit a draft for approval.
 
-  A submitted instruction stops at `pending-approval`. Approval is TASK-003 and
-  there is deliberately no endpoint here that moves it further: a payment that
-  could be approved by whoever submitted it is not a control."
+  A submitted instruction stops at `pending-approval`. Moving it further is
+  `POST /payment-instructions/:id/approvals`, which refuses the actor who
+  submitted it — a payment that could be approved by whoever submitted it is
+  not a control (C-01)."
   [pool]
-  (transition-handler pool :submit))
+  (transition-handler pool :submit :payment/submit "payment.submitted"))
 
 (defn cancel
   "`POST /payment-instructions/:id/cancellation` — cancel an instruction.
@@ -402,4 +474,4 @@
   approved instruction that has not been released is still stoppable. Once
   released it is not, and the answer is `409`."
   [pool]
-  (transition-handler pool :cancel))
+  (transition-handler pool :cancel :payment/cancel "payment.cancelled"))

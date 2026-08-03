@@ -129,22 +129,30 @@
       (err/invalid! (str "Query parameter '" param "' is required") {:parameter param}))
     v))
 
-(defn read-organisation-id
-  "The organisation a request acts on.
+(defn read-optional-query-param
+  [request param]
+  (let [v (get-in request [:query-params param])]
+    (when-not (str/blank? v) v)))
 
-  TODO(TASK-003): the organisation must come from the authenticated principal,
-  not from the request. Until authorisation exists, a caller naming their own
-  tenant is the honest state of affairs — and stating it here, rather than
-  quietly trusting the field, is what stops it being forgotten. Every read of
-  this value is a place TASK-003 has to change.
+(defn read-stated-organisation-id
+  "The organisation the *request* names, or nil when it names none.
 
-  Taken from the body on a write and from `?organisationId=` on a read, because
-  a GET has no body."
-  ([request] (read-organisation-id request nil))
+  Read from the body on a write and from `?organisationId=` on a read, because
+  a GET has no body. **It is not the organisation the request acts on.** That
+  comes from the authenticated principal — see `clofin.api.principal`, which
+  compares the two and refuses a mismatch rather than ignoring it.
+
+  Optional, and that is the change TASK-003 makes: the field used to be the
+  only thing saying which tenant a request was about, which is why it was
+  documented as not being an access control. It now scopes the idempotency key
+  and appears in `Location` headers, and it is verified rather than trusted. A
+  caller that omits it gets the principal's own organisation, which is the only
+  one it could ever have acted on."
+  ([request] (read-stated-organisation-id request nil))
   ([request body]
-   (if body
-     (read-uuid-field body "organisationId")
-     (read-uuid (read-query-param request "organisationId") "organisationId"))))
+   (if-let [raw (if body (get body "organisationId") (read-optional-query-param request "organisationId"))]
+     (read-uuid raw "organisationId")
+     nil)))
 
 ;; ---------------------------------------------------------------------------
 ;; Writing
@@ -219,6 +227,67 @@
     ;; Present only on a reversal, where it names the settled instruction this
     ;; one was raised against.
     (:reverses-id pi) (assoc "reversesId" (str (:reverses-id pi)))))
+
+(defn actor->wire
+  "An actor, as much of one as any caller needs to see.
+
+  Roles and limits are **not** included. A caller that can read another actor's
+  limit knows exactly how large a payment to split an amount into, and an
+  endpoint that lists an organisation's approvers and their ceilings is a
+  reconnaissance tool. The display name is here because an approval queue that
+  showed only UUIDs would be unreadable to the person meant to act on it."
+  [actor]
+  {"id"          (str (:id actor))
+   "displayName" (:display-name actor)
+   "status"      (name (:status actor))})
+
+(defn approval->wire
+  [approval]
+  (cond-> {"id"            (str (:id approval))
+           "instructionId" (str (:instruction-id approval))
+           "actorId"       (str (:actor-id approval))
+           "decision"      (name (:decision approval))
+           "decidedAt"     (str (:decided-at approval))
+           ;; Stated on every approval rather than only when set: a consumer
+           ;; should not have to infer from an absent field that a decision
+           ;; still stands.
+           "live"          (nil? (:invalidated-at approval))}
+    (:reason approval)         (assoc "reason" (:reason approval))
+    (:invalidated-at approval) (assoc "invalidatedAt" (str (:invalidated-at approval)))))
+
+(defn approval-queue-row->wire
+  "One row of the approval queue.
+
+  Carries what PR-015 says an approver needs in order to decide — amount,
+  counterparty, purpose, prior approvals and how many more are required —
+  rather than an id the approver would have to resolve in another system. An
+  approval given without context is a rubber stamp."
+  [{:keys [instruction approvals approvals-held approvals-required
+           approvals-remaining can-approve? refusal-reason]}
+   instruction->wire-fn]
+  (cond-> {"paymentInstruction"  (instruction->wire-fn instruction)
+           "priorApprovals"      (mapv approval->wire approvals)
+           "approvalsHeld"       approvals-held
+           "approvalsRequired"   approvals-required
+           "approvalsRemaining"  approvals-remaining
+           ;; Shown, not filtered. Hiding a row this actor may not approve
+           ;; would be a control implemented in a list query, and it would
+           ;; leave a maker unable to see that their own payment is waiting.
+           "canApprove"          (boolean can-approve?)}
+    refusal-reason (assoc "refusalReason" (name refusal-reason))))
+
+(defn audit-event->wire
+  [event]
+  (cond-> {"id"            (str (:id event))
+           "organisationId" (str (:organisation-id event))
+           "action"        (:action event)
+           "subjectType"   (:subject-type event)
+           "subjectId"     (str (:subject-id event))
+           "occurredAt"    (str (:occurred-at event))}
+    (:actor-id event)       (assoc "actorId" (str (:actor-id event)))
+    (:before-digest event)  (assoc "beforeDigest" (:before-digest event))
+    (:after-digest event)   (assoc "afterDigest" (:after-digest event))
+    (:correlation-id event) (assoc "correlationId" (:correlation-id event))))
 
 (defn- movement->wire
   [movement]

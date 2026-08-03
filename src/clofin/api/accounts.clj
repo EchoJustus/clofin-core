@@ -1,11 +1,17 @@
 (ns clofin.api.accounts
   "Ledger account endpoints, including account statements.
 
-  Every lookup here is scoped by organisation. That scoping is the only thing
-  standing between one tenant and another until TASK-003 delivers
-  authorisation, which is why it is applied in the repository query rather than
-  checked after the fact."
-  (:require [clofin.api.wire :as wire]
+  Every lookup here is scoped by organisation, and the organisation now comes
+  from the authenticated principal rather than from the request
+  (`clofin.api.principal`). The scoping is still applied in the repository
+  query rather than checked after the fact — a query that returns another
+  tenant's row and then discards it has already read it.
+
+  Every operation names the permission it needs (C-08). `:account/create` is a
+  `controller` right; reading is broader, because an operator who cannot see
+  the chart of accounts cannot raise a payment against one."
+  (:require [clofin.api.principal :as principal]
+            [clofin.api.wire :as wire]
             [clofin.error :as err]
             [clofin.http.response :as resp]
             [clofin.ledger.account :as account]
@@ -26,10 +32,11 @@
   [pool]
   (fn [request]
     (let [body (wire/read-object request)
+          [_ organisation-id] (principal/for-request pool request :account/create body)
           acct (ledger/create-account!
                 pool
                 {:id              (random-uuid)
-                 :organisation-id (wire/read-organisation-id request body)
+                 :organisation-id organisation-id
                  :code            (wire/read-string-field body "code")
                  :name            (wire/read-string-field body "name")
                  :type            (wire/read-enum (get body "type") "type"
@@ -43,7 +50,7 @@
   "`GET /accounts/:id`."
   [pool]
   (fn [request]
-    (let [organisation-id (wire/read-organisation-id request)
+    (let [[_ organisation-id] (principal/for-request pool request :account/read)
           id   (wire/read-uuid (get-in request [:path-params :id]) "id")
           acct (find-account! pool organisation-id id)]
       (resp/ok (wire/account->wire acct)))))
@@ -55,7 +62,7 @@
   answer from a partial one. See ADR-0011."
   [pool]
   (fn [request]
-    (let [organisation-id (wire/read-organisation-id request)
+    (let [[_ organisation-id] (principal/for-request pool request :account/read)
           accounts (ledger/list-accounts pool organisation-id)]
       (resp/ok {"accounts" (mapv wire/account->wire accounts)
                 "count"    (count accounts)
@@ -69,7 +76,7 @@
   posted on the boundary (ADR-0011)."
   [pool]
   (fn [request]
-    (let [organisation-id (wire/read-organisation-id request)
+    (let [[_ organisation-id] (principal/for-request pool request :account/read)
           id   (wire/read-uuid (get-in request [:path-params :id]) "id")
           from (wire/read-instant (wire/read-query-param request "from") "from")
           to   (wire/read-instant (wire/read-query-param request "to") "to")

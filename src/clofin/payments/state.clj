@@ -36,15 +36,22 @@
   increment that adds the endpoint gets to drive the transition, not to decide
   where it leads.
 
-  Note `amend` on `pending-approval`. It returns an instruction to `draft` and
-  invalidates every approval given so far (`DOMAIN_MODEL.md` §3 rule 3,
-  **PR-014**). It is *not* what `PATCH /payment-instructions/{id}` does: that
-  edits a draft in place and is governed by `mutable-states` below. Wiring
-  `PATCH` to this event would let a submitted payment be pulled back to `draft`
-  with no approval-invalidation behind it — see ADR-0014."
+  Note `amend` on `pending-approval` **and on `approved`**. It returns an
+  instruction to `draft` and invalidates every approval given so far
+  (`DOMAIN_MODEL.md` §3 rule 3, **PR-014**). It is *not* an in-place edit of a
+  draft: that leaves the status where it was and is governed by
+  `mutable-states` below.
+
+  `PATCH /payment-instructions/{id}` now drives both, choosing between them by
+  reading these two values rather than by testing a status. ADR-0014 originally
+  refused to let `PATCH` drive `:amend` because the approval-invalidation
+  PR-014 requires did not exist yet; TASK-003 built it, and ADR-0014's
+  amendment 1 records the change. The arrow from `approved` is the one
+  `DOMAIN_MODEL.md` §3 draws — an approved-but-unreleased payment whose amount
+  is corrected must lose its approvals, which is the case PR-014 exists for."
   {:draft            {:submit :pending-approval, :cancel :cancelled}
    :pending-approval {:approve :approved, :reject :rejected, :amend :draft}
-   :approved         {:release :released, :cancel :cancelled}
+   :approved         {:release :released, :cancel :cancelled, :amend :draft}
    :released         {:settle :settled, :fail :failed, :return :returned}
    :settled          {}          ; terminal — reverse with a NEW instruction
    :rejected         {} :cancelled {} :failed {} :returned {}})

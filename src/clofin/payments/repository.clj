@@ -20,7 +20,8 @@
   arrives on a connection owned by `clofin.idempotency.repository`, because the
   state change and the idempotency key protecting it commit together or not at
   all."
-  (:require [clofin.db.core :as db]
+  (:require [clofin.authz.repository :as authz]
+            [clofin.db.core :as db]
             [clofin.error :as err]
             [clofin.money :as money]
             [clofin.payments.instruction :as instruction]
@@ -101,14 +102,18 @@
     {:instructions (mapv row->instruction (take row-cap rows))
      :truncated?   (> (count rows) row-cap)}))
 
-(defn- lock-instruction!
+(defn lock-instruction!
   "Read an instruction `for update`, or `404`.
 
   `for update` is what makes a read-then-write safe: the row is held until this
   transaction ends, so a concurrent caller blocks here rather than deciding
   against a status that is about to change underneath it. Outside a transaction
   the lock would be released at the next statement and would guarantee nothing,
-  which is why every caller of this arrives on a connection that owns one."
+  which is why every caller of this arrives on a connection that owns one.
+
+  Public because `clofin.payments.approval-service` needs the same lock for the
+  same reason: an approval decided against a status that changed underneath it
+  is an approval given to a payment nobody submitted."
   [tx organisation-id id]
   (or (row->instruction
        (db/query-one tx [(str instruction-columns
@@ -237,45 +242,90 @@
                           {:constraint constraint})
                (throw t)))))))))
 
-(defn amend!
-  "Apply `changes` to a **draft** instruction and return it as stored.
+(defn- assert-creator!
+  "Only an instruction's creator may amend it (PR-004).
 
-  Two rules, and neither is an `if` in this function. Whether the instruction's
-  status permits amendment at all is `state/assert-mutable!` — held as data
-  with every other rule about status. Which fields an amendment may touch, and
-  whether the result is still valid, is `instruction/amend`.
+  Now a real access control rather than a check that a caller copied a UUID
+  correctly: `actor` is the authenticated principal, and `created-by` is the
+  principal that created the instruction. Before there was a principal this
+  comparison would have compared two caller-asserted values and looked, from
+  outside, exactly like an access control while being none — which is why
+  TASK-002 left it undone and said so.
+
+  `403` rather than `404`: the caller has been told this instruction exists —
+  they are inside the organisation that owns it and addressed it by id — so
+  hiding behind a `404` would only obscure the reason without concealing
+  anything."
+  [existing actor]
+  (when-not (:id actor)
+    (err/fail! :unauthorised "Amending a payment instruction requires an actor" {}))
+  (when-not (= (:id actor) (:created-by existing))
+    (err/forbidden! "Only the actor who created a payment instruction may amend it"
+                    {:instruction-id (str (:id existing))}))
+  existing)
+
+(defn amend!
+  "Apply `changes` to an instruction. Returns `{:before … :after … :approvals-invalidated n}`.
+
+  Two paths, and which one applies is decided by the lifecycle table rather
+  than by an `if` about status written here (ADR-0014):
+
+  - **The instruction is in a `mutable-state`** — `draft`. The substance is
+    edited in place and the status does not move. This is what
+    `DOMAIN_MODEL.md` §1 means by \"mutable while `draft`\".
+  - **The lifecycle permits `:amend` from its status** — `pending-approval` or
+    `approved`. Every approval given so far is invalidated and the instruction
+    returns to `draft` (`DOMAIN_MODEL.md` §3 rule 3, **PR-014**) *before* the
+    changes are applied. An approver agreed to the values that were in front of
+    them; after an amendment those are not the instruction's values any more,
+    so their approval cannot survive it.
+
+  Anything else is a `:conflict` from `state/assert-mutable!`, naming the state.
+
+  Both paths return `:before` and `:after`, because an audited change needs
+  both and re-reading the row afterwards to reconstruct the before is a read of
+  a value that has already changed.
 
   The row is locked for the duration, so an amendment and a concurrent
-  submission cannot interleave into a submitted instruction carrying amended
-  values that no approver will ever see."
-  [source organisation-id id changes opts]
+  submission or approval cannot interleave into a submitted instruction
+  carrying amended values that no approver will ever see."
+  [source organisation-id id changes {:keys [actor] :as opts}]
   (db/transactionally
    source
    (fn [tx]
-     (let [existing (lock-instruction! tx organisation-id id)
-           _        (state/assert-mutable! (:status existing))
-           ;; TODO(TASK-003): PR-004 says a draft may be amended *by its
-           ;; creator*. The creator is caller-asserted until there is an
-           ;; authenticated principal, so enforcing it here would check that a
-           ;; caller had copied a UUID correctly and look, from outside, like an
-           ;; access control. The check belongs here once the principal is real.
-           amended  (instruction/amend existing changes opts)]
+     (let [existing  (lock-instruction! tx organisation-id id)
+           _         (assert-creator! existing actor)
+           ;; PR-014. Read from the table, so an amendable state added later is
+           ;; covered without this function being told about it.
+           reverting? (and (not (state/mutable? (:status existing)))
+                           (state/permitted? (:status existing) :amend))
+           _         (when-not reverting? (state/assert-mutable! (:status existing)))
+           invalidated (if reverting?
+                         (authz/invalidate-approvals-for! tx id)
+                         0)
+           reverted  (if reverting?
+                       (assoc existing :status (state/transition (:status existing) :amend))
+                       existing)
+           amended   (instruction/amend reverted changes opts)]
        (assert-debtor-account! tx amended)
        (db/execute! tx
                     ["update payment_instruction
                          set debtor_account_id = ?, creditor_name = ?,
                              creditor_account = ?, amount_minor = ?, currency = ?,
-                             value_date = ?, purpose_code = ?
+                             value_date = ?, purpose_code = ?, status = ?
                        where organisation_id = ? and id = ?"
                      (:debtor-account-id amended) (:creditor-name amended)
                      (:creditor-account amended)
                      (:minor-units (:amount amended)) (:currency (:amount amended))
                      (:value-date amended) (:purpose-code amended)
+                     (name (:status amended))
                      organisation-id id])
-       amended))))
+       {:before existing
+        :after  amended
+        :approvals-invalidated invalidated}))))
 
 (defn transition!
-  "Apply `event` to an instruction and return it in its new state.
+  "Apply `event` to an instruction. Returns `{:before … :after …}`.
 
   Read then written under `for update` inside one transaction, so two
   concurrent submissions cannot both succeed: the second blocks on the row,
@@ -284,7 +334,11 @@
   and both would write — which is a payment submitted twice.
 
   The next state comes from `clofin.payments.state/transition` and from nowhere
-  else. This function never asks what state the instruction is in."
+  else. This function never asks what state the instruction is in.
+
+  Both the previous and the next value are returned, because every caller of
+  this writes an audit event describing the change and an audit event needs
+  both ends of it."
   [source organisation-id id event]
   (db/transactionally
    source
@@ -299,4 +353,5 @@
        (db/execute! tx ["update payment_instruction set status = ?
                           where organisation_id = ? and id = ?"
                         (name next) organisation-id id])
-       (assoc existing :status next)))))
+       {:before existing
+        :after  (assoc existing :status next)}))))

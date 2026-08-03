@@ -40,8 +40,11 @@
   (testing "a table that had lost its entries would pass the enumeration above"
     (is (= 9 (count state/states)))
     (is (= 9 (count state/events)))
-    (is (= 10 (reduce + (map count (vals state/transitions))))
-        "ten permitted pairs out of eighty-one — the other seventy-one conflict")))
+    (is (= 11 (reduce + (map count (vals state/transitions))))
+        "eleven permitted pairs out of eighty-one — the other seventy conflict.
+         TASK-003 added `amend` on `approved` (ADR-0014 amendment 1): an
+         approved-but-unreleased payment whose amount is corrected must lose
+         its approvals, which is the case PR-014 exists for.")))
 
 (deftest permitted?-and-transition-cannot-disagree
   (doseq [state state/states

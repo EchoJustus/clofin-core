@@ -45,7 +45,9 @@
   ;; `cascade` would reach the payment tables through their foreign keys, but
   ;; they are named anyway: a test that leaves rows behind because a table was
   ;; only ever truncated by implication is a test that fails somewhere else.
-  (db/execute! pool ["truncate idempotency_key, payment_instruction,
+  (db/execute! pool ["truncate audit_event, approval, approver_limit,
+                              approval_threshold, actor_role, actor,
+                              idempotency_key, payment_instruction,
                               journal_line, journal_entry, ledger_account,
                               organisation cascade"]))
 
@@ -91,3 +93,67 @@
                        values (?, ?, ?, ?, ?, ?, ?)"
                        (or id (random-uuid)) entry-id line-no account-id
                        direction amount-minor currency]))
+
+;; ---------------------------------------------------------------------------
+;; Actors, roles and limits
+;; ---------------------------------------------------------------------------
+;;
+;; **Default deny applies to fixtures too.** There is no `insert-superuser!`
+;; here and there must not be one: an actor is seeded with no roles, and a test
+;; that needs a right grants it explicitly. That makes each fixture a readable
+;; statement of what a role can do — which is the second reason for the rule,
+;; after the obvious one that a superuser in a test is a superuser someone
+;; eventually reaches for in production.
+
+(defn insert-actor!
+  "Seed an actor with the roles and per-currency limits named.
+
+  `roles` is a collection of role keywords or strings; `limits` is
+  `{\"SGD\" 100000}`. Both default to nothing at all, which is what an actor
+  with no grants can do."
+  [pool {:keys [id organisation-id display-name status roles limits]
+         :or {display-name "Test actor" status "active" roles [] limits {}}}]
+  (let [id (or id (random-uuid))]
+    (db/execute! pool ["insert into actor (id, organisation_id, display_name, status)
+                       values (?, ?, ?, ?)"
+                       id organisation-id display-name (name status)])
+    (doseq [role roles]
+      (db/execute! pool ["insert into actor_role (actor_id, role) values (?, ?)"
+                         id (name role)]))
+    (doseq [[currency limit-minor] limits]
+      (db/execute! pool ["insert into approver_limit (actor_id, currency, limit_minor)
+                         values (?, ?, ?)"
+                         id currency limit-minor]))
+    id))
+
+(defn insert-threshold!
+  "Seed one approval band: `from-minor` and above requires `approvals-required`."
+  [pool {:keys [organisation-id currency from-minor approvals-required]
+         :or {currency "SGD" from-minor 0 approvals-required 1}}]
+  (db/execute! pool ["insert into approval_threshold
+                       (organisation_id, currency, from_minor, approvals_required)
+                     values (?, ?, ?, ?)"
+                     organisation-id currency from-minor (int approvals-required)]))
+
+(defn insert-approval!
+  [pool {:keys [id instruction-id actor-id decision reason]
+         :or {decision "approved"}}]
+  (let [id (or id (random-uuid))]
+    (db/execute! pool ["insert into approval (id, instruction_id, actor_id, decision, reason)
+                       values (?, ?, ?, ?, ?)"
+                       id instruction-id actor-id (name decision) reason])
+    id))
+
+(defn insert-audit-event!
+  [pool {:keys [id organisation-id actor-id action subject-type subject-id
+                before-digest after-digest correlation-id]
+         :or {action "payment.created" subject-type "payment-instruction"}}]
+  (let [id (or id (random-uuid))]
+    (db/execute! pool ["insert into audit_event
+                         (id, organisation_id, actor_id, action, subject_type,
+                          subject_id, before_digest, after_digest, correlation_id)
+                       values (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                       id organisation-id actor-id action subject-type
+                       (or subject-id (random-uuid))
+                       before-digest after-digest correlation-id])
+    id))

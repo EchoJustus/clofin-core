@@ -30,7 +30,16 @@
    ;; `clofin.idempotency.repository`, which is the seam ADR-0012 names —
    ;; splitting them is what lets the digest stay a pure function of one
    ;; argument, testable without a database.
-   'clofin.idempotency                    "src/clofin/idempotency.clj"})
+   'clofin.idempotency                    "src/clofin/idempotency.clj"
+   ;; The authorisation model and the approval decision. `evaluate` being pure
+   ;; is not a stylistic preference: it is what makes segregation of duties a
+   ;; domain rule rather than a UI restriction (PR-071, C-01), and what lets a
+   ;; past approval be replayed against the values it was decided on.
+   'clofin.authz.model                    "src/clofin/authz/model.clj"
+   'clofin.authz.approval                 "src/clofin/authz/approval.clj"
+   ;; The audit vocabulary and the digest. Storage is
+   ;; `clofin.audit.repository`, the same split as idempotency above.
+   'clofin.audit                          "src/clofin/audit.clj"})
 
 (def forbidden-prefixes
   ["clofin.db." "clofin.http." "clofin.api."])
@@ -70,11 +79,35 @@
     (doseq [path ["src/clofin/ledger/repository.clj"
                   "src/clofin/organisations/repository.clj"
                   "src/clofin/payments/repository.clj"
-                  "src/clofin/idempotency/repository.clj"]]
+                  "src/clofin/idempotency/repository.clj"
+                  "src/clofin/authz/repository.clj"
+                  "src/clofin/audit/repository.clj"]]
       (is (some #(str/starts-with? % "clofin.db.")
                 (required-namespaces (ns-form path)))
           (str path " is named `repository` but requires no persistence — "
                "either it is misnamed, or the seam has moved.")))))
+
+(def service-namespaces
+  "Namespaces that orchestrate effects without owning any.
+
+  A service composes repositories inside a transaction the *caller* owns. It
+  must not reach for `clofin.db.*` itself, because a service that can open its
+  own transaction is a service that can write an audit event outside the
+  transaction carrying the change it describes — which is the one failure C-05
+  exists to prevent, and the one this rule makes unavailable rather than
+  merely discouraged."
+  {'clofin.payments.approval-service "src/clofin/payments/approval_service.clj"})
+
+(deftest a-service-cannot-open-its-own-transaction
+  (doseq [[namespace-sym path] service-namespaces]
+    (testing (str namespace-sym " reaches the database only through a repository")
+      (let [offending (filter #(str/starts-with? % "clofin.db.")
+                              (required-namespaces (ns-form path)))]
+        (is (empty? offending)
+            (str namespace-sym " requires " (pr-str offending)
+                 " — a service takes the caller's transaction and composes "
+                 "repositories on it (C-05, PR-075). Owning a connection here "
+                 "is how an audit write ends up outside the change it describes."))))))
 
 (deftest a-domain-namespace-cannot-be-quietly-dropped-from-the-guard
   (testing "every pure namespace named here still exists at the path claimed"
