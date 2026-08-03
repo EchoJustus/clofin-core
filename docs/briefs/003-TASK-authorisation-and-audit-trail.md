@@ -267,3 +267,14 @@ an incident.
 **Do not add a superuser role to make testing easier.** Default deny means
 default deny. If a test needs broad permissions, grant them explicitly in the
 fixture; that fixture then doubles as documentation of what the role can do.
+
+**Inherited from TASK-002 (ruling O-2 and 002-REQ §7) — read
+`ADR-0014` (on `feat/payment-instruction-lifecycle` / PR #4 until it merges) before wiring `amend`.**
+`PATCH` deliberately does not drive the `:amend` transition; the
+`pending-approval → draft` event with approval invalidation (PR-014) is yours to
+build, and it is currently in the transition table driven by nothing. The
+`TODO(TASK-003)` markers name every point where `createdBy`/`organisationId`
+becomes an authenticated principal — including `amend!`, where PR-004's "by its
+creator" check belongs. And the audit write (C-05, I9) belongs inside the
+transaction that `clofin.idempotency.repository/execute-once!` already
+establishes — it hands the effect its connection; write the audit event on it.

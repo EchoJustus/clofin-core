@@ -18,7 +18,7 @@ and this table is stale.
 |---|---|---|---|---|
 | 1 | Foundation and ledger core | — (predates the brief protocol) | ✅ done — merged to `main` at `3bde834` (PR #1; milestone audit waived, see audits register) | green, 303 assertions |
 | 2 | Ledger persistence and account API | [TASK-001](briefs/001-TASK-ledger-persistence-and-account-api.md) | ✅ `IMPLEMENTED` — merged to `main` in PR #2 (`f7018a1`); `FEEDBACK-001` outstanding | green, 757 assertions |
-| 3 | Payment lifecycle and idempotency | [TASK-002](briefs/002-TASK-payment-instruction-lifecycle.md) | 🔨 `IN PROGRESS` — dispatched; based on `main` | — |
+| 3 | Payment lifecycle and idempotency | [TASK-002](briefs/002-TASK-payment-instruction-lifecycle.md) | 🔨 `IMPLEMENTED` — PR #4 open; O-3 fix outstanding; `FEEDBACK-002` outstanding | green, 1547 assertions |
 | 4 | Authorisation, maker–checker, audit | [TASK-003](briefs/003-TASK-authorisation-and-audit-trail.md) | 📋 `READY`, blocked on 002 | — |
 | 5–9 | Settlement onwards | not yet briefed | 💭 later | — |
 
@@ -83,7 +83,17 @@ to rediscover them:
 
 ## Increment 3 — Payment instruction lifecycle 📋
 
-**Brief:** [TASK-002](briefs/002-TASK-payment-instruction-lifecycle.md) · **Status:** `IN PROGRESS` — dispatched; based on `main` (dependency merged in PR #2)
+**Brief:** [TASK-002](briefs/002-TASK-payment-instruction-lifecycle.md) · **Status:** `IMPLEMENTED` — PR #4 open (275 tests / 1547 assertions green); one ruled fix (O-3, digest scope) outstanding
+
+**Carried forward, deliberately** (from [002-REQ](audits/002-REQ-payment-instruction-lifecycle.md) §6):
+
+- **PR-005 batch submission** is deferred — single-instruction submission only (O-6).
+- **PR-044 partial-reversal accumulation** is not implemented; an instruction can
+  be reversed more than once, unlike a journal entry (I4 has no instruction-level
+  counterpart yet).
+- **No indexes on `payment_instruction`** — the measure-before-optimising posture,
+  but a real gap at volume.
+- `transactionally` exists in two namespaces; a two-line delegation closes it.
 
 *Why next: the lifecycle is the spine every control attaches to.*
 

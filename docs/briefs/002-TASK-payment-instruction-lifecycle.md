@@ -3,14 +3,14 @@
 | Field | Value |
 |---|---|
 | **Increment** | 3 |
-| **Status** | `IN PROGRESS` — dispatched 2026-08-03 |
+| **Status** | `IMPLEMENTED` — PR #4 open; one fix instruction outstanding (O-3) |
 | **Depends on** | TASK-001 — needs `clofin.ledger.repository/post-entry!` |
 | **Base branch** | `origin/main` — TASK-001 merged in PR #2 (`f7018a1`), so no stacking is needed; open the PR against `main`, per AGENT_HANDOFF §1b |
 | **Blocks** | TASK-003 |
 | **Requirements** | PR-001…PR-005, PR-040…PR-044 |
 | **Controls touched** | C-06 (duplicate payment prevention) |
 | **Scope** | Large — split into two commits if it helps: (a) state machine + persistence, (b) API + idempotency |
-| **Audit** | Not yet submitted |
+| **Audit** | Submitted: [002-REQ](../audits/002-REQ-payment-instruction-lifecycle.md) (PR #4); `FEEDBACK-002` outstanding |
 
 > Status lifecycle: `READY` → `IN PROGRESS` → `IMPLEMENTED` → `AUDITED` → `CLOSED`.
 > Status is maintained by Master Control on the `meta` branch — see AGENT_HANDOFF §1b.
@@ -148,6 +148,13 @@ The digest is over a **canonical** serialisation — sorted keys, no insignifica
 whitespace — so that a semantically identical retry is not treated as a
 conflict. Write that canonicalisation as its own tested function.
 
+**Amended by ruling on objection O-3 (2026-08-03):** the digest covers the
+canonical document `{"method": …, "path": …, "body": …}`, **not the body
+alone**. A body-only digest lets one key replay across two different
+instructions' submission endpoints — identical bodies, different paths — so the
+second caller receives the first's stored response and its instruction is never
+submitted, while the operator sees success.
+
 ### HTTP
 
 | Method | Path | Operation id | Idempotent |
@@ -205,8 +212,8 @@ threads, a latch, one shared key. A test that calls sequentially proves nothing.
 - [ ] `DOMAIN_MODEL.md` invariants I10 marked ✅
 - [ ] `COMPLIANCE.md` C-06 moved from 📋 to ✅ with its enforcement point named
 - [ ] Completion reported — PR opened against the base branch above, `002-REQ` filed — so Master Control can set this brief to `IMPLEMENTED` on `meta`
-- [ ] UAT script `docs/uat/UAT-003-idempotent-submission.md` — including a
-      manual double-submit that a reviewer can perform with `curl`
+- [x] UAT script — `docs/uat/UAT-004-idempotent-submission.md` *(the brief
+      originally said UAT-003, which already existed; renumbered by ruling O-1)*
 - [ ] ADR for the canonical-digest decision (what is included, what is ignored,
       and why) — a future contributor will otherwise re-derive it wrongly
 
@@ -221,3 +228,18 @@ starts lying. Every rule goes in `transitions`; handlers only call `transition`.
 **Idempotency is not caching.** A cache may miss and re-execute; an idempotency
 key may not. Store the key in the *same transaction* as the effect it protects,
 or a crash between the two leaves a payment made with no record that it was.
+
+---
+
+## Changelog — rulings on 002-REQ objections (2026-08-03)
+
+| Obj | Ruling |
+|---|---|
+| O-1 | **Confirmed UAT-004.** The brief pre-assigned a UAT number that TASK-001 had already consumed — a brief-authoring defect, now a standing lesson. |
+| O-2 | **Interpretation confirmed.** `PATCH` edits a draft in place and drives no transition; the `:amend` *event* (pending-approval → draft, invalidating approvals, PR-014) belongs to TASK-003. ADR-0014 stands. |
+| O-3 | **Fix ordered.** Digest scope amended above; fix instruction dispatched to the Worker on `feat/payment-instruction-lifecycle`. |
+| O-4 | **Accepted.** The brief was right, `DOMAIN_MODEL.md` was wrong; the Worker's model correction travels with the code. |
+| O-5 | **Accepted.** C-06 now names the real constraint. |
+| O-6 | **Transcribed** — PR-005 deferral recorded in `ROADMAP.md` increment 3. |
+| O-7 | **All five accepted** — reversal via `reversesId`, body-carried `organisationId` on submission/cancellation, strict `PATCH`, `Idempotent-Replayed` header, bounded `valueDate`. |
+| O-8 | **Accepted.** `:field-validation` (422 under the `validation` problem type) is the right shape; ADR-0014 §5 records it. |
