@@ -44,8 +44,8 @@ Check the service is up and tell it apart from anything else you may be running:
 curl -fsS $BASE/readyz
 ```
 
-**Expected:** `"status": "ready"` and `"schemaVersion": "0003"`. If the schema
-version is lower, the payment tables are not present — run `make migrate`.
+**Expected:** `"status": "ready"` and `"schemaVersion": "0004"` or higher. Below
+`0003` the payment tables are not present — run `make migrate`.
 
 ### Create a synthetic organisation and a debtor account
 
@@ -250,7 +250,58 @@ form of the body precisely so that whitespace is not treated as substance.
 
 ---
 
-### Step 7 — The same key with a *different* body is refused
+### Step 7 — One key cannot be carried to a *different* payment
+
+This is the step that closed a real gap. Create a second instruction, then try
+to submit it with the key already used for the first:
+
+```bash
+curl -s -X POST $BASE/payment-instructions \
+  -H 'content-type: application/json' \
+  -H "Idempotency-Key: uat4-create-second-$(date +%s)" \
+  -d "{\"organisationId\":\"$ORG\",\"debtorAccountId\":\"$ACCOUNT\",
+       \"creditorName\":\"Andaman Shipping Sdn Bhd\",
+       \"creditorAccount\":\"MY-SYNTH-4471\",
+       \"amount\":{\"currency\":\"SGD\",\"minorUnits\":50000},
+       \"valueDate\":\"$VALUE_DATE\",\"purposeCode\":\"TRAD\",
+       \"createdBy\":\"99999999-9999-9999-9999-999999999999\"}" > /dev/null
+
+PI2=$(curl -s "$BASE/payment-instructions?organisationId=$ORG&status=draft" \
+  | sed 's/.*"paymentInstructions":\[{"id":"\([^"]*\)".*/\1/')
+echo "second instruction: $PI2"
+
+curl -s -X POST "$BASE/payment-instructions/$PI2/submission" \
+  -H 'content-type: application/json' \
+  -H "Idempotency-Key: $IDEM_SUBMIT" \
+  -d "{\"organisationId\":\"$ORG\"}"
+```
+
+**Expected:** `409`.
+
+**Why it matters.** Note that the body here is **byte-identical** to Step 4's —
+a submission body is just `{"organisationId": …}`. Only the path differs. When
+the digest covered the body alone, this returned `200` replaying the *first*
+payment's response, and this second payment was never submitted while the
+operator saw success. That gap was found during increment 3, disclosed rather
+than quietly patched, and closed by ruling; the digest now covers the request's
+method and path as well as its body
+(ADR-0013 amendment 1).
+
+Confirm the second instruction really is still a draft:
+
+```bash
+curl -s "$BASE/payment-instructions/$PI2?organisationId=$ORG"
+```
+
+**Expected:** `"status": "draft"` — and, crucially, the `409` above is how the
+operator finds that out rather than being told it succeeded.
+
+**Record:** the status code of the submission, and the second instruction's
+status.
+
+---
+
+### Step 8 — The same key with a *different* body is refused
 
 ```bash
 curl -s -X POST $BASE/payment-instructions \
@@ -274,7 +325,7 @@ second payment. Neither is acceptable, so nothing runs.
 
 ---
 
-### Step 8 — A submitted instruction can no longer be amended
+### Step 9 — A submitted instruction can no longer be amended
 
 ```bash
 curl -s -X PATCH "$BASE/payment-instructions/$PI" \
@@ -303,7 +354,7 @@ failure segregation of duties exists to prevent.
 
 ---
 
-### Step 9 — Confirm exactly one effect, in the database
+### Step 10 — Confirm exactly one effect, in the database
 
 ```bash
 make db-shell

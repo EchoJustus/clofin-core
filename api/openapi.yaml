@@ -774,11 +774,16 @@ components:
         rather than being quietly executed, because a caller that has not
         thought about retries is exactly the caller a retry will hurt.
 
-        One key identifies one request. Replaying it with an identical body
-        returns the stored response and performs no new work; replaying it with
-        a different body is `409` and executes nothing. "Identical" is judged
-        over a canonical form of the body, so a retry that differs only in
-        whitespace or key order is honoured — that is a retry, not a conflict.
+        One key identifies one request. Replaying **the same request** returns
+        the stored response and performs no new work; reusing the key for a
+        different request is `409` and executes nothing.
+
+        "The same request" means the same method, the same path *and* the same
+        body. The path counts: two instructions' submissions carry identical
+        bodies and differ only in their path, so a key that ignored it would
+        make the second a replay of the first — and that instruction would never
+        be submitted. Judged over a canonical form, so a retry differing only in
+        whitespace or key order is honoured; that is a retry, not a conflict.
 
         Scoped to the organisation, so two tenants cannot collide. A request
         that failed does **not** consume its key: fix the body and retry with

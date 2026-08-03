@@ -179,10 +179,10 @@ tested, and driven by nothing until approval (TASK-003) and settlement
 ### 5.4 Idempotency
 
 Every mutating payment endpoint requires an `Idempotency-Key`. The key, the
-organisation and a digest of the request body are stored with the resulting
-response, **in the same transaction as the effect they protect**. A replay with
-the same key and the same body returns the stored response; a replay with the
-same key and a *different* body is a `409 Conflict`.
+organisation and a digest of the request are stored with the resulting response,
+**in the same transaction as the effect they protect**. Replaying the same
+request returns the stored response; reusing the key for a different request is
+a `409 Conflict`.
 
 Two design points carry the weight, and both are decisions rather than details:
 
@@ -192,10 +192,14 @@ and the write is exactly long enough for two concurrent retries to both execute.
 The second inserter blocks on the key, fails on it, and returns what the first
 stored.
 
-**The digest is over a canonical form of the body** — sorted keys, no
-insignificant whitespace — so a retry that differs only in representation is
-honoured. A `409` on a genuine retry would push the caller to mint a new key,
-and a new key is a second payment
+**The digest is over a canonical form of the request** — its method, its path
+and its body, with sorted keys and no insignificant whitespace. Canonical, so a
+retry that differs only in representation is honoured: a `409` on a genuine
+retry would push the caller to mint a new key, and a new key is a second
+payment. Method and path rather than the body alone, because two instructions'
+submissions carry byte-identical bodies — a body-only digest made the second a
+replay of the first, so its instruction was never submitted while the operator
+saw success
 ([ADR-0013](docs/ADR/0013-canonical-request-digest-for-idempotency.md)).
 
 ### 5.5 Audit trail

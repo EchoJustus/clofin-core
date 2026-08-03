@@ -455,6 +455,64 @@
 
     (is (= 1 (instruction-count)) "no rejected request executed anything")))
 
+(deftest one-key-cannot-replay-across-two-instructions-submissions
+  (testing "the failure that ruling O-3 closed. Two submissions carry byte-identical
+            bodies — `{\"organisationId\": …}` — and differ only in their path. Under
+            a body-only digest the second was a replay of the first: it returned
+            `200`, and its instruction was never submitted while the operator saw
+            success. The digest covers method, path and body, so it is a `409`."
+    (let [f (setup)
+          a (new-instruction! f)
+          b (new-instruction! f)
+          k (key!)
+          body (action-body f)
+          first-call (call :post (str "/payment-instructions/" (get a "id") "/submission")
+                           {:body body :idempotency-key k})
+          second-call (call :post (str "/payment-instructions/" (get b "id") "/submission")
+                            {:body body :idempotency-key k})]
+      (is (= 200 (:status first-call)))
+      (is (= "pending-approval" (get-in first-call [:json "status"])))
+
+      (is (= 409 (:status second-call))
+          "not a silent 200 replaying the first instruction's response")
+      (is (= "https://clofin.dev/problems/conflict" (get-in second-call [:json "type"])))
+      (is (nil? (get-in second-call [:headers "idempotent-replayed"]))
+          "nothing was replayed, because nothing matched")
+
+      (testing "and the second instruction is untouched, which is the point"
+        (is (= "draft" (status-of f b))))
+
+      (testing "the caller is told plainly enough to act on"
+        (is (str/includes? (get-in second-call [:json "detail"]) "Idempotency-Key"))))))
+
+(deftest the-same-request-under-one-key-still-replays-after-the-o-3-fix
+  (testing "narrowing what counts as the same request must not break what does —
+            same method, same path, same body is still one request"
+    (let [f (setup)
+          pi (new-instruction! f)
+          k (key!)
+          first-call (submit! f pi :idempotency-key k)
+          replay (submit! f pi :idempotency-key k)]
+      (is (= 200 (:status first-call)))
+      (is (= (:body first-call) (:body replay)))
+      (is (= "true" (get-in replay [:headers "idempotent-replayed"]))))))
+
+(deftest a-key-cannot-replay-across-two-different-operations-on-one-instruction
+  (testing "submission and cancellation of the same instruction carry identical
+            bodies too — the method and path are what tell them apart"
+    (let [f (setup)
+          pi (new-instruction! f)
+          k (key!)
+          body (action-body f)
+          submitted (call :post (str "/payment-instructions/" (get pi "id") "/submission")
+                          {:body body :idempotency-key k})
+          cancelled (call :post (str "/payment-instructions/" (get pi "id") "/cancellation")
+                          {:body body :idempotency-key k})]
+      (is (= 200 (:status submitted)))
+      (is (= 409 (:status cancelled))
+          "a cancellation is not a replay of a submission")
+      (is (= "pending-approval" (status-of f pi))))))
+
 (deftest a-key-is-scoped-to-one-organisation
   (testing "two tenants choosing the same key must not collide"
     (let [a (setup)

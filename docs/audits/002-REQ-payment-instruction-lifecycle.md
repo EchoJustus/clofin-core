@@ -6,8 +6,8 @@
 | **Branch** | `feat/payment-instruction-lifecycle`, based on `origin/main` at `7024454` |
 | **Requirements** | PR-001, PR-002, PR-003, PR-004, PR-040, PR-041, PR-042, PR-043 |
 | **Controls** | C-06 — moved 📋 → ✅ |
-| **Submitted** | 2026-08-03 |
-| **Status** | Complete. Awaiting audit, and a ruling on the objections in §5. |
+| **Submitted** | 2026-08-03 · **Revised** 2026-08-03 after the ruling on §5 |
+| **Status** | Complete. All eight objections ruled; the one fix ordered (O-3) is applied. Awaiting audit. |
 
 This is the Worker's completion report and audit request for TASK-002, filed on
 its own feature branch per
@@ -23,7 +23,11 @@ Actual numbers, from the branch tip.
 | Command | Before (base `7024454`) | After | Delta |
 |---|---|---|---|
 | `make test` | 90 tests / 385 assertions | **158 tests / 900 assertions** | +68 / +515 |
-| `make test-it` | 158 tests / 757 assertions | **275 tests / 1547 assertions** | +117 / +790 |
+| `make test-it` | 158 tests / 757 assertions | **278 tests / 1572 assertions** | +120 / +815 |
+
+*(Numbers re-measured after the O-3 fix, which added three regression tests:
+`make test-it` was 275 / 1547 at first submission. `make test` is unchanged —
+the fix and its tests are integration-level.)*
 
 **0 failures, 0 errors** in both. `make verify` (`test` + `docs-check`) passes.
 The base was verified green before any code was written, as §2 of the working
@@ -38,7 +42,7 @@ New test namespaces, all registered in `clofin.test-runner`:
 | `clofin.payments.posting-test` | 10 | 37 | unit |
 | `clofin.idempotency-test` | 19 | 58 | unit, incl. 2 property tests |
 | `clofin.payments.repository-test` | 23 | 59 | integration |
-| `clofin.api.payments-api-test` | 26 | 214 | integration |
+| `clofin.api.payments-api-test` | 29 | 237 | integration |
 
 `clofin.contract-test` passes **unmodified** (AC-12).
 
@@ -111,8 +115,12 @@ The instrumentation was temporary and is not in the diff.
 **Migration `0003-payment-instructions.sql`.** The brief's SQL **verbatim** —
 every column, type, constraint and the composite primary key exactly as
 specified. Added: a header comment block and `comment on` statements, matching
-the style of `0001`/`0002`. `0001` and `0002` are untouched; `index.txt` gained
-one line.
+the style of `0001`/`0002`. `0001` and `0002` are untouched.
+
+**Migration `0004-idempotency-digest-scope.sql`** (added by the O-3 ruling).
+Comments only, no schema change: `0003`'s description of `request_digest`
+predates the amended scope, and `0003` is applied and therefore immutable.
+Schema version is now `0004`.
 
 **Pure namespaces** (all four added to `clofin.ledger.purity-test`'s guard):
 
@@ -164,10 +172,17 @@ partial one that looks complete); settlement (increment 5); screening
 
 ## 5. Objections and decisions requiring a ruling
 
-Per AGENT_HANDOFF §1b these are recorded rather than resolved unilaterally. Two
-are interpretations I had to act on to deliver at all; they are marked as such.
+Per AGENT_HANDOFF §1b these were recorded rather than resolved unilaterally.
 
-### O-1 — `blocking to the DoD as written` · UAT numbering collides
+**All eight are now ruled** (changelog in the brief on `origin/meta`,
+2026-08-03). O-1 confirmed as filed; O-2's interpretation confirmed and ADR-0014
+stands; O-4, O-5, O-7 and O-8 accepted as delivered; O-6 transcribed to
+`ROADMAP.md` by Master Control. **O-3 was the one fix ordered, and is applied** —
+see below. Each objection is left in place with its ruling attached rather than
+edited away, because the record of what was questioned is worth as much as the
+answer.
+
+### O-1 — `blocking to the DoD as written` · **RULED: UAT-004 confirmed.** UAT numbering collides
 
 The brief's definition of done names `docs/uat/UAT-003-idempotent-submission.md`.
 **UAT-003 already exists**: `UAT-003-account-statement-production.md`, delivered
@@ -178,9 +193,9 @@ are sequential and never reused.
 stated in the document itself. Two documents numbered UAT-003 would have been
 the only alternative.
 
-**Ruling requested:** confirm UAT-004, or name a different number.
+**Ruling:** UAT-004 confirmed. Master Control recorded the cause — the brief pre-assigned a UAT number TASK-001 had already consumed — as a brief-authoring defect and a standing lesson.
 
-### O-2 — `interpretation, acted on` · AC-3 contradicts the `:amend` transition
+### O-2 — `interpretation, acted on` · **RULED: interpretation confirmed; ADR-0014 stands.** AC-3 contradicts the `:amend` transition
 
 AC-3 requires that an instruction "submitted then amended" returns `409`. The
 transition table the brief specifies carries `:amend` on `pending-approval`,
@@ -202,36 +217,41 @@ This satisfies AC-3 in both halves and leaves the brief's transition table
 [ADR-0014](../ADR/0014-payment-lifecycle-as-data.md), which also records the
 rejected alternatives.
 
-**Ruling requested:** confirm the interpretation. If instead `PATCH` was meant to
-drive `:amend`, then AC-3's second half needs rewording and TASK-003 inherits an
-approval-invalidation gap.
+**Ruling:** interpretation confirmed. `PATCH` edits a draft in place and drives
+no transition; the `:amend` *event* belongs to TASK-003 along with the
+approval-invalidation PR-014 requires. ADR-0014 stands as written.
 
-### O-3 — `should-fix, held pending ruling` · The digest excludes method and path
+### O-3 — `should-fix` · **RULED: fix ordered. Applied 2026-08-03.**
 
-The brief specifies `request_digest` as "SHA-256 of the canonical request body".
-Implemented **exactly that**. The consequence:
+The brief specified `request_digest` as "SHA-256 of the canonical request body".
+Implemented exactly that, and reported the consequence:
 
 > `POST /payment-instructions/{a}/submission` and
 > `POST /payment-instructions/{b}/submission` carry identical bodies
-> (`{"organisationId": "…"}`). One key replayed across both digests identically,
-> so the second caller receives the first's stored `200` — and instruction `b`
-> is never submitted, while the operator sees success.
+> (`{"organisationId": "…"}`). One key replayed across both digested
+> identically, so the second caller received the first's stored `200` — and
+> instruction `b` was never submitted, while the operator saw success.
 
-This is a *silently unsubmitted* payment rather than a double payment, so it is
-not the failure C-06 targets, and it requires the caller to misuse a key. It is
-still wrong. The fix is one line in `clofin.api.payments/request-digest`: digest
-the canonical document `{"method": …, "path": …, "body": …}` instead of the body
-alone.
+Not a double payment, but a payment *silently not made*, which is no less
+serious. It was disclosed rather than fixed unilaterally, because the exclusion
+was an explicit interface specification and diverging from a brief without a
+ruling is a failed handover even when the divergence is right.
 
-**Not applied**, because it diverges from an explicit interface specification and
-"diverging from a brief without a ruling is a failed handover even when the
-divergence was right". The limitation is disclosed in
-[ADR-0013](../ADR/0013-canonical-request-digest-for-idempotency.md), in
-`COMPLIANCE.md` C-06 under *Not covered by this control*, and at the call site.
+**Ruling.** Master Control amended the brief's idempotency section and ordered
+the fix. **Applied on this branch:**
 
-**Ruling requested:** apply the fix, or accept the boundary explicitly.
+| | |
+|---|---|
+| `clofin.api.payments/request-digest` | Now digests `{"method", "path", "body"}`. The path is normalised the way the router normalises it — empty segments discarded — so a trailing slash on a retry is not a false conflict; the body is normalised to `{}` when absent. |
+| Three regression tests | One key across two instructions' submissions → `409`; one key across a submission and a cancellation of one instruction → `409`; an unchanged retry still replays. **Verified they fail** when `request-digest` is reverted to body-only — 4 failures — so they are regression tests rather than documentation. |
+| [ADR-0013](../ADR/0013-canonical-request-digest-for-idempotency.md) | §Amendment 1 records the defect, why it was not fixed unilaterally, the ruling, and what "path" means. The body-only form is listed under *Alternatives considered* as rejected, **not deleted** — the record that the boundary existed and was closed is the point. |
+| `COMPLIANCE.md` C-06 | The *Not covered by this control* boundary this closes is removed. The remaining scope statement is the genuine one: this control stops a **retry** acting twice; it does not detect two deliberately distinct instructions for one invoice, which needs attribute matching and is not designed here. |
+| `ARCHITECTURE.md` §5.4, `api/openapi.yaml` | Both described the body-only scope. Corrected. |
+| Migration `0004-idempotency-digest-scope.sql` | `0003`'s column and table comments describe the superseded scope. `0003` is applied, and an applied migration is immutable — verified: the runner records its checksum and `clofin.db.migrate-test` asserts tampering aborts start-up. A comment is documentation an auditor reads out of the database itself, so a stale one describing a *control* is worth a forward migration. Comments only; no schema change. |
 
-### O-4 — `consider` · The brief's schema contradicts `DOMAIN_MODEL.md` §2.2
+**Status: closed.**
+
+### O-4 — `consider` · **RULED: accepted.** The brief's schema contradicts `DOMAIN_MODEL.md` §2.2
 
 `DOMAIN_MODEL.md` §2.2 listed `idempotency-key` as a **field on
 PaymentInstruction** ("Unique per organisation"). The brief's SQL puts it in a
@@ -245,7 +265,7 @@ unprotected — the one operation whose timeout the control exists for.
 `IdempotencyKey` as a record of its own with the reasoning stated. Flagged
 because it is a change to a shared model document, made on a feature branch.
 
-### O-5 — `consider` · C-06's stated enforcement point named a constraint that does not exist
+### O-5 — `consider` · **RULED: accepted.** C-06's stated enforcement point named a constraint that does not exist
 
 `COMPLIANCE.md` C-06 named "Unique constraint on
 `(organisation_id, idempotency_key)`". The constraint actually built is
@@ -253,7 +273,7 @@ because it is a change to a shared model document, made on a feature branch.
 Updated to name the real one, plus the three code-level enforcement points and
 the tests. Same substance, accurate identifiers.
 
-### O-6 — `informational` · PR-005 cannot be noted where the brief asks
+### O-6 — `informational` · **RULED: transcribed to `ROADMAP.md`.** PR-005 cannot be noted where the brief asks
 
 The brief says batch submission is deferred and to "Note it in ROADMAP".
 `ROADMAP.md` is control-plane, on `meta`, and Workers never write `meta`.
@@ -261,7 +281,7 @@ The brief says batch submission is deferred and to "Note it in ROADMAP".
 with per-item outcomes, a *Should*) is not implemented; single-instruction
 submission is.
 
-### O-7 — `informational` · Interfaces the brief left unspecified
+### O-7 — `informational` · **RULED: all five accepted.** Interfaces the brief left unspecified
 
 Decided rather than guessed, and each is cheap to change:
 
@@ -281,7 +301,7 @@ Decided rather than guessed, and each is cheap to change:
   instruction dated four centuries out would sit in `pending-approval`
   indistinguishable from work in progress.
 
-### O-8 — `informational` · The `422` in the brief needed a new error category
+### O-8 — `informational` · **RULED: accepted.** The `422` in the brief needed a new error category
 
 The brief's validation example is `"type": ".../problems/validation"` with
 `"status": 422`. `clofin.error` mapped `:validation` to **400**, and the only

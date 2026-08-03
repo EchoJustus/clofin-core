@@ -13,9 +13,11 @@
     already been used for a different request.
 
   **Every mutating operation is idempotent** (PR-040). The key is read from the
-  `Idempotency-Key` header, the request is digested, and the effect runs inside
-  the transaction that stores both — so a retry either replays the stored
-  response or does nothing at all.
+  `Idempotency-Key` header, the request is digested — method, path and body —
+  and the effect runs inside the transaction that stores both, so a retry either
+  replays the stored response or does nothing at all. Digesting the path as well
+  as the body is what stops one key replaying across two *different*
+  instructions' submissions, which carry identical bodies.
 
   Idempotency is resolved *before* validation. A replay must return what the
   first call returned even if the same request would no longer validate today,
@@ -34,7 +36,8 @@
             [clofin.money :as money]
             [clofin.payments.instruction :as instruction]
             [clofin.payments.repository :as payments]
-            [clofin.payments.state :as state])
+            [clofin.payments.state :as state]
+            [clojure.string :as str])
   (:import [java.time LocalDate ZoneOffset]))
 
 ;; ---------------------------------------------------------------------------
@@ -159,6 +162,36 @@
   names are case-insensitive but Clojure map keys are not."
   "idempotency-key")
 
+(defn- canonical-path
+  "The request path, normalised the way the router normalises it.
+
+  The router discards empty segments, so `/a/b` and `/a/b/` reach the same
+  handler. If the digest saw them as different, a client that added a trailing
+  slash on a retry would be told its payment conflicts — which is the same class
+  of false conflict the body canonicalisation exists to prevent, one component
+  along."
+  [uri]
+  (str "/" (str/join "/" (remove str/blank? (str/split (str uri) #"/")))))
+
+(defn- request-digest
+  "The digest that identifies this request for idempotency purposes.
+
+  Covers the canonical document `{\"method\", \"path\", \"body\"}` — **not the
+  body alone**. The path is what distinguishes one instruction's submission from
+  another's: those two requests carry identical bodies, so a body-only digest
+  would make the second a replay of the first, and its instruction would never
+  be submitted while the operator saw success.
+
+  Amended by the ruling on objection O-3; see
+  docs/ADR/0013-canonical-request-digest-for-idempotency.md."
+  [request]
+  (idem/digest {"method" (str/upper-case (name (:request-method request)))
+                "path"   (canonical-path (:uri request))
+                ;; Normalised here rather than relied on downstream: `{"body":
+                ;; null}` and `{"body": {}}` are the same request, and a
+                ;; bodiless mutation must still digest to something stable.
+                "body"   (or (:json-body request) {})}))
+
 (defn- idempotently
   "Run `effect` at most once for this request's `Idempotency-Key`.
 
@@ -172,10 +205,7 @@
    pool
    {:organisation-id organisation-id
     :key             (idem/read-key (get-in request [:headers idempotency-header]))
-    ;; The digest covers the request body and nothing else — not the method,
-    ;; not the path. See docs/ADR/0013-canonical-request-digest-for-idempotency.md,
-    ;; which records the limitation that follows and why it is not fixed here.
-    :digest          (idem/digest (:json-body request))}
+    :digest          (request-digest request)}
    effect))
 
 (defn- respond
