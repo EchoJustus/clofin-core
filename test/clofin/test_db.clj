@@ -181,6 +181,33 @@
                        (or id (random-uuid)) entry-id line-no account-id
                        direction amount-minor currency]))
 
+(defn insert-balanced-entry!
+  "Insert a journal entry with two balancing lines, in one transaction.
+
+  Migration `0008` requires an entry to carry at least two lines, balancing per
+  currency, by commit time — so an entry and its lines can no longer be written
+  by separate autocommitted statements, and a fixture that wants a *valid*
+  entry has to build a whole one.
+
+  That is the point of audit finding F-003 rather than an inconvenience: before
+  `0008`, a fixture could leave a zero-line entry in the ledger and nothing
+  objected. Tests that deliberately probe an *incomplete* entry still do so
+  directly, so the constraint they exercise is visible at the call site."
+  [pool {:keys [id organisation-id debit-account-id credit-account-id
+                amount-minor currency narrative reference-type reference-id]
+         :or {amount-minor 125000 currency "SGD" narrative "Test entry"
+              reference-type "payment-instruction"}}]
+  (let [id (or id (random-uuid))]
+    (db/with-transaction [tx pool]
+      (insert-entry! tx {:id id :organisation-id organisation-id
+                         :narrative narrative :reference-type reference-type
+                         :reference-id reference-id})
+      (insert-line! tx {:entry-id id :line-no 1 :account-id debit-account-id
+                        :direction "debit" :amount-minor amount-minor :currency currency})
+      (insert-line! tx {:entry-id id :line-no 2 :account-id credit-account-id
+                        :direction "credit" :amount-minor amount-minor :currency currency}))
+    id))
+
 ;; ---------------------------------------------------------------------------
 ;; Actors, roles and limits
 ;; ---------------------------------------------------------------------------

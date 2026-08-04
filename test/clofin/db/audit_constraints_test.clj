@@ -351,15 +351,21 @@
       ;; `with-clean-data` has already run for this test, so this observes the
       ;; database exactly as the fixture left it.
     (let [guards (db/query tdb/*pool*
+                           ;; Scoped to `public`. Without it this counts any
+                           ;; same-named table in a scratch schema someone left
+                           ;; behind, and reports a phantom drift.
                            ["select c.relname as table_name, t.tgname as trigger_name,
                                     t.tgenabled::text as enabled
                                from pg_trigger t
                                join pg_class c on c.oid = t.tgrelid
-                              where not t.tgisinternal
+                               join pg_namespace n on n.oid = c.relnamespace
+                              where n.nspname = 'public'
+                                and not t.tgisinternal
                                 and c.relname in ('journal_entry','journal_line','audit_event','approval')
                               order by 1, 2"])]
-      (is (= 9 (count guards))
-          (str "expected 8 append-only guards plus journal_entry_must_balance, found "
+      (is (= 10 (count guards))
+          (str "expected 8 append-only guards plus the two deferred completeness "
+               "triggers (journal_entry_must_be_complete, journal_entry_must_balance), found "
                (pr-str (mapv (juxt :table-name :trigger-name) guards))))
       (doseq [{:keys [table-name trigger-name enabled]} guards]
         (is (contains? #{"O" "A"} enabled)
