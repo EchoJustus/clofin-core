@@ -78,12 +78,20 @@
   (testing "an amount that is not an object at all"
     (is (some? (rejection #(wire/read-money "125000" "amount"))))))
 
-(deftest the-organisation-comes-from-the-body-on-a-write-and-the-query-on-a-read
+(deftest the-stated-organisation-is-read-from-the-body-on-a-write-and-the-query-on-a-read
   (let [id (random-uuid)]
-    (is (= id (wire/read-organisation-id {} {"organisationId" (str id)})))
-    (is (= id (wire/read-organisation-id {:query-params {"organisationId" (str id)}})))
-    (testing "and is never optional, because it is the only tenancy scoping there is"
-      (is (some? (rejection #(wire/read-organisation-id {:query-params {}})))))))
+    (is (= id (wire/read-stated-organisation-id {} {"organisationId" (str id)})))
+    (is (= id (wire/read-stated-organisation-id {:query-params {"organisationId" (str id)}})))
+    (testing "and is now OPTIONAL, because the organisation acted on comes from
+              the authenticated principal — this value is verified against it,
+              not trusted as tenancy scoping (TASK-003)"
+      (is (nil? (wire/read-stated-organisation-id {:query-params {}})))
+      (is (nil? (wire/read-stated-organisation-id {} {})))
+      (is (nil? (wire/read-stated-organisation-id {:query-params {"organisationId" ""}}))))
+    (testing "a value that is present and malformed is still a 400 — it was sent, so it must parse"
+      (is (some? (rejection #(wire/read-stated-organisation-id {} {"organisationId" "nope"}))))
+      (is (some? (rejection #(wire/read-stated-organisation-id
+                              {:query-params {"organisationId" "nope"}})))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Writing

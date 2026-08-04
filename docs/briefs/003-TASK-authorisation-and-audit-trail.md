@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | **Increment** | 4 |
-| **Status** | `IMPLEMENTED` — FEEDBACK-M1 **fully remediated and verified**: F-001/F-002 at `971d0d1`, F-003–F-006 at `900ddee` (migrations `0007`/`0008`); CI green, 456 tests / 2515 assertions. **Merge holds cleared 2026-08-04** — see the [remediation log](../audits/README.md#feedback-m1-remediation-log) |
+| **Status** | `CLOSED` — merged to `main` in PR #5 (`5ff00eb`) 2026-08-04. FEEDBACK-M1 fully remediated and verified: F-001/F-002 at `971d0d1`, F-003–F-006 at `900ddee` (migrations `0007`/`0008`); CI green, 456 tests / 2515 assertions — see the [remediation log](../audits/README.md#feedback-m1-remediation-log) |
 | **Depends on** | TASK-002 — needs the instruction lifecycle to attach approval to |
 | **Base branch** | `feat/payment-instruction-lifecycle` at `f529663` — TASK-002 is implemented but unmerged (PR #4), so **stack on its tip and open the PR against that branch**, not `main`, per AGENT_HANDOFF §1b. When PR #4 merges, retarget to `main` and rebase |
 | **Blocks** | Increment 5 (settlement) |

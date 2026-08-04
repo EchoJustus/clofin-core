@@ -9,10 +9,6 @@
 | **Submitted** | 2026-08-03 · **Revised** 2026-08-03 after the ruling on §5 |
 | **Status** | Complete. All eight objections ruled; the one fix ordered (O-3) is applied. Awaiting audit. |
 
-> **Meta copy.** Ingested 2026-08-03; refreshed after the O-3 fix landed
-> (`f529663`). References to ADR-0013, ADR-0014 and UAT-004 resolve on the
-> submission branch `feat/payment-instruction-lifecycle` (PR #4), not on `meta`.
-
 This is the Worker's completion report and audit request for TASK-002, filed on
 its own feature branch per
 [`../AGENT_HANDOFF.md`](../AGENT_HANDOFF.md) §1b. Objections to the brief are in
@@ -107,8 +103,8 @@ The instrumentation was temporary and is not in the diff.
 | ✅ | New test namespaces in `clofin.test-runner` |
 | ✅ | `DOMAIN_MODEL.md` I10 marked ✅ |
 | ✅ | `COMPLIANCE.md` C-06 📋 → ✅, enforcement points named |
-| ✅ | ADR for the canonical-digest decision — `ADR-0013` |
-| ✅ | UAT script — `UAT-004`, incl. a manual `curl` double-submit *(numbered 004, not 003 — objection O-1)* |
+| ✅ | ADR for the canonical-digest decision — [ADR-0013](../ADR/0013-canonical-request-digest-for-idempotency.md) |
+| ✅ | UAT script — [UAT-004](../uat/UAT-004-idempotent-submission.md), incl. a manual `curl` double-submit *(numbered 004, not 003 — objection O-1)* |
 | ✅ | This report filed; PR opened against `main` |
 | ⚠️ | "Note PR-005 (batch) in ROADMAP" — **I cannot do this.** `ROADMAP.md` lives on `meta` and Workers never write `meta`. Recorded here for Master Control instead; see O-6. |
 
@@ -218,7 +214,7 @@ substance thereafter".
 
 This satisfies AC-3 in both halves and leaves the brief's transition table
 **unmodified**, so AC-10 enumerates exactly what was specified. Recorded in
-`ADR-0014`, which also records the
+[ADR-0014](../ADR/0014-payment-lifecycle-as-data.md), which also records the
 rejected alternatives.
 
 **Ruling:** interpretation confirmed. `PATCH` edits a draft in place and drives
@@ -248,7 +244,7 @@ the fix. **Applied on this branch:**
 |---|---|
 | `clofin.api.payments/request-digest` | Now digests `{"method", "path", "body"}`. The path is normalised the way the router normalises it — empty segments discarded — so a trailing slash on a retry is not a false conflict; the body is normalised to `{}` when absent. |
 | Three regression tests | One key across two instructions' submissions → `409`; one key across a submission and a cancellation of one instruction → `409`; an unchanged retry still replays. **Verified they fail** when `request-digest` is reverted to body-only — 4 failures — so they are regression tests rather than documentation. |
-| `ADR-0013` | §Amendment 1 records the defect, why it was not fixed unilaterally, the ruling, and what "path" means. The body-only form is listed under *Alternatives considered* as rejected, **not deleted** — the record that the boundary existed and was closed is the point. |
+| [ADR-0013](../ADR/0013-canonical-request-digest-for-idempotency.md) | §Amendment 1 records the defect, why it was not fixed unilaterally, the ruling, and what "path" means. The body-only form is listed under *Alternatives considered* as rejected, **not deleted** — the record that the boundary existed and was closed is the point. |
 | `COMPLIANCE.md` C-06 | The *Not covered by this control* boundary this closes is removed. The remaining scope statement is the genuine one: this control stops a **retry** acting twice; it does not detect two deliberately distinct instructions for one invoice, which needs attribute matching and is not designed here. |
 | `ARCHITECTURE.md` §5.4, `api/openapi.yaml` | Both described the body-only scope. Corrected. |
 | Migration `0004-idempotency-digest-scope.sql` | `0003`'s column and table comments describe the superseded scope. `0003` is applied, and an applied migration is immutable — verified: the runner records its checksum and `clofin.db.migrate-test` asserts tampering aborts start-up. A comment is documentation an auditor reads out of the database itself, so a stale one describing a *control* is worth a forward migration. Comments only; no schema change. |
@@ -314,7 +310,7 @@ The brief's validation example is `"type": ".../problems/validation"` with
 the `validation` problem type — so the brief's example is produced verbatim
 while `400` keeps its meaning for a request that could not be *understood*.
 Reasoning and rejected alternatives in
-`ADR-0014` §5.
+[ADR-0014](../ADR/0014-payment-lifecycle-as-data.md) §5.
 
 ---
 
@@ -339,7 +335,7 @@ TASK-003 (increment 4), which inherits directly from this:
 
 - The `approve`, `reject` and `pending-approval → draft` `amend` transitions are
   in the table, tested, and driven by nothing. **Read
-  `ADR-0014` before wiring `amend`** —
+  [ADR-0014](../ADR/0014-payment-lifecycle-as-data.md) before wiring `amend`** —
   `PATCH` deliberately does not drive it, and PR-014's approval-invalidation is
   the missing half.
 - Every `TODO(TASK-003)` marks a place `createdBy` or `organisationId` becomes a

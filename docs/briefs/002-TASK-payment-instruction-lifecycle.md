@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | **Increment** | 3 |
-| **Status** | `IMPLEMENTED` — PR #4 open and green; O-3 fix applied (`f529663`) |
+| **Status** | `CLOSED` — merged to `main` in PR #4 (`31306dd`) 2026-08-04; O-3 fix applied (`f529663`); audited in FEEDBACK-M1 with no new findings |
 | **Depends on** | TASK-001 — needs `clofin.ledger.repository/post-entry!` |
 | **Base branch** | `origin/main` — TASK-001 merged in PR #2 (`f7018a1`), so no stacking is needed; open the PR against `main`, per AGENT_HANDOFF §1b |
 | **Blocks** | TASK-003 |

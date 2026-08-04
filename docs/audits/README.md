@@ -97,13 +97,14 @@ Tracks the consolidated remediation on PR #5's branch
 | **F-005** `payment.approved` on non-final approval | ✅ **remediated & verified** (`be3289e`) | `approval.recorded` emitted for every decision; `payment.approved`/`payment.rejected` emitted **only inside the branch where the payment transition commits** — verified in `approval-service` source. C-01's published evidence query, broken by the vocabulary change, was caught, rewritten to join through `approval`, and is itself now a tested assertion. |
 | **F-006** amendment invalidates approvals with no approval event | ✅ **remediated & verified** (`be3289e`) | `approval.invalidated` in the vocabulary and emitted per invalidated approval in the amendment's transaction; the pre-existing sibling gap (`approval.withdrawn` was invisible) closed with it. |
 
-**Merge posture — HOLDS CLEARED 2026-08-04.** All six findings remediated and
-independently verified; CI green on all three checks at `900ddee`; +32
-tests / +190 assertions over the pre-remediation baseline (456 / 2515 with
-integration). Merge sequence: **PR #4 first (merge commit, not squash — the
-stack shares SHAs), then retarget PR #5 to `main`, let CI re-run, then merge
-PR #5.** After both land, Master Control folds `main` into `meta` and moves
-briefs 002/003 to `CLOSED`.
+**Merge posture — MERGED & CLOSED 2026-08-04.** All six findings remediated and
+independently verified; CI green on all three checks at `900ddee`. Executed:
+**PR #4 merged (`31306dd`, merge commit), PR #5 retargeted to `main` and merged
+(`5ff00eb`)** — SHAs preserved so the retarget stayed conflict-free. `main` folded
+into `meta`; briefs 002 and 003 `CLOSED`. Increment 1 (never separately audited,
+register row 1) is retroactively covered here as the substrate — its findings
+(F-002/F-003/F-004 touch increment-1 code) were remediated on the increment-4
+stack, so it no longer carries an outstanding-audit note.
 
 **Rulings on the Worker's remediation open questions (2026-08-03):**
 

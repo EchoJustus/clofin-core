@@ -16,7 +16,8 @@
             [clofin.organisations.repository :as organisations]
             [clofin.test-db :as tdb]
             [clojure.test :refer [deftest is testing use-fixtures]])
-  (:import [java.time Instant]))
+  (:import [java.util.concurrent CountDownLatch TimeUnit]
+           [java.time Instant]))
 
 (use-fixtures :once tdb/with-pool tdb/with-migrated-schema)
 (use-fixtures :each tdb/with-clean-data)
@@ -548,3 +549,168 @@
       (is (zero? (entry-count))
           "the entry rolled back with the transaction it joined")
       (is (zero? (line-count))))))
+
+;; ---------------------------------------------------------------------------
+;; F-004 — freeze versus post, with the interleaving forced
+;; ---------------------------------------------------------------------------
+;;
+;; `assert-postable!` used to read account status without a lock. Under
+;; `READ COMMITTED` — which is what a posting that names no isolation level
+;; gets — a freeze committing between that read and the entry insert produced a
+;; journal entry posted to a frozen account, with every layer behaving exactly
+;; as written. Audit finding **F-004**, standing lesson **L-8**: validate-then-
+;; write is a race unless the validated rows are locked.
+;;
+;; **The interleaving is forced, not hoped for.** Two threads simply started at
+;; once do not reproduce this: the window between the status read and the insert
+;; is microseconds wide, so a freeze almost never lands inside it. A test that
+;; merely races them passes with or without the fix and proves nothing — I ran
+;; exactly that version against the unfixed code three times and it passed every
+;; time.
+;;
+;; So the freezing transaction holds its lock open across a latch. The posting
+;; therefore arrives while the row is locked and uncommitted, which is precisely
+;; the moment the finding is about:
+;;
+;;   * **with** `for update` the posting blocks, the freeze commits, the posting
+;;     re-reads under its own lock, sees `frozen`, and refuses;
+;;   * **without** it the posting reads the pre-update `active` — `READ
+;;     COMMITTED` hides the uncommitted change — and posts to an account that is
+;;     frozen by the time it commits.
+;;
+;; Verified by reverting the `for update` and watching this test fail.
+
+(deftest f-004-a-posting-cannot-slip-past-an-in-flight-freeze
+  (testing "the posting must serialise behind the freeze rather than reading around it"
+    (let [org      (new-organisation! "meridian-f004")
+          cash     (new-account! org "1100-CLIENT-FUNDS" :asset)
+          payable  (new-account! org "2100-CLIENT-PAYABLE" :liability)
+          pool     tdb/*pool*          ; dynamic bindings do not cross threads
+          entry-id (random-uuid)
+          frozen-not-yet-committed (CountDownLatch. 1)
+          freeze-committed         (CountDownLatch. 1)
+          outcome  (atom nil)]
+
+      ;; The freezing transaction: update, hold the row, let the posting run
+      ;; into it, then commit.
+      (.start (Thread.
+               (fn []
+                 (try
+                   (db/with-transaction [tx pool]
+                     (db/execute! tx ["update ledger_account set status = 'frozen'
+                                        where id = ?" (:id cash)])
+                     (.countDown frozen-not-yet-committed)
+                     ;; Long enough for the posting to reach the account read.
+                     ;; It is holding a row lock throughout.
+                     (Thread/sleep 1500))
+                   (finally (.countDown freeze-committed))))))
+
+      (is (.await frozen-not-yet-committed 10 TimeUnit/SECONDS)
+          "the freeze must have updated the row before the posting starts")
+
+      (reset! outcome
+              (try
+                (post! {:org org} {:from payable :to cash :amount (sgd 125000)
+                                   :occurred-at jan})
+                :posted
+                (catch clojure.lang.ExceptionInfo e
+                  (or (:clofin/error (ex-data e)) :defect))
+                (catch Exception _ :defect)))
+
+      (is (.await freeze-committed 20 TimeUnit/SECONDS))
+
+      (is (= :unprocessable @outcome)
+          (str "the posting must be refused, not slip past the in-flight freeze — got "
+               @outcome))
+      (is (zero? (entry-count))
+          "and nothing may be left behind: an entry here is a posting to a frozen account")
+      (is (= "frozen" (:status (db/query-one tdb/*pool*
+                                             ["select status from ledger_account where id = ?"
+                                              (:id cash)])))))))
+
+(deftest f-004-a-posting-to-an-already-frozen-account-is-refused
+  (testing "the un-raced half, so the forced-interleaving test above cannot pass
+            by never reaching the account at all"
+    (let [{:keys [org cash payable]} (ledger-fixture)]
+      (db/execute! tdb/*pool* ["update ledger_account set status = 'frozen' where id = ?"
+                               (:id cash)])
+      (let [failure (unprocessable #(post! {:org org} {:from payable :to cash
+                                                       :amount (sgd 125000)
+                                                       :occurred-at jan}))]
+        (is (re-find #"do not accept postings" (:message failure)))
+        (is (zero? (entry-count)))))))
+
+(deftest f-004-two-postings-over-the-same-accounts-do-not-deadlock
+  (testing "`order by id` is what makes concurrent postings safe: the same pair
+            of accounts locked in opposite orders would deadlock, and a
+            deadlock surfaces as a defect rather than a domain error"
+    (let [org     (new-organisation! "meridian-f004-deadlock")
+          cash    (new-account! org "1100-CLIENT-FUNDS" :asset)
+          payable (new-account! org "2100-CLIENT-PAYABLE" :liability)
+          pool    tdb/*pool*
+          start   (CountDownLatch. 1)
+          done    (CountDownLatch. 2)
+          results (atom [])]
+      ;; Two transfers in opposite directions, so the two entries name the same
+      ;; two accounts with the line order reversed.
+      (doseq [[from to] [[payable cash] [cash payable]]]
+        (.start (Thread.
+                 (fn []
+                   (try
+                     (.await start)
+                     (dotimes [_ 5]
+                       (repo/post-entry! pool
+                                         {:id (random-uuid)
+                                          :organisation-id (:id org)
+                                          :occurred-at jan
+                                          :narrative "Concurrent transfer"
+                                          :reference {:type :opening-balance :id (random-uuid)}
+                                          :lines (entry/transfer-lines
+                                                  {:from-account-id (:id from)
+                                                   :to-account-id (:id to)
+                                                   :amount (sgd 1000)})}))
+                     (swap! results conj :ok)
+                     (catch Exception e (swap! results conj [:defect (.getMessage e)]))
+                     (finally (.countDown done)))))))
+      (.countDown start)
+      (is (.await done 60 TimeUnit/SECONDS) "both threads must finish")
+      (is (= [:ok :ok] @results)
+          (str "a deadlock would appear here as a PSQLException — got " (pr-str @results)))
+      (is (= 10 (entry-count))))))
+
+;; ---------------------------------------------------------------------------
+;; The guard that keeps F-004's lock real
+;; ---------------------------------------------------------------------------
+
+(deftest f-004-a-repository-write-refuses-a-connection-that-is-in-autocommit
+  (testing "`for update` releases its locks at the end of its transaction. Hand
+            a repository a raw pooled connection — which is in autocommit,
+            because that is how the pool is configured — and every statement
+            becomes its own transaction, so the lock is gone before the insert
+            it was taken for. Every write still succeeds; only atomicity is
+            missing. The failure is invisible, and the SQL still reads as
+            though it were safe."
+    (let [{:keys [org cash payable]} (ledger-fixture)
+          make-entry (fn []
+                       {:id (random-uuid)
+                        :organisation-id (:id org)
+                        :occurred-at jan
+                        :narrative "Autocommit"
+                        :reference {:type :opening-balance :id (random-uuid)}
+                        :lines (entry/transfer-lines {:from-account-id (:id payable)
+                                                      :to-account-id (:id cash)
+                                                      :amount (sgd 125000)})})
+          before (entry-count)]
+      (with-open [conn (.getConnection ^javax.sql.DataSource tdb/*pool*)]
+        (is (.getAutoCommit conn)
+            "the pool hands out autocommit connections — if that ever changes,
+             this hazard has moved rather than gone")
+        (let [t (try (repo/post-entry! conn (make-entry)) nil (catch Exception e e))]
+          (is (some? t) "a pooled connection is not a transaction, and is refused as one")
+          (is (re-find #"must run inside a transaction" (ex-message ^Exception t)))))
+      (is (= before (entry-count)) "and nothing was written on the way to the refusal")
+
+      (testing "the same entry posts cleanly when given a real transaction"
+        (db/with-transaction [tx tdb/*pool*]
+          (is (some? (repo/post-entry! tx (make-entry)))))
+        (is (= (inc before) (entry-count)))))))

@@ -13,7 +13,8 @@
 
   A payment client branches on that distinction: the first class is its own
   bug, the second is a business outcome it must show to a human."
-  (:require [clofin.api.wire :as wire]
+  (:require [clofin.api.principal :as principal]
+            [clofin.api.wire :as wire]
             [clofin.error :as err]
             [clofin.http.response :as resp]
             [clofin.ledger.account :as account]
@@ -71,6 +72,9 @@
   [pool]
   (fn [request]
     (let [body  (wire/read-object request)
+          ;; Posting a journal entry moves money in the ledger, so it is a
+          ;; `controller` right rather than an operator one (C-08).
+          [_ organisation-id] (principal/for-request pool request :entry/post body)
           lines (read-lines body)
           _     (assert-balanced! lines)
           reference (get body "reference")
@@ -80,7 +84,7 @@
           posted (ledger/post-entry!
                   pool
                   {:id              (random-uuid)
-                   :organisation-id (wire/read-organisation-id request body)
+                   :organisation-id organisation-id
                    :occurred-at     (wire/read-instant-field body "occurredAt")
                    :narrative       (wire/read-string-field body "narrative")
                    :reference       {:type (wire/read-enum (get reference "type") "reference.type"
@@ -95,7 +99,7 @@
   "`GET /journal-entries/:id` — the entry a `201` Location header points at."
   [pool]
   (fn [request]
-    (let [organisation-id (wire/read-organisation-id request)
+    (let [[_ organisation-id] (principal/for-request pool request :entry/read)
           id (wire/read-uuid (get-in request [:path-params :id]) "id")]
       (if-let [found (ledger/find-entry pool organisation-id id)]
         (resp/ok (wire/entry->wire found))

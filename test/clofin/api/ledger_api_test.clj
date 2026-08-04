@@ -30,14 +30,29 @@
 (defn- handler []
   (system/handler {:config {:environment :test} :pool tdb/*pool*}))
 
+(def ^:private current-actor
+  "The actor every call authenticates as, unless one is named per request.
+
+  Set by `new-organisation!`, which seeds a `controller` for the organisation it
+  creates. Ledger operations are a controller's: opening an account and posting
+  a journal entry both move money in the ledger (C-08). There is no
+  `insert-superuser!` to reach for, deliberately."
+  (atom nil))
+
 (defn- call
-  "Issue a request and decode the response body."
-  [method uri & {:keys [body query]}]
-  (let [response ((handler)
+  "Issue a request and decode the response body.
+
+  `:actor` names the actor to authenticate as; `false` sends no actor header,
+  which is how the unauthenticated cases are exercised."
+  [method uri & {:keys [body query actor]}]
+  (let [;; nil means "the fixture's actor"; false means "send no actor header".
+        actor (if (nil? actor) @current-actor actor)
+        response ((handler)
                   (cond-> {:request-method method
                            :uri uri
                            :headers {}}
                     query (assoc :query-string query)
+                    actor (assoc-in [:headers "x-actor-id"] (str actor))
                     body  (-> (assoc-in [:headers "content-type"] "application/json")
                               (assoc :body (ByteArrayInputStream.
                                             (.getBytes (json/write-str body)
@@ -58,10 +73,21 @@
 ;; ---------------------------------------------------------------------------
 
 (defn- new-organisation!
+  "Register an organisation and seed the controller these tests act as.
+
+  `POST /organisations` is the bootstrap operation and is unauthenticated —
+  there is no actor until an organisation exists to hold one. Everything after
+  it authenticates."
   ([] (new-organisation! "meridian"))
   ([short-name]
-   (created! "/organisations" {"legalName" "Meridian Freight Holdings Pte Ltd"
-                               "shortName" short-name})))
+   (let [org (created! "/organisations" {"legalName" "Meridian Freight Holdings Pte Ltd"
+                                         "shortName" short-name})]
+     (reset! current-actor
+             (tdb/insert-actor! tdb/*pool*
+                                {:organisation-id (java.util.UUID/fromString (get org "id"))
+                                 :display-name "Controller"
+                                 :roles [:controller]}))
+     org)))
 
 (defn- new-account!
   [org code type & {:keys [currency] :or {currency "SGD"}}]
@@ -156,9 +182,24 @@
     (is (= 404 status) "the same answer a non-existent id receives")
     (is (= "https://clofin.dev/problems/not-found" (get json "type")))))
 
-(deftest a-request-without-an-organisation-is-rejected
-  (testing "the organisation is not optional just because it is not yet authenticated"
-    (is (= 400 (:status (call :get "/accounts"))))))
+(deftest a-request-without-an-actor-is-rejected
+  (testing "the organisation now comes from the authenticated principal (TASK-003),
+            so a request with no actor cannot be scoped to anything and is 401"
+    (ledger-fixture)
+    (is (= 401 (:status (call :get "/accounts" :actor false))))
+    (is (= 401 (:status (call :get "/accounts" :actor (random-uuid))))
+        "an unknown actor is 401, not 404 — confirming which UUIDs name real
+         actors would let anyone able to guess one enumerate the actor table"))
+
+  (testing "and organisationId is now optional, because the principal supplies it"
+    (is (= 200 (:status (call :get "/accounts")))))
+
+  (testing "while a stated organisation that is not the principal's is refused
+            rather than ignored"
+    (let [mine @current-actor
+          theirs (new-organisation! "kestrel-scoping")]
+      (is (= 403 (:status (call :get "/accounts" :actor mine
+                                :query (str "organisationId=" (get theirs "id")))))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Posting — AC-1, AC-2
@@ -253,8 +294,13 @@
 
 (deftest ac-7-an-entry-referencing-another-organisations-account-is-422
   (let [{:keys [org payable]} (ledger-fixture)
+        ours    @current-actor
         theirs  (new-organisation! "kestrel")
         outside (new-account! theirs "9100-THEIR-FUNDS" "asset")
+        ;; Back to our own controller: the point of this test is an account in
+        ;; *another* organisation reached by an actor legitimately acting in
+        ;; this one, not a caller acting for a tenant it may not.
+        _       (reset! current-actor ours)
         {:keys [status json]}
         (call :post "/journal-entries"
               :body (transfer org {:from payable :to outside

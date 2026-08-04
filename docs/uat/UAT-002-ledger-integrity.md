@@ -229,16 +229,96 @@ movement, and is prevented.
 
 ---
 
-## Teardown
+### Step 10 — Try to empty the journal with `TRUNCATE`
+
+`UPDATE` and `DELETE` were refused above. `TRUNCATE` is a **third** verb, with
+its own trigger event and its own privilege — and until migration `0007` it was
+not covered, so it emptied guarded tables in one statement past every guard
+that had just refused the other two. That was audit finding **F-002**, and this
+step exists so nobody has to take on trust that it is closed.
 
 ```sql
-truncate journal_line, journal_entry, ledger_account, organisation cascade;
+truncate journal_line, journal_entry cascade;
 ```
 
-Note that `truncate` succeeds where `delete` failed: the append-only triggers
-are `for each row` on update and delete. This is deliberate — a schema-level
-reset for test environments must remain possible without weakening the
-row-level control that protects production data.
+**Expected:** `ERROR: Table journal_line is append-only: … never by truncate`.
+
+**Pass criterion:** the ledger cannot be emptied, by any of the three verbs.
+
+> **Earlier versions of this script had it the other way round.** The teardown
+> below used to say that `truncate` succeeding where `delete` failed was
+> "deliberate — a schema-level reset for test environments must remain possible
+> without weakening the row-level control". That sentence certified the defect
+> as a design choice, in the acceptance evidence, signed off. It is recorded
+> here rather than quietly deleted, because a UAT script that once blessed a
+> hole is itself a finding worth remembering.
+
+---
+
+### Step 11 — An entry with no lines at all
+
+Step 2 proved that an *unbalanced* entry is refused. This step asks the
+question one level below it: what refuses an entry with nothing to balance?
+
+```sql
+begin;
+insert into journal_entry
+  (id, organisation_id, occurred_at, narrative, reference_type, reference_id)
+values ('cccccccc-cccc-cccc-cccc-cccccccccccc',
+        '11111111-1111-1111-1111-111111111111',
+        now(), 'No lines', 'payment_instruction',
+        '22222222-2222-2222-2222-222222222222');
+commit;
+```
+
+**Expected:** `COMMIT` fails with `Journal entry cccccccc-… has 0 line(s): a
+double-entry record needs at least two`.
+
+Then repeat with a single line attached, and commit again:
+
+**Expected:** `COMMIT` fails with `… has 1 line(s): …`.
+
+**Pass criterion:** both are refused, at `COMMIT`.
+
+> **Why this step exists.** Until migration `0008` the zero-line insert
+> *succeeded*. The balance guard fires on `journal_line`, so an entry with no
+> lines fired it zero times — zero debits do equal zero credits, and nothing
+> ever ran. The journal could hold a record that was not double-entry at all,
+> and every balance query would agree it was fine. Audit finding **F-003**. A
+> guard that cannot see the case it is meant to judge is worth checking for by
+> hand, which is what this step is.
+
+**Confirm the deferral still works** — an entry that is incomplete *during* a
+transaction is still legal, because the foreign key forces the entry to be
+written before its lines:
+
+```sql
+begin;
+insert into journal_entry (…) values ('dddddddd-…', …);   -- 0 lines so far
+insert into journal_line  (…) values (…, 'debit',  10000);
+insert into journal_line  (…) values (…, 'credit', 10000);
+commit;
+```
+
+**Expected:** succeeds. Only the *commit* is judged, never the intermediate
+state.
+
+---
+
+## Teardown
+
+The journal cannot be truncated, and that is the point of step 10. Reset the
+whole environment instead:
+
+```bash
+make db-reset
+```
+
+This drops and recreates the database and re-runs every migration, so the
+guards come back armed. It is a schema-level operation performed by the
+database owner — which is precisely the residual risk
+[`COMPLIANCE.md` §4](../COMPLIANCE.md) names: a trigger is enforced by the
+table, and the table's owner decides what the table is.
 
 ---
 
@@ -255,6 +335,8 @@ row-level control that protects production data.
 | 7 Unknown currency refused | | | |
 | 8 Reversal restores balance | | | |
 | 9 Double reversal refused | | | |
+| 10 `TRUNCATE` refused | | | |
+| 11 Zero-line and one-line entries refused | | | |
 
 **Overall:** Pass / Fail
 **Executed by:** ____________ **Date:** ____________ **Build:** ____________

@@ -18,20 +18,23 @@ and this table is stale.
 |---|---|---|---|---|
 | 1 | Foundation and ledger core | — (predates the brief protocol) | ✅ done — merged to `main` at `3bde834` (PR #1; milestone audit waived, see audits register) | green, 303 assertions |
 | 2 | Ledger persistence and account API | [TASK-001](briefs/001-TASK-ledger-persistence-and-account-api.md) | ✅ `IMPLEMENTED` — merged to `main` in PR #2 (`f7018a1`); `FEEDBACK-001` outstanding | green, 757 assertions |
-| 3 | Payment lifecycle and idempotency | [TASK-002](briefs/002-TASK-payment-instruction-lifecycle.md) | 🔨 `IMPLEMENTED` — PR #4 open and green, O-3 fix applied; audit deferred to post-TASK-003 batch | green, 1547+ assertions |
-| 4 | Authorisation, maker–checker, audit | [TASK-003](briefs/003-TASK-authorisation-and-audit-trail.md) | 🔨 `IMPLEMENTED` — FEEDBACK-M1 fully remediated & verified (`900ddee`, migrations `0007`/`0008`); **merge holds cleared**, sequence: PR #4 → retarget → PR #5 | green, 2515 assertions |
+| 3 | Payment lifecycle and idempotency | [TASK-002](briefs/002-TASK-payment-instruction-lifecycle.md) | ✅ `CLOSED` — merged to `main` in PR #4 (`31306dd`); audited in FEEDBACK-M1, no new findings | green, 1547+ assertions |
+| 4 | Authorisation, maker–checker, audit | [TASK-003](briefs/003-TASK-authorisation-and-audit-trail.md) | ✅ `CLOSED` — merged to `main` in PR #5 (`5ff00eb`); FEEDBACK-M1 fully remediated & verified (migrations `0007`/`0008`) | green, 2515 assertions |
 | 4c | Audit coverage completion (C-05 unqualified) | [TASK-005](briefs/005-TASK-audit-coverage-completion.md) | 📋 `READY` — stacks on PR #5's branch | — |
 | 5 | Settlement simulation | [TASK-004](briefs/004-TASK-settlement-simulation.md) | 📋 `READY` — stacks on PR #5's branch; DDL validated per L-3 | — |
 | 6–9 | Reconciliation onwards | not yet briefed | 💭 later | — |
 
-**Controls: enforced on the stack, not yet on `main`.** C-06 (idempotency) is
-enforced on PR #4's branch; C-01, C-02, C-05 and C-08 on PR #5's, stacked above
-it. **Nothing in that list is on `main` until those PRs merge**, so the honest
-statement today is that `main` specifies maker–checker and idempotency and the
-open stack implements them. C-05 is ✅ with an explicit scope limit: payment and
-approval writes emit audit events; ledger and organisation writes do not yet
-(003-REQ §6). Do not describe any of this more generously in a README, a PR
-description or a conversation.
+**Controls now enforced on `main`.** As of 2026-08-04 the increment-3/4 stack is
+merged (PR #4 `31306dd`, PR #5 `5ff00eb`): C-06 (idempotency), C-01 (segregation
+of duties), C-02 (dual authorisation), C-05 (attributable audit trail) and C-08
+(least privilege) are enforced on `main`, and the Milestone 1 audit's two
+blocking and four should-fix findings are all remediated and verified there.
+**Two honesty caveats still stand:** C-05 covers payment and approval writes,
+**not** ledger and organisation writes (that gap is [TASK-005](briefs/005-TASK-audit-coverage-completion.md),
+`READY`); and the append-only guarantee binds the application but **not** a
+schema-owner adversary — the runtime role split is named debt in COMPLIANCE §4.
+C-07 (screening) remains 📋. Do not describe any of this more generously in a
+README, a PR description or a conversation.
 
 ---
 

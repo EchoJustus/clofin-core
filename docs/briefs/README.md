@@ -38,11 +38,11 @@ table and a brief disagree, the brief on `origin/meta` wins.
 
 | Brief | Increment | Status | Depends on | Requirements | Scope |
 |---|---|---|---|---|---|
-| [001 — Ledger persistence and account API](001-TASK-ledger-persistence-and-account-api.md) | 2 | `IMPLEMENTED` — merged in PR #2; **audited** (FEEDBACK-M1: F-002/F-003/F-004, actioned via the stack) | — | PR-020…024 | Medium |
-| [002 — Payment instruction lifecycle and idempotency](002-TASK-payment-instruction-lifecycle.md) | 3 | `IMPLEMENTED` — PR #4 green, O-3 applied; **audited** (FEEDBACK-M1: no new findings); **cleared to merge** | 001 ✅ merged | PR-001…005, PR-040…044 | Large |
-| [003 — Authorisation, maker–checker and audit trail](003-TASK-authorisation-and-audit-trail.md) | 4 | `IMPLEMENTED` — FEEDBACK-M1 fully remediated & verified (`900ddee`); **cleared to merge** after PR #4 | 002 `IMPLEMENTED`, unmerged | PR-010…015, PR-070…075 | Large |
-| [004 — Settlement simulation](004-TASK-settlement-simulation.md) | 5 | `READY` — stacks on PR #5's branch at `6f58857`; DDL validated per L-3 | 003 `IMPLEMENTED`, unmerged | PRD §5.3 | Large |
-| [005 — Audit coverage completion](005-TASK-audit-coverage-completion.md) | 4 (completion) | `READY` — stacks on PR #5's branch at `6f58857`; closes 003-REQ §6 debt | 003 `IMPLEMENTED`, unmerged | PR-072, C-05 | Small |
+| [001 — Ledger persistence and account API](001-TASK-ledger-persistence-and-account-api.md) | 2 | `CLOSED` — merged in PR #2; **audited** (FEEDBACK-M1: F-002/F-003/F-004, actioned via the increment-4 stack) | — | PR-020…024 | Medium |
+| [002 — Payment instruction lifecycle and idempotency](002-TASK-payment-instruction-lifecycle.md) | 3 | `CLOSED` — merged in PR #4 (`31306dd`); **audited** (FEEDBACK-M1: no new findings) | 001 ✅ | PR-001…005, PR-040…044 | Large |
+| [003 — Authorisation, maker–checker and audit trail](003-TASK-authorisation-and-audit-trail.md) | 4 | `CLOSED` — merged in PR #5 (`5ff00eb`); FEEDBACK-M1 fully remediated & verified | 002 ✅ | PR-010…015, PR-070…075 | Large |
+| [004 — Settlement simulation](004-TASK-settlement-simulation.md) | 5 | `READY` — stacks on `main`; DDL validated per L-3 | 003 ✅ merged | PRD §5.3 | Large |
+| [005 — Audit coverage completion](005-TASK-audit-coverage-completion.md) | 4 (completion) | `READY` — stacks on `main`; closes 003-REQ §6 debt | 003 ✅ merged | PR-072, C-05 | Small |
 
 Sequencing follows **product relevance and regulatory risk**, not implementation
 convenience:
@@ -82,4 +82,8 @@ ask "which one?" or "where does this go?", answer it in the brief first.
 Completed briefs are kept, not deleted. They are the record of how each
 increment was specified, which is as useful as the code that resulted.
 
-_(None yet. Increment 1 was the foundation and predates this protocol.)_
+| Brief | Increment | Merged | Audit |
+|---|---|---|---|
+| [001 — Ledger persistence and account API](001-TASK-ledger-persistence-and-account-api.md) | 2 | PR #2 (`f7018a1`) | FEEDBACK-M1 — F-002/F-003/F-004, all remediated via the increment-4 stack |
+| [002 — Payment instruction lifecycle and idempotency](002-TASK-payment-instruction-lifecycle.md) | 3 | PR #4 (`31306dd`) | FEEDBACK-M1 — no new findings; eight brief objections ruled at dispatch |
+| [003 — Authorisation, maker–checker and audit trail](003-TASK-authorisation-and-audit-trail.md) | 4 | PR #5 (`5ff00eb`) | FEEDBACK-M1 — F-001/F-002 blocking + F-005/F-006, all remediated & verified; four brief objections ruled at dispatch |
