@@ -5,6 +5,8 @@
   |---|---|---|---|
   | Release | `1300-IN-TRANSIT` | `1100-CLIENT-FUNDS` | 1,250.00 |
   | Fee     | `2100-CLIENT-PAYABLE` | `4100-FEE-INCOME` | 5.00 |
+  | Settlement | `2100-CLIENT-PAYABLE` | `1300-IN-TRANSIT` | 1,250.00 |
+  | Return  | `1100-CLIENT-FUNDS` | `1300-IN-TRANSIT` | 1,250.00 |
 
   Each row is one entry, balancing on its own. A template that produced one
   combined entry would make the fee unreadable on a statement and unreversible
@@ -157,3 +159,70 @@
           :fee-income     "4100-FEE-INCOME"
           :scheme-charges "5100-SCHEME-CHARGES"}
          posting/account-roles)))
+
+;; ---------------------------------------------------------------------------
+;; Finality — ADR-0018
+;; ---------------------------------------------------------------------------
+
+(defn- direction-of
+  "The direction a role's account is posted in, or nil when it is untouched."
+  [lines role]
+  (some (fn [l] (when (= (get accounts role) (:account-id l)) (:direction l))) lines))
+
+(deftest settlement-extinguishes-the-obligation-against-the-in-transit-leg
+  (testing "the money is gone: the in-transit asset is credited away and what CloFin owed
+            the client is debited down"
+    (let [lines (posting/settlement-lines accounts (money/of "SGD" 125000))]
+      (is (= :debit  (direction-of lines :client-payable)))
+      (is (= :credit (direction-of lines :in-transit)))
+      (is (nil? (direction-of lines :client-funds))
+          "client funds already moved at release; touching it again would double-count")
+      (is (entry/balanced? lines)))))
+
+(deftest a-return-is-the-exact-mirror-of-the-release
+  (testing "the value movement did not happen, so the accounting that said it had is undone —
+            and the client's claim never moved, so no liability is touched"
+    (let [release (posting/release-lines accounts (money/of "SGD" 125000))
+          return  (posting/return-lines accounts (money/of "SGD" 125000))]
+      (is (= :debit  (direction-of release :in-transit)))
+      (is (= :credit (direction-of return  :in-transit)))
+      (is (= :credit (direction-of release :client-funds)))
+      (is (= :debit  (direction-of return  :client-funds)))
+      (is (nil? (direction-of return :client-payable))
+          "CloFin owed the client before the release and owes them still")
+      (is (entry/balanced? return)))))
+
+(deftest settlement-and-return-differ-in-more-than-direction
+  (testing "a return that were merely `the settlement backwards` would credit the payable,
+            which would discharge an obligation that is still owed"
+    (let [amount (money/of "SGD" 125000)]
+      (is (not= (set (map (juxt :account-id :direction)
+                          (posting/settlement-lines accounts amount)))
+                (set (map (juxt :account-id :direction)
+                          (posting/return-lines accounts amount))))))))
+
+(deftest a-finality-entry-references-the-instruction-that-caused-it
+  (let [instruction {:id (random-uuid) :organisation-id (random-uuid)
+                     :creditor-name "Pacific Rim Logistics Pte Ltd"
+                     :amount (money/of "SGD" 125000)}
+        opts {:accounts accounts :entry-id (random-uuid) :occurred-at occurred-at}]
+    (doseq [[label e] [["settlement" (posting/settlement-entry instruction opts)]
+                       ["return" (posting/return-entry instruction opts)]]]
+      (is (= {:type :payment-instruction :id (:id instruction)} (:reference e))
+          (str label " must be explainable back to the intent that caused it (I7)"))
+      (is (entry/balanced? (:lines e)))
+      (is (seq (:narrative e)) (str label " needs a narrative a human can read")))))
+
+(deftest finality-refuses-a-non-positive-amount
+  (doseq [[label f] [["settlement" posting/settlement-lines] ["return" posting/return-lines]]]
+    (is (thrown? Exception (f accounts (money/of "SGD" 0))) (str label " of zero"))
+    (is (thrown? Exception (f accounts (money/of "SGD" -1))) (str label " of a negative amount"))))
+
+(deftest finality-names-the-account-it-is-missing
+  (testing "an organisation that has not opened an in-transit account is told which code"
+    (is (thrown-with-msg? Exception #"1300-IN-TRANSIT"
+                          (posting/settlement-lines (dissoc accounts :in-transit)
+                                                    (money/of "SGD" 1))))
+    (is (thrown-with-msg? Exception #"2100-CLIENT-PAYABLE"
+                          (posting/settlement-lines (dissoc accounts :client-payable)
+                                                    (money/of "SGD" 1))))))

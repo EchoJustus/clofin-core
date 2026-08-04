@@ -133,7 +133,8 @@ trusting review to remember
 ([ADR-0012](docs/ADR/0012-repository-seam-and-posting-time-validation.md)).
 
 **A `service` namespace owns no connection either.** `clofin.payments.approval-service`,
-`clofin.ledger.service` and `clofin.organisations.service` sequence repositories
+`clofin.ledger.service`, `clofin.organisations.service` and
+`clofin.settlement.service` sequence repositories
 inside a transaction the *caller* owns, and require no `clofin.db.*` namespace at
 all. That is not tidiness: a service able to open its own transaction is a
 service able to write an audit event outside the change it describes, which is
@@ -217,7 +218,12 @@ status. They are held as named sets beside the table rather than as conditionals
 in a handler, so that "what does status control?" has one answer and one file
 ([ADR-0014](docs/ADR/0014-payment-lifecycle-as-data.md)).
 
-Built so far: `submit` and `cancel` have endpoints. The rest are in the table,
+Built so far: `submit`, `cancel`, `approve`, `reject`, `amend`, `release`,
+`settle` and `return` all have drivers. **`fail` does not, deliberately** — a
+settlement item's outcome is settled, returned or timed-out, a scheme failure
+that sends the money back *is* a return, and an unknown outcome leaves the
+instruction `released` because CloFin cannot claim the payment did not happen.
+The arrow stays in the table; see 004-REQ objection O-1. The rest are in the table,
 tested, and driven by nothing until approval (TASK-003) and settlement
 (increment 5) arrive.
 
@@ -297,7 +303,45 @@ rather than described — `clofin.audit/event` refuses a null actor for every
 action outside `clofin.audit/bootstrap-actions`, which contains exactly one term
 ([ADR-0017](docs/ADR/0017-bootstrap-identity-for-organisation-creation.md)).
 
-### 5.6 Multi-tenancy and access
+### 5.6 Settlement
+
+Approved payments are grouped into a **settlement batch** — one scheme, one
+currency, one value date — released to that scheme, and carried to a terminal
+outcome. The scheme is **always simulated**: `SIM-RTGS` and `SIM-ACH` are the
+only names a database check constraint permits, and outcomes enter the system
+only through `POST /settlement-batches/{id}/scheme-responses`. There is no
+listener, no file drop and no correspondent.
+
+**A release posts** ([ADR-0018](docs/ADR/0018-release-posts-to-settlement-in-transit.md)).
+Value moves from pooled client funds into `1300-IN-TRANSIT` at submission and
+leaves it at finality, so the balance of that one account is CloFin's clearing
+exposure at any instant — readable from the ledger with no knowledge of the
+settlement tables. A timeout posts nothing, because the value is already
+where value of unknown fate belongs.
+
+**A batch's status is derived** from its items' outcomes, never set — the same
+doctrine that makes a balance an aggregation over the journal. The derivation is
+stated once, in `clofin.settlement.batch`, and the repository records what that
+function returned.
+
+The failure modes are the increment, not its edge cases:
+
+- **Duplicate responses.** Every response is stored verbatim under a replay key
+  `(batch, instruction, kind, reference)`. A second delivery does no work — no
+  posting, no audit event, no transition — and the first row stays as the
+  evidence that a duplicate arrived.
+- **Out-of-order responses.** A genuinely new response for an item that already
+  has an outcome is a conflict, not a silent overwrite.
+- **Timeouts.** An unanswered item is swept to `timed-out`, which means
+  **unknown, not failed**: the instruction stays `released`, and a partial unique
+  index makes it un-re-batchable until a late `timeout-resolution` says what
+  really happened. Treating unknown as failed and re-batching is how a payment
+  gets made twice, which is the single failure this context exists to prevent.
+
+The sweep is an explicit operator call rather than a daemon — a timeout that
+fires itself is one nobody can point at afterwards.
+
+### 5.7 Multi-tenancy and access
 
 Every business record carries an organisation identifier, and the organisation a
 request acts on comes from the **authenticated actor**, never from the request.
@@ -337,10 +381,13 @@ ledger:
   that the entry has at least two lines **and** balances — the first alone is
   vacuous for an entry with no lines
 - Unique constraints backing idempotency keys
-- Refused `UPDATE`, `DELETE` and `TRUNCATE` on journal, approval and audit
-  tables, by trigger rather than by revoked privilege — with the limits of that
-  choice stated in §5.5 and carried as debt in
+- Refused `UPDATE`, `DELETE` and `TRUNCATE` on journal, approval, audit and
+  scheme-response tables, by trigger rather than by revoked privilege — with the
+  limits of that choice stated in §5.5 and carried as debt in
   [COMPLIANCE §4](docs/COMPLIANCE.md)
+- A partial unique index making it impossible for one payment instruction to be
+  in two *live* settlement memberships — the no-double-settlement guard, in the
+  schema so it binds a fix-up script as well as a handler
 
 Migrations are **forward-only**, numbered SQL files in
 `resources/migrations/`, applied by a small runner that records applied

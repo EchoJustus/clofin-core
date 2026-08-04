@@ -85,6 +85,23 @@
                "segregation of duties cannot then depend on who happens to "
                "hold which role.")))))
 
+(deftest no-single-role-both-approves-and-settles
+  (testing "C-01, AC-10: approving a payment and pushing it out of the door are the last two
+            gates it passes, and one actor holding both is a maker–checker boundary with the
+            same person on either side of the final step"
+    (doseq [[role granted] model/role-permissions]
+      (is (not (and (contains? granted :payment/approve)
+                    (contains? granted :settlement/execute)))
+          (str "role " role " can both approve a payment and settle it — the approval it "
+               "gave would be the only check on money it then released.")))))
+
+(deftest settlement-is-a-controller-right-and-only-a-controller-right
+  (testing "stated as a value so a grant added elsewhere is visible here rather than in an audit"
+    (is (= #{:controller}
+           (set (keep (fn [[role granted]]
+                        (when (contains? granted :settlement/execute) role))
+                      model/role-permissions))))))
+
 (deftest the-auditor-role-is-read-only
   (testing "an auditor who can change the thing being audited is not an auditor"
     (doseq [permission (:auditor model/role-permissions)]
