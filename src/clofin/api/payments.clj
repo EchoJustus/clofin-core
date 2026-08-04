@@ -404,7 +404,7 @@
                  (err/fail! :field-validation "Request failed validation"
                             (by-member (zipmap rejected (repeat "cannot be amended")))))
                (when (seq unreadable) (invalid-fields! unreadable))
-               (let [{:keys [before after]}
+               (let [{:keys [before after invalidated-approvals]}
                      (wire-named
                       #(payments/amend! tx organisation-id id
                                         (select-keys values instruction/amendable-fields)
@@ -417,6 +417,25 @@
                                           :before          (audit/instruction-subject before)
                                           :after           (audit/instruction-subject after)
                                           :correlation-id  (:correlation-id request)})
+                 ;; One event per approval that stopped standing (F-006).
+                 ;; Invalidation is a state change on a real record, and until
+                 ;; the finding it produced nothing an auditor could read: the
+                 ;; trail said the payment had been amended and left the reader
+                 ;; to infer, from a column, that somebody's approval had been
+                 ;; revoked — without saying who caused it or under which
+                 ;; correlation id.
+                 ;;
+                 ;; Same `tx` as the amendment above, so the payment event and
+                 ;; every invalidation event survive, or roll back, together.
+                 (doseq [{:keys [before after]} invalidated-approvals]
+                   (audit-store/record! tx {:organisation-id organisation-id
+                                            :actor-id        (:id actor)
+                                            :action          "approval.invalidated"
+                                            :subject-type    "approval"
+                                            :subject-id      (:id before)
+                                            :before          (audit/approval-subject before)
+                                            :after           (audit/approval-subject after)
+                                            :correlation-id  (:correlation-id request)}))
                  {:status 200 :body (wire/instruction->wire after)}))))]
       (respond outcome))))
 

@@ -352,9 +352,12 @@
            reverting? (and (not (state/mutable? (:status existing)))
                            (state/permitted? (:status existing) :amend))
            _         (when-not reverting? (state/assert-mutable! (:status existing)))
+           ;; `[{:before … :after …} …]`, one per approval, so the caller can
+           ;; write an `approval.invalidated` event for each (F-006). A count
+           ;; was all this used to return, and a count cannot be audited.
            invalidated (if reverting?
                          (authz/invalidate-approvals-for! tx id)
-                         0)
+                         [])
            reverted  (if reverting?
                        (assoc existing :status (state/transition (:status existing) :amend))
                        existing)
@@ -374,7 +377,11 @@
                      organisation-id id])
        {:before existing
         :after  amended
-        :approvals-invalidated invalidated}))))
+        ;; The pairs themselves, not just how many. The handler audits each one
+        ;; on this same transaction, so an amendment and every invalidation it
+        ;; caused commit together or not at all (C-05, PR-075).
+        :invalidated-approvals invalidated
+        :approvals-invalidated (count invalidated)}))))
 
 (defn transition!
   "Apply `event` to an instruction. Returns `{:before … :after …}`.

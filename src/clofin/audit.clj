@@ -44,7 +44,21 @@
 
   Named `<subject>.<past-tense-verb>`: the event is a statement about something
   that has already happened, and phrasing it as an imperative would invite
-  reading the table as a queue of work."
+  reading the table as a queue of work.
+
+  **An action named after a state transition is emitted only in the transaction
+  where that transition commits** (standing lesson **L-7**). That rule is what
+  separates `approval.recorded` from `payment.approved`: recording an approval
+  and approving a payment are different events, and for a two-approval
+  threshold the first happens twice and the second once. Until audit finding
+  **F-005** they were the same term, so an auditor filtering
+  `action = 'payment.approved'` saw two events for a payment approved once, the
+  earlier of them describing a payment that was still `pending-approval` —
+  with before and after digests that were identical, because nothing had
+  changed.
+
+  A decision, a partial step and a state change each get their own term. When
+  adding one, ask which of the three it is before naming it."
   (into (sorted-set)
         ["payment.created"
          "payment.submitted"
@@ -52,6 +66,13 @@
          "payment.cancelled"
          "payment.approved"
          "payment.rejected"
+         ;; The decision itself, one per approver, whether or not it moves the
+         ;; payment. Subject is the approval, not the payment.
+         "approval.recorded"
+         ;; An approval that stopped standing because the instruction was
+         ;; amended (PR-014). A real state change on a real record, and until
+         ;; finding F-006 it emitted nothing at all.
+         "approval.invalidated"
          "approval.withdrawn"]))
 
 (def subject-types

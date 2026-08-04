@@ -197,16 +197,45 @@
                 id]))
 
 (defn invalidate-approvals-for!
-  "Invalidate every live approval on an instruction (PR-014). Returns the count.
+  "Invalidate every live approval on an instruction (PR-014).
+
+  Returns `[{:before … :after …} …]`, one pair per approval invalidated, so the
+  caller can write an audit event **per approval**. A bare count was what this
+  returned until audit finding **F-006**: the rows changed state and the trail
+  recorded only that the payment had been amended, so an evidence pack could
+  show an approval that had stopped standing without saying who caused it, when,
+  or under which correlation id.
+
+  The rows are selected **`for update` before the update**, not merely updated
+  in bulk. Two reasons, and the second is the one that matters:
+
+  1. The `before` value has to be read anyway to digest it, and reading it
+     unlocked would be a value that could change before the write it describes
+     — the same validate-then-write race lesson **L-8** names.
+  2. `now()` is the transaction timestamp, so every row invalidated here shares
+     one `invalidated_at`. Selecting first means the events describe exactly the
+     rows that were changed, not whatever matched a second time.
 
   Called when an instruction is amended. The approvals stay in the table and
   stop counting: an approver agreed to *those* values, and after an amendment
   those are not the values on the instruction any more."
   [source instruction-id]
-  (db/execute! source
-               ["update approval set invalidated_at = now()
-                  where instruction_id = ? and invalidated_at is null"
-                instruction-id]))
+  (let [live (mapv row->approval
+                   (db/query source
+                             [(str approval-columns
+                                   "where instruction_id = ? and invalidated_at is null
+                                     order by decided_at, id
+                                     for update")
+                              instruction-id]))]
+    (when (seq live)
+      (db/execute! source
+                   ["update approval set invalidated_at = now()
+                      where instruction_id = ? and invalidated_at is null"
+                    instruction-id]))
+    (mapv (fn [{:keys [id] :as before}]
+            {:before before
+             :after  (find-approval source id)})
+          live)))
 
 ;; ---------------------------------------------------------------------------
 ;; Seeding

@@ -150,20 +150,47 @@
         moved       (when (:completes? outcome)
                       (payments/transition! tx organisation-id instruction-id event))
         after       (if moved (:after moved) instruction)]
-    ;; Same transaction as everything above (C-05, PR-075, invariant I9). Two
-    ;; events, because two things happened: a decision was recorded, and — when
-    ;; the threshold was met — the instruction moved. An evidence pack that
-    ;; showed only the second could not answer "who approved it?".
+    ;; Same transaction as everything above (C-05, PR-075, invariant I9).
+    ;;
+    ;; **One event per thing that happened**, which is the whole of standing
+    ;; lesson L-7 and the correction for audit finding F-005. Two different
+    ;; things can happen here and they are not the same event:
+    ;;
+    ;;   1. A decision was recorded. Always. Its subject is the *approval* —
+    ;;      the record that came into existence — not the payment, which may
+    ;;      not have moved at all.
+    ;;   2. The payment reached a new state. Only when this decision completed
+    ;;      the requirement.
+    ;;
+    ;; Before F-005 there was one write, named `payment.approved`, emitted for
+    ;; both. The first approval of a two-approval threshold therefore produced a
+    ;; `payment.approved` event whose before and after digests were identical,
+    ;; because the payment had not changed — an event asserting a transition
+    ;; that had not occurred, in the table an auditor is told to trust.
     (audit-store/record! tx {:organisation-id organisation-id
                              :actor-id        (:id actor)
-                             :action          (if (= :rejected decision)
-                                                "payment.rejected"
-                                                "payment.approved")
-                             :subject-type    "payment-instruction"
-                             :subject-id      instruction-id
-                             :before          (audit/instruction-subject instruction)
-                             :after           (audit/instruction-subject after)
+                             :action          "approval.recorded"
+                             :subject-type    "approval"
+                             :subject-id      approval-id
+                             ;; The approval did not exist a moment ago, so
+                             ;; there is no before — the same nil that marks
+                             ;; every creation in this trail.
+                             :before          nil
+                             :after           (audit/approval-subject recorded)
                              :correlation-id  correlation-id})
+
+    (when moved
+      (audit-store/record! tx {:organisation-id organisation-id
+                               :actor-id        (:id actor)
+                               :action          (if (= :rejected decision)
+                                                  "payment.rejected"
+                                                  "payment.approved")
+                               :subject-type    "payment-instruction"
+                               :subject-id      instruction-id
+                               :before          (audit/instruction-subject (:before moved))
+                               :after           (audit/instruction-subject (:after moved))
+                               :correlation-id  correlation-id}))
+
     {:approval    recorded
      :instruction after
      :decision    outcome

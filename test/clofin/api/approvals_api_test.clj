@@ -674,13 +674,51 @@
       (approve! f pi (:checker-a f))
       (approve! f pi (:checker-b f))
       (let [{:keys [status json]}
-            (call :get (str "/audit/evidence/" (get pi "id")) {:actor (:auditor f)})]
+            (call :get (str "/audit/evidence/" (get pi "id")) {:actor (:auditor f)})
+            events  (get json "events")
+            actions (mapv #(get % "action") events)]
         (is (= 200 status))
-        (is (= ["payment.created" "payment.submitted" "payment.approved" "payment.approved"]
-               (mapv #(get % "action") (get json "events"))))
-        (is (= [(str (:maker f)) (str (:maker f)) (str (:checker-a f)) (str (:checker-b f))]
-               (mapv #(get % "actorId") (get json "events"))))
-        (is (= 4 (get json "count")))
+        (is (= 5 (get json "count")))
+
+        (testing "the pack now carries the approval decisions as well as the
+                  payment's own transitions (F-006): approval events are keyed
+                  on the approval, and extraction relates them to their payment"
+          (is (= {"payment.created" 1 "payment.submitted" 1
+                  "approval.recorded" 2 "payment.approved" 1}
+                 (frequencies actions))))
+
+        (testing "exactly ONE payment.approved for two approvals (F-005) —
+                  before the fix this said two, and the first described a
+                  payment that was still pending-approval"
+          (is (= 1 (count (filter #{"payment.approved"} actions)))))
+
+        (testing "the payment's own events come first and in order"
+          (is (= ["payment.created" "payment.submitted"] (subvec actions 0 2)))
+          (is (= [(str (:maker f)) (str (:maker f))]
+                 (mapv #(get % "actorId") (subvec events 0 2)))))
+
+        (testing "each decision names the approver who made it"
+          (is (= #{(str (:checker-a f)) (str (:checker-b f))}
+                 (set (keep #(when (= "approval.recorded" (get % "action"))
+                               (get % "actorId"))
+                            events)))))
+
+        (testing "and the transition names the approver whose decision completed it"
+          (is (= (str (:checker-b f))
+                 (some #(when (= "payment.approved" (get % "action")) (get % "actorId"))
+                       events))))
+
+        ;; The completing `approval.recorded` and `payment.approved` are written
+        ;; in one transaction and therefore share `occurred_at` exactly, so
+        ;; their relative order is stable but not causal — asserting a strict
+        ;; sequence across them would be asserting an id comparison.
+        (testing "and every approval event precedes or accompanies the transition"
+          (let [approved-at (some #(when (= "payment.approved" (get % "action"))
+                                     (get % "occurredAt"))
+                                  events)]
+            (is (every? (fn [e] (<= (compare (get e "occurredAt") approved-at) 0))
+                        (filter #(= "approval.recorded" (get % "action")) events)))))
+
         (is (false? (get json "truncated")) "the pack states its own completeness")
         (is (some? (get json "from")))
         (is (some? (get json "to")))))))
@@ -697,7 +735,9 @@
         _ (pending! f)]
     (approve! f a (:checker-a f))
     (let [all (:json (call :get "/audit/events" {:actor (:auditor f)}))]
-      (is (= 5 (get all "count")))
+      ;; created + submitted for each of two instructions, plus one
+      ;; approval.recorded and one payment.approved for the approved one.
+      (is (= 6 (get all "count")))
       (is (= 500 (get all "limit")))
       (is (false? (get all "truncated"))))
     (is (= 1 (get (:json (call :get "/audit/events"
@@ -767,3 +807,201 @@
                                 {:actor (:checker-a f) :idempotency-key (key!)
                                  :body {"decision" decision}})))
           (str "decision " (pr-str decision) " must be refused")))))
+
+;; ---------------------------------------------------------------------------
+;; F-005 — an action named after a transition is emitted only when it commits
+;; ---------------------------------------------------------------------------
+
+(deftest f-005-a-partial-approval-records-a-decision-and-no-transition
+  (testing "the first of two required approvals leaves the payment
+            pending-approval. Before the fix it wrote `payment.approved`
+            anyway, with before and after digests that were identical because
+            nothing had changed — an event asserting a transition that had not
+            happened."
+    (let [f (setup :bands [[0 1] [100000 2]])
+          pi (pending! f :minor-units 500000)
+          subject (java.util.UUID/fromString (get pi "id"))]
+      (approve! f pi (:checker-a f))
+      (is (= "pending-approval" (status-of f pi)))
+
+      (let [rows (db/query tdb/*pool*
+                           ["select action, subject_type from audit_event
+                              where action in ('payment.approved','approval.recorded')"])]
+        (is (= [{:action "approval.recorded" :subject-type "approval"}]
+               (mapv #(select-keys % [:action :subject-type]) rows))
+            "one decision recorded, no transition claimed"))
+
+      (testing "and the second approval adds the transition, once"
+        (approve! f pi (:checker-b f))
+        (is (= "approved" (status-of f pi)))
+        (is (= {"approval.recorded" 2 "payment.approved" 1}
+               (frequencies (map :action
+                                 (db/query tdb/*pool*
+                                           ["select action from audit_event
+                                              where action in ('payment.approved','approval.recorded')"])))))
+        (is (= 3 (count (audit-rows subject)))
+            "the payment's own subject carries created, submitted and approved — not the decisions")))))
+
+(deftest f-005-the-recorded-decision-describes-the-approval-not-the-payment
+  (let [f (setup)
+        pi (pending! f)
+        approval-id (get-in (:json (approve! f pi (:checker-a f))) ["approval" "id"])
+        row (db/query-one tdb/*pool*
+                          ["select subject_id, subject_type, before_digest, after_digest, actor_id
+                              from audit_event where action = 'approval.recorded'"])]
+    (is (= (java.util.UUID/fromString approval-id) (:subject-id row))
+        "the subject is the decision that came into existence")
+    (is (= "approval" (:subject-type row)))
+    (is (nil? (:before-digest row)) "an approval has no before — it did not exist")
+    (is (some? (:after-digest row)))
+    (is (= (:checker-a f) (:actor-id row)))))
+
+(deftest f-005-a-rejection-records-a-decision-and-a-transition
+  (testing "a rejection DOES move the payment, so under L-7 it is two events:
+            the decision, and the transition it caused"
+    (let [f (setup)
+          pi (pending! f)]
+      (approve! f pi (:checker-a f) :decision "rejected" :reason "Counterparty unverified")
+      (is (= "rejected" (status-of f pi)))
+      (is (= {"payment.created" 1 "payment.submitted" 1
+              "approval.recorded" 1 "payment.rejected" 1}
+             (frequencies (map :action (audit-rows))))))))
+
+(deftest f-005-c-01-evidence-query-still-detects-a-same-actor-submit-and-decide
+  (testing "COMPLIANCE publishes a query proving no actor both submitted and
+            approved. F-005 moved approvals out of `payment.approved`, so the
+            query now joins through the approval record — and it must still
+            return nothing, and must still be *capable* of returning something."
+    (let [f (setup)
+          pi (pending! f)
+          _  (approve! f pi (:checker-a f))
+          ;; The query as COMPLIANCE now publishes it.
+          offending (db/query tdb/*pool*
+                              ["select s.subject_id
+                                  from audit_event s
+                                  join approval ap on ap.instruction_id = s.subject_id
+                                  join audit_event d on d.subject_id = ap.id
+                                                    and d.action = 'approval.recorded'
+                                 where s.action = 'payment.submitted'
+                                   and d.actor_id = s.actor_id"])]
+      (is (empty? offending) "the control holds")
+
+      (testing "and the query is not vacuous — it finds a planted violation"
+        ;; Plant the row the control exists to prevent, by writing an approval
+        ;; for the maker directly. The API refuses this; the query must see it.
+        (let [instruction (java.util.UUID/fromString (get pi "id"))
+              planted (tdb/insert-approval! tdb/*pool*
+                                            {:instruction-id instruction
+                                             :actor-id (:maker f)})]
+          (db/with-transaction [tx tdb/*pool*]
+            (db/execute! tx ["insert into audit_event
+                                (id, organisation_id, actor_id, action, subject_type, subject_id)
+                              values (?, ?, ?, 'approval.recorded', 'approval', ?)"
+                             (random-uuid) (:org f) (:maker f) planted]))
+          (is (seq (db/query tdb/*pool*
+                             ["select s.subject_id
+                                 from audit_event s
+                                 join approval ap on ap.instruction_id = s.subject_id
+                                 join audit_event d on d.subject_id = ap.id
+                                                   and d.action = 'approval.recorded'
+                                where s.action = 'payment.submitted'
+                                  and d.actor_id = s.actor_id"]))
+              "a query that cannot detect the violation is not evidence of anything"))))))
+
+;; ---------------------------------------------------------------------------
+;; F-006 — invalidation is a state change and gets its own events
+;; ---------------------------------------------------------------------------
+
+(deftest f-006-an-amendment-emits-one-event-per-invalidated-approval
+  (testing "PR-014 invalidates approvals; before the fix the trail said only
+            that the payment had been amended, leaving a reader to infer from a
+            column that somebody's approval had been revoked — without who,
+            when, or under which correlation id"
+    (let [f (setup :bands [[0 1] [100000 2]])
+          pi (pending! f :minor-units 500000)
+          a1 (get-in (:json (approve! f pi (:checker-a f))) ["approval" "id"])
+          a2 (get-in (:json (approve! f pi (:checker-b f))) ["approval" "id"])
+          subject (java.util.UUID/fromString (get pi "id"))]
+      (is (= "approved" (status-of f pi)))
+
+      (let [{:keys [status]}
+            (call :patch (str "/payment-instructions/" (get pi "id"))
+                  {:actor (:maker f) :idempotency-key (key!)
+                   :correlation-id "corr-amend"
+                   :body {"amount" {"currency" "SGD" "minorUnits" 999}}})]
+        (is (= 200 status)))
+
+      (let [invalidations (db/query tdb/*pool*
+                                    ["select subject_id, subject_type, actor_id, correlation_id,
+                                             before_digest, after_digest
+                                        from audit_event where action = 'approval.invalidated'
+                                       order by subject_id"])]
+        (is (= 2 (count invalidations)) "one event per approval, not one for the amendment")
+        (is (= #{(java.util.UUID/fromString a1) (java.util.UUID/fromString a2)}
+               (set (map :subject-id invalidations)))
+            "each names the approval it invalidated")
+        (is (every? #(= "approval" (:subject-type %)) invalidations))
+        (is (every? #(= (:maker f) (:actor-id %)) invalidations)
+            "the amending actor caused it — that is who an investigation asks about")
+        (is (every? #(= "corr-amend" (:correlation-id %)) invalidations)
+            "and the correlation id joins them to the amendment request")
+        (is (every? #(and (some? (:before-digest %)) (some? (:after-digest %)))
+                    invalidations))
+        (is (every? #(not= (:before-digest %) (:after-digest %)) invalidations)
+            "the digests differ: the approval genuinely changed state"))
+
+      (testing "and the payment's own amendment event is there too"
+        (is (= 1 (count (filter #(= "payment.amended" (:action %)) (audit-rows subject))))))
+
+      (testing "the evidence pack relates all of them to the payment"
+        (let [json (:json (call :get (str "/audit/evidence/" (get pi "id"))
+                                {:actor (:auditor f)}))]
+          (is (= {"payment.created" 1 "payment.submitted" 1 "approval.recorded" 2
+                  "payment.approved" 1 "payment.amended" 1 "approval.invalidated" 2}
+                 (frequencies (map #(get % "action") (get json "events"))))))))))
+
+(deftest f-006-the-amendment-and-its-invalidation-events-roll-back-together
+  (testing "C-05, PR-075. The amendment, the payment event and every
+            invalidation event share one transaction — so a failure leaves the
+            approvals standing and the trail silent, rather than a trail that
+            reports revocations that did not happen."
+    (let [f (setup)
+          pi (pending! f)
+          _  (approve! f pi (:checker-a f))
+          before-events (count (audit-rows))
+          before-live (:count (db/query-one tdb/*pool*
+                                            ["select count(*) as count from approval
+                                               where invalidated_at is null"]))]
+      (is (= "approved" (status-of f pi)))
+
+      ;; An amendment that fails *after* the invalidation: a purpose code the
+      ;; domain refuses. The invalidation has already run inside the
+      ;; transaction when validation rejects the amended whole.
+      (let [{:keys [status]}
+            (call :patch (str "/payment-instructions/" (get pi "id"))
+                  {:actor (:maker f) :idempotency-key (key!)
+                   :body {"purposeCode" "NOT-A-REAL-PURPOSE-CODE"}})]
+        (is (= 422 status) "the amendment is refused"))
+
+      (is (= before-events (count (audit-rows)))
+          "no payment.amended, and no approval.invalidated — the trail records nothing")
+      (is (= before-live (:count (db/query-one tdb/*pool*
+                                               ["select count(*) as count from approval
+                                                  where invalidated_at is null"])))
+          "and the approval still stands")
+      (is (= "approved" (status-of f pi))))))
+
+(deftest f-006-withdrawal-also-appears-in-the-payment-evidence-pack
+  (testing "`approval.withdrawn` already used the approval as its subject, so
+            extraction relating approval events to their payment picks it up
+            too — the whole approval lifecycle, in one pack"
+    (let [f (setup :bands [[0 2]])
+          pi (pending! f)
+          approval-id (get-in (:json (approve! f pi (:checker-a f))) ["approval" "id"])]
+      (call :delete (str "/payment-instructions/" (get pi "id") "/approvals/" approval-id)
+            {:actor (:checker-a f) :idempotency-key (key!)})
+      (let [json (:json (call :get (str "/audit/evidence/" (get pi "id"))
+                              {:actor (:auditor f)}))]
+        (is (= {"payment.created" 1 "payment.submitted" 1
+                "approval.recorded" 1 "approval.withdrawn" 1}
+               (frequencies (map #(get % "action") (get json "events")))))))))

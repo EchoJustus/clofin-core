@@ -222,13 +222,21 @@
                                           :actor-id approver-a :decision :approved})
       (authz/record-approval! tdb/*pool* {:id (random-uuid) :instruction-id instruction
                                           :actor-id approver-b :decision :approved})
-      (is (= 2 (authz/invalidate-approvals-for! tdb/*pool* instruction)))
+      (let [invalidated (authz/invalidate-approvals-for! tdb/*pool* instruction)]
+        (is (= 2 (count invalidated)))
+        (testing "each pair carries the before and after an audit event needs (F-006)"
+          (doseq [{:keys [before after]} invalidated]
+            (is (nil? (:invalidated-at before)) "before: still standing")
+            (is (some? (:invalidated-at after)) "after: no longer standing")
+            (is (= (:id before) (:id after)))
+            (is (= (:decision before) (:decision after))
+                "invalidation changes when a decision counts, never what it was"))))
       (let [all (authz/approvals-for tdb/*pool* instruction)]
         (is (= 2 (count all)) "the rows are still there")
         (is (every? :invalidated-at all))
         (is (empty? (approval/live-approvals all)) "and none of them counts any more"))
-      (testing "invalidating again changes nothing"
-        (is (zero? (authz/invalidate-approvals-for! tdb/*pool* instruction)))))))
+      (testing "invalidating again changes nothing and reports nothing to audit"
+        (is (empty? (authz/invalidate-approvals-for! tdb/*pool* instruction)))))))
 
 (deftest an-actor-cannot-hold-two-live-decisions
   (testing "the partial unique index is the guarantee, not the check in `evaluate`"

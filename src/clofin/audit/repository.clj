@@ -123,6 +123,15 @@
   [direction]
   (str " order by occurred_at " direction ", id " direction " limit ?"))
 
+;; A consequence worth stating rather than discovering: events written in one
+;; transaction share `occurred_at` exactly, so `id` is what orders them — and
+;; `id` is random. Within a single transaction the order is therefore *stable*
+;; (the same query returns the same order every time, which is what matters for
+;; an evidence pack not to look tampered with) but not *causal*. Ordering two
+;; events that happened atomically is a question with no answer; a monotonic
+;; sequence column would give one, and is recorded as a candidate rather than
+;; smuggled in here.
+
 (defn events-for-subject
   "Every audit event about one subject, oldest first.
 
@@ -171,6 +180,36 @@
     {:events     (mapv row->event (take row-cap rows))
      :truncated? (> (count rows) row-cap)}))
 
+(defn events-for-payment
+  "Every audit event about an instruction **and about its approvals**, oldest
+  first.
+
+  An approval's events — `approval.recorded`, `approval.invalidated`,
+  `approval.withdrawn` — carry the *approval* as their subject, because that is
+  what they are about: a decision came into existence, or stopped standing.
+  Keying them on the payment would be the mislabelling audit finding F-005
+  corrected in the other direction.
+
+  But an evidence pack for a payment has to show them, or it cannot answer
+  \"who approved this, and what happened to their approval?\" — which is most
+  of what an approval trail is for. So the relation is made here, in the query,
+  rather than by flattening it into the subject column: an approval belongs to
+  exactly one instruction, and `approval.instruction_id` already says which.
+  Audit finding **F-006** required this extension.
+
+  Harmless when `subject-id` is itself an approval: no approval names an
+  approval as its instruction, so the sub-select adds nothing and the pack is
+  the subject's own events."
+  [source organisation-id subject-id]
+  (mapv row->event
+        (db/query source [(str event-columns
+                               "where organisation_id = ?
+                                  and (subject_id = ?
+                                       or subject_id in (select id from approval
+                                                          where instruction_id = ?))"
+                               (ordered "asc"))
+                          organisation-id subject-id subject-id (inc row-cap)])))
+
 (defn evidence-pack
   "Every state change of one subject, in order, with its actor (PR-074, AC-12).
 
@@ -182,11 +221,17 @@
   The pack states its own boundaries: the period it spans and whether it hit
   the row cap. An auditor should never have to infer completeness."
   [source organisation-id subject-id]
-  (let [rows (events-for-subject source organisation-id subject-id)
+  (let [rows (events-for-payment source organisation-id subject-id)
         events (vec (take row-cap rows))]
     (when (seq events)
       {:subject-id  subject-id
-       :subject-type (:subject-type (first events))
+       ;; The subject the pack is *about*, not the type of its first event —
+       ;; the pack now mixes payment-instruction and approval events, and the
+       ;; first one is whichever happened earliest.
+       :subject-type (or (some (fn [e] (when (= subject-id (:subject-id e))
+                                         (:subject-type e)))
+                               events)
+                         (:subject-type (first events)))
        :events      events
        :from        (:occurred-at (first events))
        :to          (:occurred-at (last events))
