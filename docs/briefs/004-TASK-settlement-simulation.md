@@ -253,8 +253,9 @@ test.
       (L-1)* — a reviewer batches, settles, returns and times out payments and
       watches the guards hold
 - [ ] Completion reported — PR opened against the base branch above, REQ filed
-      (next available number in the audits series) — so Master Control can set
-      this brief `IMPLEMENTED` on `meta`
+      as **`004-REQ-…`** *(the audits REQ series is **task-keyed**, not
+      next-available: `NNN-REQ` reports on `TASK-NNN`. Ruling O-2 on TASK-005;
+      L-1)* — so Master Control can set this brief `IMPLEMENTED` on `meta`
 
 ## Notes for whoever picks this up
 

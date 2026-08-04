@@ -20,7 +20,7 @@ and this table is stale.
 | 2 | Ledger persistence and account API | [TASK-001](briefs/001-TASK-ledger-persistence-and-account-api.md) | ✅ `IMPLEMENTED` — merged to `main` in PR #2 (`f7018a1`); `FEEDBACK-001` outstanding | green, 757 assertions |
 | 3 | Payment lifecycle and idempotency | [TASK-002](briefs/002-TASK-payment-instruction-lifecycle.md) | ✅ `CLOSED` — merged to `main` in PR #4 (`31306dd`); audited in FEEDBACK-M1, no new findings | green, 1547+ assertions |
 | 4 | Authorisation, maker–checker, audit | [TASK-003](briefs/003-TASK-authorisation-and-audit-trail.md) | ✅ `CLOSED` — merged to `main` in PR #5 (`5ff00eb`); FEEDBACK-M1 fully remediated & verified (migrations `0007`/`0008`) | green, 2515 assertions |
-| 4c | Audit coverage completion (C-05 unqualified) | [TASK-005](briefs/005-TASK-audit-coverage-completion.md) | 🔨 `IN PROGRESS` — dispatched 2026-08-04; branches off `main` | — |
+| 4c | Audit coverage completion (C-05 unqualified) | [TASK-005](briefs/005-TASK-audit-coverage-completion.md) | 🔨 `IMPLEMENTED` — PR #6 open and green (`095440d`); objections ruled; cleared to merge | green, 2747 assertions |
 | 5 | Settlement simulation | [TASK-004](briefs/004-TASK-settlement-simulation.md) | 📋 `READY` — stacks on PR #5's branch; DDL validated per L-3 | — |
 | 6–9 | Reconciliation onwards | not yet briefed | 💭 later | — |
 
@@ -29,11 +29,14 @@ merged (PR #4 `31306dd`, PR #5 `5ff00eb`): C-06 (idempotency), C-01 (segregation
 of duties), C-02 (dual authorisation), C-05 (attributable audit trail) and C-08
 (least privilege) are enforced on `main`, and the Milestone 1 audit's two
 blocking and four should-fix findings are all remediated and verified there.
-**Two honesty caveats still stand:** C-05 covers payment and approval writes,
-**not** ledger and organisation writes (that gap is [TASK-005](briefs/005-TASK-audit-coverage-completion.md),
-`READY`); and the append-only guarantee binds the application but **not** a
-schema-owner adversary — the runtime role split is named debt in COMPLIANCE §4.
-C-07 (screening) remains 📋. Do not describe any of this more generously in a
+**Two honesty caveats still stand:** on `main`, C-05 covers payment and approval
+writes, **not yet** ledger and organisation writes — that gap is closed by
+[TASK-005](briefs/005-TASK-audit-coverage-completion.md), which is `IMPLEMENTED`
+and green in PR #6 but **not merged**, so the C-05 scope paragraph remains true
+of `main` until it lands; and the append-only guarantee binds the application
+but **not** a schema-owner adversary — the runtime role split is named debt in
+COMPLIANCE §4. C-07 (screening) remains 📋. Do not describe any of this more
+generously in a
 README, a PR description or a conversation.
 
 ---

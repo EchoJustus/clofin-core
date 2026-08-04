@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | **Increment** | 4 (completion) — closes debt TASK-003 named, it does not open new product surface |
-| **Status** | `IN PROGRESS` — dispatched 2026-08-04 |
+| **Status** | `IMPLEMENTED` — PR #6 open and green 2026-08-04 (`095440d`, base `main`); all three objections ruled in the Worker's favour, see Changelog. No fix instruction issued — the work stands as submitted |
 | **Depends on** | TASK-003 — `clofin.audit` and the authenticated principal must exist |
 | **Base branch** | `main` at `5ff00eb` — TASK-003 merged 2026-08-04, so this is an ordinary branch off `main` with the PR against `main`. *(The stacking instructions this field carried before the merge are obsolete.)* |
 | **Blocks** | Nothing hard; C-05 stays scope-qualified until this lands |
@@ -117,3 +117,24 @@ fix — raise it in your REQ if it grows beyond a mechanical change.
 **Coordinate with TASK-004 only through Master Control.** You share one-line
 literals in `clofin.audit`. Do not read its branch, do not pre-merge it;
 whoever lands second rebases and resolves the one line.
+
+---
+
+## Changelog — rulings on the [`005-REQ`](../audits/005-REQ-audit-coverage-completion.md) objections (2026-08-04)
+
+All three ruled the day the REQ was filed; **all in the Worker's favour**, so no
+fix instruction was issued and the work stands as submitted. Two are
+brief-authoring defects of Master Control's, corrected forward (see below).
+
+| # | Objection | Ruling |
+|---|---|---|
+| O-1 | This brief's DoD says "no OpenAPI changes" while AC-1 requires the bootstrap identity stated *in the OpenAPI description* — and correctness requires extending the `AuditAction`/`subjectType` enums, or `GET /audit/events` returns undeclared values and its `?action=` filter rejects `journal-entry.posted` on paper while the service serves it. | **Confirmed — brief defect; the Worker's reading and both changes stand.** The DoD meant "no change to the API *surface*" (no new path/operation/schema shape), and the contract test's route/operation assertions pass unchanged — that is the mechanical form of the intent. The enum extension is not merely permitted but **mandatory**: a contract that omits actions the service returns is *false*, which is worse than one that lags. The new `contract-test/the-audit-vocabulary-in-the-contract-is-the-one-the-service-enforces` is the L-6 remedy — the relied-upon "enum == vocabulary" invariant now has an enforcement point. This is an **AC-versus-DoD contradiction inside one brief I authored** — the same class as L-4; the guard is widened to name the DoD as an interface an AC can contradict. |
+| O-2 | The DoD says the REQ takes "the next available number in the audits series" (004), but the register keys `NNN-REQ` to `TASK-NNN`, and 004 belongs to TASK-004, in flight. | **Confirmed — brief-template defect; `005-REQ` stands.** The REQ series is **task-keyed, not sequential** — unlike migrations/UAT/ADRs, which are truly next-available. Saying "next available" for a task-keyed series is wrong whenever a lower-numbered task has not filed yet. Corrected in brief 004's DoD and recorded as a refinement of L-1: *name the numbering discipline of the specific series* — task-keyed for REQs, next-available for migrations/UAT/ADRs. |
+| O-3 | Enforcing the bootstrap null (L-6) tightens `clofin.audit/event` to refuse a null actor for **pre-existing** actions; two `authz.repository-test` fixtures were writing payment events with a null actor and had to name one. | **Confirmed — accept the broad rule.** Those fixtures were leaning on the exact gap being closed (a null actor on a payment action — the shape migration `0005`'s comment already calls a defect). The Worker's offered narrow alternative (exempt only the new actions) is worse: it leaves `actor_id is null` ambiguous between "bootstrap" and "unattributed payment", which is precisely what L-6 exists to remove. The fixtures now name an actor; their assertions are unchanged. |
+
+**Flagged, not an objection — accepted.** `ARCHITECTURE.md` §3's "the ledger
+depends on nothing" is corrected to "the ledger's *domain* depends on nothing",
+with the general rule that audit is the one context every writing context
+depends on and which depends on none of them (acyclic — `clofin.audit` holds a
+vocabulary and a digest and knows nothing of accounts, entries or payments).
+That is accurate and is the correct place to state it.

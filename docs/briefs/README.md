@@ -42,7 +42,7 @@ table and a brief disagree, the brief on `origin/meta` wins.
 | [002 — Payment instruction lifecycle and idempotency](002-TASK-payment-instruction-lifecycle.md) | 3 | `CLOSED` — merged in PR #4 (`31306dd`); **audited** (FEEDBACK-M1: no new findings) | 001 ✅ | PR-001…005, PR-040…044 | Large |
 | [003 — Authorisation, maker–checker and audit trail](003-TASK-authorisation-and-audit-trail.md) | 4 | `CLOSED` — merged in PR #5 (`5ff00eb`); FEEDBACK-M1 fully remediated & verified | 002 ✅ | PR-010…015, PR-070…075 | Large |
 | [004 — Settlement simulation](004-TASK-settlement-simulation.md) | 5 | `READY` — stacks on `main`; DDL validated per L-3 | 003 ✅ merged | PRD §5.3 | Large |
-| [005 — Audit coverage completion](005-TASK-audit-coverage-completion.md) | 4 (completion) | `IN PROGRESS` — dispatched 2026-08-04; stacks on `main` | 003 ✅ merged | PR-072, C-05 | Small |
+| [005 — Audit coverage completion](005-TASK-audit-coverage-completion.md) | 4 (completion) | `IMPLEMENTED` — PR #6 open and green (`095440d`); objections ruled; cleared to merge | 003 ✅ merged | PR-072, C-05 | Small |
 
 Sequencing follows **product relevance and regulatory risk**, not implementation
 convenience:
