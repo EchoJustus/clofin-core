@@ -132,6 +132,19 @@ brief-authoring defects of Master Control's, corrected forward (see below).
 | O-2 | The DoD says the REQ takes "the next available number in the audits series" (004), but the register keys `NNN-REQ` to `TASK-NNN`, and 004 belongs to TASK-004, in flight. | **Confirmed — brief-template defect; `005-REQ` stands.** The REQ series is **task-keyed, not sequential** — unlike migrations/UAT/ADRs, which are truly next-available. Saying "next available" for a task-keyed series is wrong whenever a lower-numbered task has not filed yet. Corrected in brief 004's DoD and recorded as a refinement of L-1: *name the numbering discipline of the specific series* — task-keyed for REQs, next-available for migrations/UAT/ADRs. |
 | O-3 | Enforcing the bootstrap null (L-6) tightens `clofin.audit/event` to refuse a null actor for **pre-existing** actions; two `authz.repository-test` fixtures were writing payment events with a null actor and had to name one. | **Confirmed — accept the broad rule.** Those fixtures were leaning on the exact gap being closed (a null actor on a payment action — the shape migration `0005`'s comment already calls a defect). The Worker's offered narrow alternative (exempt only the new actions) is worse: it leaves `actor_id is null` ambiguous between "bootstrap" and "unattributed payment", which is precisely what L-6 exists to remove. The fixtures now name an actor; their assertions are unchanged. |
 
+**Tail — a defect this ingestion missed (recorded 2026-08-04, from 004-REQ O-3).**
+The rulings above stand, but "all three ruled, no fix" was **not** the whole
+story. The Worker's own post-merge adversarial review found a real defect the
+ingestion missed: `EvidencePack.subjectType` was never extended while
+`AuditEvent`'s was, so the merged OpenAPI contract declared
+`organisation`/`account`/`journal-entry` evidence packs impossible — on the very
+endpoint AC-5 names as the payoff — and the enum-drift guard **praised in ruling
+O-1** checked only one of the two enum copies (**L-6**). The fix was pushed
+~10 min after PR #6 merged and never landed; it was carried into PR #7 as
+`b21d4c1`, verified against `main` by Master Control, and lands there. Root cause
+on Master Control's side — merging PR #6 while the Worker's review was still in
+flight — is **lesson L-9**.
+
 **Flagged, not an objection — accepted.** `ARCHITECTURE.md` §3's "the ledger
 depends on nothing" is corrected to "the ledger's *domain* depends on nothing",
 with the general rule that audit is the one context every writing context

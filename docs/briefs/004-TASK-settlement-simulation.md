@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | **Increment** | 5 |
-| **Status** | `IN PROGRESS` — dispatched 2026-08-04 |
+| **Status** | `IMPLEMENTED` — PR #7 open and green 2026-08-04 (`55566ad`, base `main`); all three objections ruled, see Changelog. O-3 is a process finding, not a code fix — no fix instruction issued to the Worker |
 | **Depends on** | TASK-003 — settlement drives the `release` arrow the authorisation increment left in the table |
 | **Base branch** | `main` at `2ba977e` — TASK-003 **and TASK-005 are both merged**, so this is an ordinary branch off `main` with the PR against `main`. The `clofin.audit/actions` coordination this brief anticipated is resolved: TASK-005 landed first; you extend the literal (and its OpenAPI enum twin — see In-scope item 9) in place |
 | **Blocks** | Increment 6 (reconciliation) |
@@ -291,3 +291,27 @@ lands second resolves it.
 against a local PostgreSQL 16 (003-REQ environment note). The compose smoke
 test in CI applies the full migration stack from empty — your migration will be
 exercised there; number it against the live tree (L-1).
+
+---
+
+## Changelog — rulings on the [`004-REQ`](../audits/004-REQ-settlement-simulation.md) objections (2026-08-04)
+
+All three ruled the day the REQ was filed. Master Control independently
+verified the settlement work before ruling: PR #7 CI green on all three checks;
+migration `0009` applied from an empty 0001–0009 schema and the no-double-
+settlement guards probed by hand — a **timed-out** item is refused re-batching
+by `settlement_item_live_key`, a **returned** item is freed, and a duplicate
+batch-level ack collapses under `NULLS NOT DISTINCT`. The cardinal-sin guard
+(money moving twice) holds.
+
+| # | Objection | Ruling |
+|---|---|---|
+| O-1 | Scope §5 and §9 require a per-item `failed` outcome and `payment.failed`, but the brief's own validated DDL permits only `settled\|returned\|timed-out` and no response kind drives `fail`. | **Confirmed — brief defect (L-4 family: scope/vocabulary contradicting the brief's own DDL); option 1.** The DDL governs and is the coherent model: a scheme failure that returns funds **is** a `returned`, and an unknown outcome **is** `timed-out` and must never become `failed` — the brief is emphatic on that. `fail` stays an undriven lifecycle arrow, exactly as `release`/`settle` were before this increment; **`payment.failed` stays in the vocabulary as a reserved term** (a future increment — e.g. a scheme reject that does *not* return funds — may drive it), emitted by nothing. Dropping it would churn the OpenAPI enum and presume about that increment. The Worker publishing an unused-but-true term over silently dropping a listed one is the right call. |
+| O-2 | AC-2's "instructions differing in scheme" is untestable — a payment instruction carries no scheme attribute. | **Confirmed — brief imprecision; the Worker's reading stands.** The scheme is an operator **routing choice** made when the batch is constructed (constrained to `SIM-RTGS\|SIM-ACH`), not an instruction attribute. AC-2's testable halves — currency and value date — are asserted at both levels, and an unknown/real scheme name is refused. Grouping on `[currency value-date]` with the scheme as a batch parameter is correct. |
+| O-3 | **Process finding.** TASK-005's self-review fix (`a2e85cb`) was pushed ~10 min after PR #6 merged and never landed, so `main` carries a stale `EvidencePack.subjectType` enum and a drift guard that checks only one of two copies — directly in this task's path. | **Confirmed real — verified by Master Control** (`main`'s `EvidencePack.subjectType` is `[payment-instruction, approval]`; the endpoint returns `account` against a contract declaring it impossible). The fix is legitimately a **dependency** of this task — the widened guard is required before `settlement-batch` can be safely added to the subject vocabulary — so carrying it as PR #7's first commit (`b21d4c1`, minus its `docs/audits/` edit) is **accepted**, not a scope violation. Consequences beyond this brief are recorded against **TASK-005** and as **lesson L-9** (Master Control merged PR #6 while the Worker's declared adversarial review was still in flight) and a reinforcement of **L-6** (a drift guard that checks one of two copies is the false-confidence failure it exists to prevent). |
+
+**Seven observations in §5 are informational** — no ruling required. Notable:
+the duplicate-response path needed `clofin.db.core/tolerating-violation` (a
+savepoint) because PostgreSQL aborts the whole transaction on a constraint
+violation, so *catching* the duplicate key was not enough — a real defect the
+Worker's own tests caught, on precisely the path meant to answer `200 replayed`.
