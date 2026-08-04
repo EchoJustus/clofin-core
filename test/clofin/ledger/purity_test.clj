@@ -39,7 +39,13 @@
    'clofin.authz.approval                 "src/clofin/authz/approval.clj"
    ;; The audit vocabulary and the digest. Storage is
    ;; `clofin.audit.repository`, the same split as idempotency above.
-   'clofin.audit                          "src/clofin/audit.clj"})
+   'clofin.audit                          "src/clofin/audit.clj"
+   ;; Settlement's batching rules and its scheme adapter. The adapter is pure
+   ;; for a reason worth stating: it decides what a *simulated* scheme would
+   ;; say, and a simulator that could reach a socket is one nobody can prove
+   ;; never did.
+   'clofin.settlement.batch               "src/clofin/settlement/batch.clj"
+   'clofin.settlement.scheme              "src/clofin/settlement/scheme.clj"})
 
 (def forbidden-prefixes
   ["clofin.db." "clofin.http." "clofin.api."])
@@ -81,7 +87,8 @@
                   "src/clofin/payments/repository.clj"
                   "src/clofin/idempotency/repository.clj"
                   "src/clofin/authz/repository.clj"
-                  "src/clofin/audit/repository.clj"]]
+                  "src/clofin/audit/repository.clj"
+                  "src/clofin/settlement/repository.clj"]]
       (is (some #(str/starts-with? % "clofin.db.")
                 (required-namespaces (ns-form path)))
           (str path " is named `repository` but requires no persistence — "
@@ -106,7 +113,12 @@
    ;; Their handlers open the transaction; these compose the change and its
    ;; event onto it.
    'clofin.ledger.service            "src/clofin/ledger/service.clj"
-   'clofin.organisations.service     "src/clofin/organisations/service.clj"})
+   'clofin.organisations.service     "src/clofin/organisations/service.clj"
+   ;; TASK-004. Settlement moves money, so this is the service where a
+   ;; connection of its own would do the most damage: a finality posting
+   ;; committed apart from the outcome that caused it is a payment the ledger
+   ;; says settled and the batch says did not.
+   'clofin.settlement.service        "src/clofin/settlement/service.clj"})
 
 (deftest a-service-cannot-open-its-own-transaction
   (doseq [[namespace-sym path] service-namespaces]

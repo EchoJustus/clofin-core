@@ -12,14 +12,6 @@
 | **Controls** | C-03, C-04 exercised. **C-07 untouched and still 📋**; `TODO(increment-7)` left exactly where it was |
 | **Status** | Implemented. **Three objections** in §4, one of them a process finding about the previous increment. Seven observations in §5 |
 
-> **Meta copy.** Ingested 2026-08-04 from the submission branch
-> `claude/audit-coverage-completion-6iuffy` (PR #7, base `main` `2ba977e`). All
-> three objections ruled the same day — rulings in the brief's changelog
-> ([TASK-004](../briefs/004-TASK-settlement-simulation.md)). ADR-0018, UAT-006 and
-> the settlement namespaces resolve on the submission branch until PR #7 merges.
-> **O-3 is a verified process finding against TASK-005 and Master Control — see
-> the register and lesson L-9.**
-
 ---
 
 ## 1. What was built

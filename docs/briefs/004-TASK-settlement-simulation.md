@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | **Increment** | 5 |
-| **Status** | `IMPLEMENTED` — PR #7 open and green 2026-08-04 (`55566ad`, base `main`); all three objections ruled, see Changelog. O-3 is a process finding, not a code fix — no fix instruction issued to the Worker |
+| **Status** | `CLOSED` — merged to `main` in PR #7 (`cba31c5`) 2026-08-04; all three objections ruled, see Changelog. Carried the TASK-005 O-3 contract fix (`b21d4c1`) to `main` with it |
 | **Depends on** | TASK-003 — settlement drives the `release` arrow the authorisation increment left in the table |
 | **Base branch** | `main` at `2ba977e` — TASK-003 **and TASK-005 are both merged**, so this is an ordinary branch off `main` with the PR against `main`. The `clofin.audit/actions` coordination this brief anticipated is resolved: TASK-005 landed first; you extend the literal (and its OpenAPI enum twin — see In-scope item 9) in place |
 | **Blocks** | Increment 6 (reconciliation) |

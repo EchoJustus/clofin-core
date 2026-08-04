@@ -13,7 +13,8 @@
             [clofin.api.entries :as entries]
             [clofin.api.health :as health]
             [clofin.api.organisations :as organisations]
-            [clofin.api.payments :as payments]))
+            [clofin.api.payments :as payments]
+            [clofin.api.settlement :as settlement]))
 
 (defn routes
   "Build the route table for a running system."
@@ -134,6 +135,43 @@
     :operation-id "getApprovalQueue"
     :handler (approvals/queue pool)
     :summary "List instructions awaiting approval with the context to decide them"}
+
+   ;; -------------------------------------------------------------------------
+   ;; Settlement
+   ;;
+   ;; Batches are constructed, submitted and then *answered*. The answer arrives
+   ;; through `scheme-responses` — the simulation injection point — because
+   ;; CloFin connects to no scheme and there is nothing to listen to. The sweep
+   ;; is an explicit operator call rather than a daemon: a timeout that fires
+   ;; itself is one nobody can point at afterwards.
+   ;; -------------------------------------------------------------------------
+
+   {:method :post :path "/settlement-batches" :operation-id "createSettlementBatch"
+    :handler (settlement/create pool)
+    :summary "Group approved payment instructions into a settlement batch"}
+
+   {:method :get :path "/settlement-batches" :operation-id "listSettlementBatches"
+    :handler (settlement/index pool)
+    :summary "List an organisation's settlement batches"}
+
+   {:method :get :path "/settlement-batches/:id" :operation-id "getSettlementBatch"
+    :handler (settlement/show pool)
+    :summary "Retrieve a settlement batch with its items and scheme responses"}
+
+   {:method :post :path "/settlement-batches/:id/submit"
+    :operation-id "submitSettlementBatch"
+    :handler (settlement/submit pool)
+    :summary "Release a settlement batch to its simulated scheme"}
+
+   {:method :post :path "/settlement-batches/:id/scheme-responses"
+    :operation-id "recordSchemeResponse"
+    :handler (settlement/record-response pool)
+    :summary "Record a simulated scheme response against a settlement batch"}
+
+   {:method :post :path "/settlement-batches/:id/timeout-sweep"
+    :operation-id "sweepSettlementTimeouts"
+    :handler (settlement/sweep-timeouts pool)
+    :summary "Mark unanswered settlement items as timed out"}
 
    ;; -------------------------------------------------------------------------
    ;; Audit

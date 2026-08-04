@@ -66,6 +66,28 @@ tags:
       control, and hiding would leave a maker unable to see that their own
       payment is waiting.
 
+  - name: Settlement
+    description: |
+      Carrying approved payments through batching, release and a terminal
+      outcome — against a **simulated** scheme.
+
+      **CloFin is not connected to any bank, payment scheme or central bank.**
+      Scheme identifiers are `SIM-` prefixed by a database constraint so that a
+      synthetic record can never name a real network. Outcomes enter the system
+      through `POST /settlement-batches/{id}/scheme-responses` and by no other
+      route: there is no listener, no file drop and no correspondent.
+
+      A batch's `status` is **derived** from its items' outcomes, never set
+      directly — the same doctrine that makes a balance an aggregation over the
+      journal rather than a column.
+
+      The failure modes are the interesting part, and each has a defined
+      answer. A duplicate response does no work and says so. A response for an
+      item that already has an outcome is `409`. An item nobody answered about
+      becomes `timed-out` when an operator sweeps — which means **unknown**, not
+      failed: the payment stays `released` and can never be re-batched until a
+      late `timeout-resolution` says what really happened.
+
   - name: Audit
     description: |
       The audit trail, and evidence extraction from it.
@@ -1087,6 +1109,315 @@ paths:
         "403":
           $ref: "#/components/responses/Forbidden"
 
+  /settlement-batches:
+    post:
+      tags: [Settlement]
+      operationId: createSettlementBatch
+      summary: Group approved payment instructions into a settlement batch
+      description: |
+        Groups approved instructions for one **simulated** scheme, one currency
+        and one value date. A batch is defined by that triple: an instruction
+        whose currency or value date differs is refused, and so is one that is
+        not `approved`.
+
+        Every ineligible instruction is named in one refusal, with a reason
+        each, rather than one at a time — an operator batching forty payments
+        fixes them in one pass.
+
+        An instruction already in a batch that is pending, settled or timed out
+        is `409`. Only a **returned** item frees its instruction for
+        re-batching: a timed-out item's true outcome is unknown, and
+        re-submitting it risks the duplicate settlement this module exists to
+        prevent. That rule is a database constraint, not a check in a handler.
+
+        Requires `settlement/execute`, which `controller` holds and no role
+        holding `payment/approve` does.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateSettlementBatchRequest"
+      parameters:
+        - $ref: "#/components/parameters/ActorId"
+      responses:
+        "201":
+          description: Batch created, in status `open`.
+          headers:
+            Location:
+              description: URI of the created batch.
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SettlementBatch"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          description: An instruction is already in a live settlement batch.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: One or more instructions cannot be settled in this batch.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+    get:
+      tags: [Settlement]
+      operationId: listSettlementBatches
+      summary: List an organisation's settlement batches
+      description: |
+        Most recent first, capped rather than paginated, with the cap and a
+        `truncated` flag on every response. Requires `payment/read`: a
+        settlement batch is a fact about payments, so an auditor who may read
+        the payments may read how they settled.
+      parameters:
+        - name: status
+          in: query
+          required: false
+          description: Restrict to one derived batch status.
+          schema:
+            type: string
+            enum: [open, submitted, settled, partially-settled, failed]
+        - $ref: "#/components/parameters/ActorId"
+        - $ref: "#/components/parameters/OptionalOrganisationId"
+      responses:
+        "200":
+          description: The organisation's settlement batches.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SettlementBatchList"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /settlement-batches/{id}:
+    get:
+      tags: [Settlement]
+      operationId: getSettlementBatch
+      summary: Retrieve a settlement batch with its items and scheme responses
+      description: |
+        The batch, every membership and its outcome, the **exception cases**
+        (returned items, with their reasons) as their own list, and every
+        simulated scheme response recorded against the batch — including
+        duplicates that were refused work, because the evidence that a duplicate
+        arrived is the point of keeping them.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: "#/components/parameters/ActorId"
+        - $ref: "#/components/parameters/OptionalOrganisationId"
+      responses:
+        "200":
+          description: The settlement batch.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SettlementBatch"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /settlement-batches/{id}/submit:
+    post:
+      tags: [Settlement]
+      operationId: submitSettlementBatch
+      summary: Release a settlement batch to its simulated scheme
+      description: |
+        In **one transaction**: every member moves `approved` to `released`,
+        each posts its release entry to the journal, the batch moves `open` to
+        `submitted`, and the audit trail gains one `payment.released` event per
+        instruction plus one `settlement-batch.submitted` for the batch. A
+        failure anywhere leaves the batch open, the instructions approved and
+        the journal untouched.
+
+        **A release posts.** Value moves out of pooled client funds and into
+        settlement-in-transit, where an auditor can see it sitting mid-flight;
+        finality moves that leg on. See ADR-0018.
+
+        Eligibility is re-checked here under a row lock, not merely trusted from
+        construction: an instruction amended or cancelled in between is no
+        longer approved, and releasing it would release a payment nobody
+        currently agrees to.
+
+        Requires the organisation to hold `1100-CLIENT-FUNDS`,
+        `1300-IN-TRANSIT` and `2100-CLIENT-PAYABLE` accounts in the batch's
+        currency; a `422` names the missing ones.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: "#/components/parameters/ActorId"
+      responses:
+        "200":
+          description: Batch submitted; every member released.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SettlementBatch"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: The batch is not `open`.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: A member is no longer eligible, or settlement accounts are missing.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+
+  /settlement-batches/{id}/scheme-responses:
+    post:
+      tags: [Settlement]
+      operationId: recordSchemeResponse
+      summary: Record a simulated scheme response against a settlement batch
+      description: |
+        **This is the simulation injection point.** CloFin is connected to no
+        bank, payment scheme or central bank; there is no listener and no file
+        drop. An outcome enters the system when a caller — a test, a UAT
+        reviewer, or an operator demonstrating the controls — posts here, and by
+        no other route.
+
+        What a simulated scheme *would* say is deterministic and predictable
+        from the instruction, so a reviewer can produce partial failure on
+        demand: the outcome is derived from the **last digit of the synthetic
+        creditor account**.
+
+        | Last digit | Simulated outcome |
+        |---|---|
+        | `0`–`6` | settled |
+        | `7`, `8` | returned |
+        | `9` | no response at all — the item will time out |
+
+        Kinds:
+
+        - `ack` — the batch was acknowledged. Recorded; moves nothing.
+        - `settled` / `returned` — resolves one item, transitions its
+          instruction, posts finality, and emits one audit event named after
+          the transition. A `returned` response must carry a `reason`.
+        - `timeout-resolution` — the late answer for an item a sweep already
+          gave up on. Must carry `outcome`, and resolves that item exactly once.
+
+        **A duplicate delivery does no work.** The same
+        `(instructionId, kind, reference)` is answered `200` with
+        `replayed: true`: no second posting, no second audit event, no second
+        transition. A scheme answering twice, late, or out of order is the
+        normal case in the world this simulates, so it is not reported as an
+        error. A response whose replay key is new but whose item already has an
+        outcome is `409` — that is out of order, not a repeat.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SchemeResponseRequest"
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: "#/components/parameters/ActorId"
+      responses:
+        "200":
+          description: Response recorded. `replayed` is true when it was a duplicate.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SettlementBatch"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: The item already has an outcome, or is not timed out.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+
+  /settlement-batches/{id}/timeout-sweep:
+    post:
+      tags: [Settlement]
+      operationId: sweepSettlementTimeouts
+      summary: Mark unanswered settlement items as timed out
+      description: |
+        An **explicit operator action**, not a background daemon: a timeout that
+        fires itself is one nobody can point at afterwards, and a scheduler is
+        operational machinery with no driver yet.
+
+        Every item the batch is still waiting on, whose batch is older than
+        `timeoutSeconds`, becomes `timed-out`.
+
+        **Timed out means unknown, not failed.** The instruction stays
+        `released` — no lifecycle event is driven, because CloFin does not know
+        what happened to the money — and the item can never be re-batched until
+        a late `timeout-resolution` says what really happened. Treating unknown
+        as failed and re-batching is how a payment gets made twice.
+
+        Running the sweep twice, or before the horizon, marks nothing and emits
+        no audit event: nothing happened, so nothing is recorded as having
+        happened.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TimeoutSweepRequest"
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: "#/components/parameters/ActorId"
+      responses:
+        "200":
+          description: The batch, with the instructions this sweep gave up on.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SettlementBatch"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: The batch has not been submitted, so there is nothing to wait for.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+
   /audit/events:
     get:
       tags: [Audit]
@@ -1151,8 +1482,10 @@ paths:
       operationId: getEvidencePack
       summary: Extract a complete evidence pack for one subject
       description: |
-        Every state change of one payment instruction or approval, in the order
-        it happened, each entry carrying the actor who caused it.
+        Every state change of one subject, in the order it happened, each entry
+        carrying the actor who caused it. A subject is a payment instruction, an
+        approval, an organisation, a ledger account or a journal entry — every
+        record CloFin can write.
 
         For a payment instruction the pack **also includes its approvals' own
         events** — `approval.recorded`, `approval.invalidated`,
@@ -1172,7 +1505,9 @@ paths:
         - name: subjectId
           in: path
           required: true
-          description: A payment instruction id, or an approval id.
+          description: >-
+            The id of any audited subject: a payment instruction, an approval,
+            an organisation, a ledger account or a journal entry.
           schema: { type: string, format: uuid }
         - $ref: "#/components/parameters/ActorId"
         - $ref: "#/components/parameters/OptionalOrganisationId"
@@ -2003,6 +2338,209 @@ components:
           type: string
           enum: [active, suspended]
 
+    SettlementBatchItem:
+      type: object
+      description: |
+        One instruction's membership of one batch, and what became of it.
+      required: [instructionId]
+      properties:
+        instructionId: { type: string, format: uuid }
+        outcome:
+          type: string
+          nullable: true
+          enum: [settled, returned, timed-out]
+          description: |
+            Null while the simulated scheme has not answered. `timed-out` means
+            **unknown** — CloFin stopped waiting — not failed, and an item in
+            that state can never be re-batched until a `timeout-resolution`
+            says what really happened.
+
+            There is deliberately no `failed`: a scheme failure that sends the
+            money back is a `returned`.
+        outcomeReason:
+          type: string
+          description: Required on a `returned` item; the simulated scheme's stated reason.
+        resolvedAt: { type: string, format: date-time }
+
+    SchemeResponseRecord:
+      type: object
+      description: |
+        A simulated scheme response as recorded. Kept whether or not it caused
+        work: the evidence that a duplicate arrived and was refused is the point
+        of storing them.
+      required: [id, kind, reference, receivedAt]
+      properties:
+        id: { type: string, format: uuid }
+        instructionId:
+          type: string
+          format: uuid
+          description: Absent on a batch-level `ack`.
+        kind:
+          type: string
+          enum: [ack, settled, returned, timeout-resolution]
+        reference: { type: string }
+        receivedAt: { type: string, format: date-time }
+
+    SettlementBatch:
+      type: object
+      description: |
+        A set of approved payment instructions submitted to a **simulated**
+        scheme as a unit, sharing one (scheme, currency, value date).
+      required: [id, organisationId, scheme, currency, valueDate, status, createdBy, createdAt, simulated]
+      properties:
+        id: { type: string, format: uuid }
+        organisationId: { type: string, format: uuid }
+        scheme:
+          type: string
+          enum: [SIM-RTGS, SIM-ACH]
+          description: |
+            Simulated schemes only. The `SIM-` prefix is enforced by a database
+            check constraint so a synthetic record can never name a real
+            network.
+        currency: { type: string, minLength: 3, maxLength: 3 }
+        valueDate: { type: string, format: date }
+        status:
+          type: string
+          enum: [open, submitted, settled, partially-settled, failed]
+          description: |
+            **Derived from the items' outcomes, never set directly** — the same
+            doctrine that makes a balance an aggregation over the journal rather
+            than a stored column. `open` before submission; `submitted` while
+            any item is unresolved; then `settled` (all settled), `failed` (none
+            settled) or `partially-settled` (a mix).
+
+            A batch of items that all timed out derives to `failed`. That is a
+            statement about what CloFin knows, not about what the scheme did —
+            the items carry the distinction, and a late `timeout-resolution` can
+            move the batch off `failed`.
+        createdBy: { type: string, format: uuid }
+        createdAt: { type: string, format: date-time }
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/SettlementBatchItem"
+        itemCount: { type: integer }
+        exceptions:
+          type: array
+          description: |
+            The returned items, with their reasons — the exception cases an
+            operator has to act on, surfaced rather than left to be filtered out
+            of `items` client-side.
+          items:
+            $ref: "#/components/schemas/SettlementBatchItem"
+        schemeResponses:
+          type: array
+          items:
+            $ref: "#/components/schemas/SchemeResponseRecord"
+        replayed:
+          type: boolean
+          description: |
+            On `recordSchemeResponse` only: true when this delivery was a
+            duplicate and did no work.
+        outcome:
+          type: string
+          nullable: true
+          description: "On `recordSchemeResponse` only: the outcome this response resolved."
+        timedOut:
+          type: array
+          description: "On `sweepSettlementTimeouts` only: the instructions this sweep gave up on."
+          items: { type: string, format: uuid }
+        timeoutSeconds:
+          type: integer
+          description: "On `sweepSettlementTimeouts` only: the horizon applied."
+        simulated:
+          type: boolean
+          description: |
+            Always true. CloFin settles against simulated schemes only, and says
+            so in the payload rather than only in prose.
+
+    SettlementBatchList:
+      type: object
+      required: [settlementBatches, count, limit, truncated, simulated]
+      properties:
+        settlementBatches:
+          type: array
+          items:
+            $ref: "#/components/schemas/SettlementBatch"
+        count: { type: integer }
+        limit: { type: integer }
+        truncated:
+          type: boolean
+          description: True when the row cap was reached and the answer is partial.
+        simulated: { type: boolean }
+
+    CreateSettlementBatchRequest:
+      type: object
+      required: [scheme, currency, valueDate, instructionIds]
+      properties:
+        organisationId:
+          type: string
+          format: uuid
+          description: |
+            Verified against the authenticated actor's organisation, never
+            trusted. A mismatch is refused rather than ignored.
+        scheme:
+          type: string
+          enum: [SIM-RTGS, SIM-ACH]
+          description: |
+            Which simulated scheme settles this batch. An operator's routing
+            choice: a payment instruction carries no scheme attribute, so this
+            is not derived from its members.
+        currency: { type: string, minLength: 3, maxLength: 3 }
+        valueDate: { type: string, format: date }
+        instructionIds:
+          type: array
+          minItems: 1
+          description: |
+            The approved instructions to batch. Every one must be `approved`, in
+            this organisation, and carry the batch's currency and value date.
+          items: { type: string, format: uuid }
+
+    SchemeResponseRequest:
+      type: object
+      description: |
+        A **simulated** scheme response. See `recordSchemeResponse` for how the
+        simulation decides an outcome and how to produce partial failure on
+        demand.
+      required: [kind, reference]
+      properties:
+        organisationId: { type: string, format: uuid }
+        kind:
+          type: string
+          enum: [ack, settled, returned, timeout-resolution]
+        instructionId:
+          type: string
+          format: uuid
+          description: Required for every kind except `ack`.
+        reference:
+          type: string
+          description: |
+            The scheme's own reference. Part of the replay key
+            `(batch, instruction, kind, reference)`, so the same reference
+            delivered twice is one response delivered twice and the second does
+            no work.
+        reason:
+          type: string
+          description: Required when `kind` is `returned`, or when a `timeout-resolution` resolves to `returned`.
+        outcome:
+          type: string
+          enum: [settled, returned]
+          description: |
+            Required when `kind` is `timeout-resolution`: what the scheme now
+            says really happened to an item CloFin had given up on.
+
+    TimeoutSweepRequest:
+      type: object
+      properties:
+        organisationId: { type: string, format: uuid }
+        timeoutSeconds:
+          type: integer
+          minimum: 0
+          description: |
+            How old the batch must be before its unanswered items are given up
+            on. Defaults to one hour. Measured from the batch's creation,
+            because the schema records no submission time.
+
     AuditAction:
       type: string
       description: |
@@ -2043,6 +2581,14 @@ components:
         - organisation.created
         - account.created
         - journal-entry.posted
+        - payment.released
+        - payment.settled
+        - payment.returned
+        - payment.failed
+        - settlement-batch.created
+        - settlement-batch.submitted
+        - settlement-batch.completed
+        - settlement-batch.timeout-swept
 
     AuditEvent:
       type: object
@@ -2074,7 +2620,7 @@ components:
           $ref: "#/components/schemas/AuditAction"
         subjectType:
           type: string
-          enum: [payment-instruction, approval, organisation, account, journal-entry]
+          enum: [payment-instruction, approval, organisation, account, journal-entry, settlement-batch]
         subjectId: { type: string, format: uuid }
         beforeDigest:
           type: string
@@ -2123,7 +2669,7 @@ components:
         subjectId: { type: string, format: uuid }
         subjectType:
           type: string
-          enum: [payment-instruction, approval]
+          enum: [payment-instruction, approval, organisation, account, journal-entry, settlement-batch]
         from:
           type: string
           format: date-time

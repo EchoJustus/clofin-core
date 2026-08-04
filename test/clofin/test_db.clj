@@ -44,7 +44,7 @@
   discovers that from `pg_trigger` — but it does assert the two agree, so a
   migration that adds or removes a guard fails here loudly rather than leaving
   a cleanup that silently stops resetting a table."
-  ["journal_entry" "journal_line" "audit_event" "approval"])
+  ["journal_entry" "journal_line" "audit_event" "approval" "scheme_response"])
 
 (defn clean-business-data!
   "Reset business tables between tests, leaving reference data and the
@@ -117,6 +117,8 @@
       ;; only ever truncated by implication is a test that fails somewhere else.
       (db/execute! tx ["truncate audit_event, approval, approver_limit,
                                  approval_threshold, actor_role, actor,
+                                 scheme_response, settlement_batch_item,
+                                 settlement_batch,
                                  idempotency_key, payment_instruction,
                                  journal_line, journal_entry, ledger_account,
                                  organisation cascade"])

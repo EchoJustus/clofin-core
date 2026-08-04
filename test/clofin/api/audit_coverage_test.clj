@@ -266,10 +266,21 @@
       (is (= 422 (:status (call :post "/journal-entries" :actor controller :body unbalanced))))
       (is (= before (audit-count))))
     (testing "an entry referencing an unknown account is a 422 and records nothing"
-      (is (= 422 (:status (call :post "/journal-entries" :actor controller
-                                :body (assoc-in unbalanced ["lines" 0 "accountId"]
-                                                (str (random-uuid)))))))
-      (is (= before (audit-count))))))
+      ;; **Balanced**, deliberately. An unbalanced body would be refused by
+      ;; `assert-balanced!` before the transaction opens, and this case would
+      ;; then be a second copy of the one above rather than a test of the
+      ;; repository refusing from *inside* the open transaction — which is the
+      ;; path `clofin.ledger.service/post-entry!` names as its first failure
+      ;; mode, and the only one where an audit write is a line away.
+      (let [{:keys [status json]}
+            (call :post "/journal-entries" :actor controller
+                  :body (-> unbalanced
+                            (assoc-in ["lines" 1 "amount" "minorUnits"] 125000)
+                            (assoc-in ["lines" 0 "accountId"] (str (random-uuid)))))]
+        (is (= 422 status))
+        (is (str/includes? (str (get json "detail")) "do not exist")
+            "refused for the account, not for the balance — otherwise this asserts nothing new")
+        (is (= before (audit-count)))))))
 
 ;; ---------------------------------------------------------------------------
 ;; AC-4 — digests, not payloads
@@ -283,12 +294,16 @@
           cash (new-account! org controller "1100-CLIENT-FUNDS" "asset")
           payable (new-account! org controller "2100-CLIENT-PAYABLE" "liability")
           _ (new-entry! org controller {:from payable :to cash})
-          rendered (str/lower-case
-                    (pr-str (db/query tdb/*pool*
-                                      ["select id::text, organisation_id::text, actor_id::text,
-                                               action, subject_type, subject_id::text,
-                                               before_digest, after_digest, correlation_id
-                                          from audit_event"])))]
+          rows (db/query tdb/*pool*
+                         ["select id::text, organisation_id::text, actor_id::text,
+                                  action, subject_type, subject_id::text,
+                                  before_digest, after_digest, correlation_id
+                             from audit_event"])
+          rendered (str/lower-case (pr-str rows))]
+      ;; Without this the assertions below pass on an empty table — nothing
+      ;; contains a payload if there is nothing there.
+      (is (= 4 (count rows))
+          "one organisation, two accounts and one entry — four rows to inspect")
       (doseq [payload ["meridian" "freight holdings" "client funds received"
                        "1100-client-funds" "125000"]]
         (is (not (str/includes? rendered payload))

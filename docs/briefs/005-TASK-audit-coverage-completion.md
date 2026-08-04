@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | **Increment** | 4 (completion) — closes debt TASK-003 named, it does not open new product surface |
-| **Status** | `CLOSED` — merged to `main` in PR #6 (`2ba977e`) 2026-08-04; all three objections ruled in the Worker's favour, see Changelog. C-05 is unqualified on `main` |
+| **Status** | `CLOSED` — merged to `main` in PR #6 (`2ba977e`) 2026-08-04; all three objections ruled in the Worker's favour, see Changelog. C-05 is unqualified on `main`. **Fully clean only as of PR #7 (`cba31c5`)**, which landed the post-merge contract fix this ingestion missed — see the Changelog tail and lesson L-9 |
 | **Depends on** | TASK-003 — `clofin.audit` and the authenticated principal must exist |
 | **Base branch** | `main` at `5ff00eb` — TASK-003 merged 2026-08-04, so this is an ordinary branch off `main` with the PR against `main`. *(The stacking instructions this field carried before the merge are obsolete.)* |
 | **Blocks** | Nothing hard; C-05 stays scope-qualified until this lands |

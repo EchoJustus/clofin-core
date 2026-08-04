@@ -41,7 +41,7 @@ table and a brief disagree, the brief on `origin/meta` wins.
 | [001 — Ledger persistence and account API](001-TASK-ledger-persistence-and-account-api.md) | 2 | `CLOSED` — merged in PR #2; **audited** (FEEDBACK-M1: F-002/F-003/F-004, actioned via the increment-4 stack) | — | PR-020…024 | Medium |
 | [002 — Payment instruction lifecycle and idempotency](002-TASK-payment-instruction-lifecycle.md) | 3 | `CLOSED` — merged in PR #4 (`31306dd`); **audited** (FEEDBACK-M1: no new findings) | 001 ✅ | PR-001…005, PR-040…044 | Large |
 | [003 — Authorisation, maker–checker and audit trail](003-TASK-authorisation-and-audit-trail.md) | 4 | `CLOSED` — merged in PR #5 (`5ff00eb`); FEEDBACK-M1 fully remediated & verified | 002 ✅ | PR-010…015, PR-070…075 | Large |
-| [004 — Settlement simulation](004-TASK-settlement-simulation.md) | 5 | `IMPLEMENTED` — PR #7 open and green (`55566ad`); objections ruled; carries the TASK-005 O-3 fix; cleared to merge | 003 ✅, 005 ✅ merged | PRD §5.3 | Large |
+| [004 — Settlement simulation](004-TASK-settlement-simulation.md) | 5 | `CLOSED` — merged in PR #7 (`cba31c5`); three objections ruled; carried the TASK-005 O-3 fix | 003 ✅, 005 ✅ merged | PRD §5.3 | Large |
 | [005 — Audit coverage completion](005-TASK-audit-coverage-completion.md) | 4 (completion) | `CLOSED` — merged in PR #6 (`2ba977e`); three objections ruled for the Worker | 003 ✅ merged | PR-072, C-05 | Small |
 
 Sequencing follows **product relevance and regulatory risk**, not implementation
@@ -87,4 +87,5 @@ increment was specified, which is as useful as the code that resulted.
 | [001 — Ledger persistence and account API](001-TASK-ledger-persistence-and-account-api.md) | 2 | PR #2 (`f7018a1`) | FEEDBACK-M1 — F-002/F-003/F-004, all remediated via the increment-4 stack |
 | [002 — Payment instruction lifecycle and idempotency](002-TASK-payment-instruction-lifecycle.md) | 3 | PR #4 (`31306dd`) | FEEDBACK-M1 — no new findings; eight brief objections ruled at dispatch |
 | [003 — Authorisation, maker–checker and audit trail](003-TASK-authorisation-and-audit-trail.md) | 4 | PR #5 (`5ff00eb`) | FEEDBACK-M1 — F-001/F-002 blocking + F-005/F-006, all remediated & verified; four brief objections ruled at dispatch |
-| [005 — Audit coverage completion](005-TASK-audit-coverage-completion.md) | 4 (completion) | PR #6 (`2ba977e`) | Awaiting Milestone 2 batch audit (with TASK-004); three brief objections ruled at ingestion, all for the Worker |
+| [005 — Audit coverage completion](005-TASK-audit-coverage-completion.md) | 4 (completion) | PR #6 (`2ba977e`); its post-merge contract fix landed via PR #7 (`b21d4c1`) | Awaiting Milestone 2 batch audit; three brief objections ruled at ingestion; the L-9 tail recorded |
+| [004 — Settlement simulation](004-TASK-settlement-simulation.md) | 5 | PR #7 (`cba31c5`) | Awaiting Milestone 2 batch audit (with TASK-005); three brief objections ruled at ingestion |

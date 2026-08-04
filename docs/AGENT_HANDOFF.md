@@ -74,6 +74,19 @@ opened, `REQ` filed), and Master Control moves the brief to `IMPLEMENTED` on
 `meta`. If the brief on `origin/meta` and this table disagree about anything,
 `origin/meta` wins.
 
+**Merge precondition — no merge while a Worker's verification is in flight
+(lesson L-9, mandatory).** Master Control never merges a PR while its authoring
+Worker has a **declared verification still running** — a self-review, an
+adversarial pass, a long test run, anything the completion report says may yet
+surface a fix. Such a statement is a **hold**, not a footnote: the PR waits for
+the Worker's explicit "verification complete, clean" (or a pushed fix followed
+by that signal), and a completion report that is silent on the matter is
+confirmed before merging, not assumed clean. The rule exists because it was
+broken once: PR #6 was merged ten minutes before its Worker's declared review
+surfaced a real false-contract defect, whose fix then could not land and had to
+be carried by the next increment. `IMPLEMENTED` status is unaffected — only the
+merge waits.
+
 ---
 
 ## 1b. Branch topology: control plane and data plane

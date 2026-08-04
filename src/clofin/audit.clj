@@ -87,7 +87,37 @@
          ;; the only transition it has, and naming the event after the act
          ;; keeps the vocabulary a description of what happened rather than of
          ;; how a row arrived.
-         "journal-entry.posted"]))
+         "journal-entry.posted"
+
+         ;; Settlement (TASK-004). The payment's own remaining transitions,
+         ;; each emitted in the transaction where that transition commits and
+         ;; nowhere else — L-7, which this vocabulary is the first extension to
+         ;; be written under rather than corrected by.
+         "payment.released"
+         "payment.settled"
+         "payment.returned"
+         ;; Reserved: the lifecycle carries a `fail` arrow out of `released`,
+         ;; but no item outcome drives it — `settlement_batch_item.outcome` is
+         ;; settled | returned | timed-out, and a scheme failure that sends the
+         ;; money back IS a return. Declared because brief 004 §9 names it and
+         ;; because increment 6 or 7 may drive it; recorded as objection O-1 in
+         ;; 004-REQ rather than left as an unexplained term nothing emits.
+         "payment.failed"
+
+         ;; The batch's own lifecycle. Deliberately distinct from the payments'
+         ;; terms: a batch being submitted is not a payment being released, and
+         ;; counting one as the other is exactly the mislabelling F-005 found.
+         "settlement-batch.created"
+         "settlement-batch.submitted"
+         ;; **Only** where the batch reaches a terminal derived status, i.e.
+         ;; when the last unresolved item resolves. A response that resolves one
+         ;; item of ten completes nothing, and a batch with unresolved items is
+         ;; not completed however many responses have arrived.
+         "settlement-batch.completed"
+         ;; The sweep is a state change to the items it marks, caused by the
+         ;; passage of time rather than by a scheme. Its own term, because
+         ;; "we stopped waiting" is not "the scheme answered".
+         "settlement-batch.timeout-swept"]))
 
 (def subject-types
   "Every kind of thing an audit event may be about.
@@ -97,7 +127,14 @@
   *instruction* record, which is what `subject_id` addresses."
   (into (sorted-set)
         ["payment-instruction" "approval"
-         "organisation" "account" "journal-entry"]))
+         "organisation" "account" "journal-entry"
+         ;; The batch, not its items. An item has no identity of its own — its
+         ;; key is (batch, instruction) — so an event about an item names the
+         ;; instruction it is about, and an event about the batch names the
+         ;; batch. Inventing a synthetic item id purely to have something to put
+         ;; in `subject_id` would put a surrogate in the column an auditor joins
+         ;; on.
+         "settlement-batch"]))
 
 (def bootstrap-actions
   "The actions that may be recorded with no actor at all.
@@ -314,3 +351,21 @@
   [entry]
   (when entry
     (select-keys entry journal-entry-fields)))
+
+(def settlement-batch-fields
+  "The fields of a settlement batch that a digest covers.
+
+  Identity, the routing that defines the batch, and `status` — which is the
+  only one that moves. A batch's *membership* is deliberately outside the
+  projection: members are rows in another table, and a digest that changed
+  every time an item resolved would make `settlement-batch.submitted`'s after
+  digest incomparable with anything an auditor could recompute later. The
+  membership has its own evidence — one `payment.released` event per instruction
+  in the same transaction as the submission."
+  [:id :organisation-id :scheme :currency :value-date :status])
+
+(defn settlement-batch-subject
+  "The projection of a settlement batch that its audit digests are taken over."
+  [batch]
+  (when batch
+    (select-keys batch settlement-batch-fields)))
