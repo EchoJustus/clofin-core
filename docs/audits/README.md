@@ -81,7 +81,53 @@ that its statements are checkable; that applies to its replies to reviewers too.
 | *(pending)* | Increment 2 / PR #2 — `001-REQ` filed by the Worker | requested 2026-08-02 | — | Awaiting `FEEDBACK-001` from the Principal Architect. PR #2 merged to `main` (`f7018a1`) ahead of the audit — reviews do not gate execution; any findings will be dispatched as fix instructions against `main`. |
 | *(pending)* | Increment 3 / PR #4 — [`002-REQ`](002-REQ-payment-instruction-lifecycle.md) | requested 2026-08-03 | — | Eight Worker objections triaged same day; rulings in the brief's changelog. O-3 fix ordered **and applied** (`f529663`). **Milestone batch audit deferred until after TASK-003** by decision of 2026-08-03 — FEEDBACK-001/002/003 expected as one batch review. |
 | *(pending)* | Increment 4 / PR #5 — [`003-REQ`](003-REQ-authorisation-and-audit-trail.md) | requested 2026-08-03 | — | Four Worker objections triaged same day; rulings in [TASK-003's changelog](../briefs/003-TASK-authorisation-and-audit-trail.md). O-1 fix ordered **and applied** (`6f58857`, migration `0006`); O-2 resolution ratified; lessons L-1 widened, L-3 and L-4 added. **TASK-003 is implemented, so the deferred milestone batch audit is now unblocked** — FEEDBACK-001/002/003 awaited as one batch. |
-| [`FEEDBACK-M1-foundation`](FEEDBACK-M1-foundation.md) — **ingested** | Milestone 1 batch — 001-REQ, 002-REQ, 003-REQ, plus the never-audited increment-1 substrate | commissioned 2026-08-03 · received & ingested 2026-08-03 | **2 B / 4 S / 0 C** | Executed via the **CodeSpace path** (external agent, read-only clone; transcript in the bridge at `audit/chats/20260803-01-first-audit.json`). Both blockers **independently verified by Master Control before the file arrived**: F-001 in source, F-002 reproduced empirically (with the `BEFORE TRUNCATE` guard verified effective). **Triage — all six actioned, none disputed, none deferred:** F-001 → creator-only submit (satisfies C-01's "creates *or submits*" by collapsing the two; stated explicitly in the OpenAPI contract per the auditor's caveat); F-002 → `BEFORE TRUNCATE` statement triggers on all four append-only tables **plus** the test-cleanup consequence the auditor caught — `test_db.clj` deliberately truncates past the triggers, so cleanup switches to an explicit, commented disable/re-enable bypass — and the runtime role split recorded as named debt; F-003 → deferred entry-level constraint (line cardinality + balance at commit); F-004 → `FOR UPDATE` on referenced accounts in stable order + latch-based race test; F-005 → `approval.recorded` action, `payment.approved` only on the completing transition; F-006 → `approval.invalidated` events per approval, same transaction, evidence pack extended. All six land as **one consolidated remediation on PR #5's branch** by the TASK-003 Worker (findings against TASK-001 ride the stack; briefs 001/002 stay `IMPLEMENTED` — their findings are should-fix). **PR #4 and PR #5 merges BLOCKED** until F-001/F-002 land green; brief 003 `IN PROGRESS`. Lessons L-5…L-8. |
+| [`FEEDBACK-M1-foundation`](FEEDBACK-M1-foundation.md) — **ingested** | Milestone 1 batch — 001-REQ, 002-REQ, 003-REQ, plus the never-audited increment-1 substrate | commissioned 2026-08-03 · received & ingested 2026-08-03 | **2 B / 4 S / 0 C** | Executed via the **CodeSpace path** (external agent, read-only clone; transcript in the bridge at `audit/chats/20260803-01-first-audit.json`). Both blockers **independently verified by Master Control before the file arrived**: F-001 in source, F-002 reproduced empirically (with the `BEFORE TRUNCATE` guard verified effective). **Triage — all six actioned, none disputed, none deferred:** F-001 → creator-only submit (satisfies C-01's "creates *or submits*" by collapsing the two; stated explicitly in the OpenAPI contract per the auditor's caveat); F-002 → `BEFORE TRUNCATE` statement triggers on all four append-only tables **plus** the test-cleanup consequence the auditor caught — `test_db.clj` deliberately truncates past the triggers, so cleanup switches to an explicit, commented disable/re-enable bypass — and the runtime role split recorded as named debt; F-003 → deferred entry-level constraint (line cardinality + balance at commit); F-004 → `FOR UPDATE` on referenced accounts in stable order + latch-based race test; F-005 → `approval.recorded` action, `payment.approved` only on the completing transition; F-006 → `approval.invalidated` events per approval, same transaction, evidence pack extended. All six land as **one consolidated remediation on PR #5's branch** by the TASK-003 Worker (findings against TASK-001 ride the stack; briefs 001/002 stay `IMPLEMENTED` — their findings are should-fix). Lessons L-5…L-8. **Remediation log below.** |
+
+### FEEDBACK-M1 remediation log
+
+Tracks the consolidated remediation on PR #5's branch
+(`claude/authorisation-audit-trail-r5fzw3`) against each finding.
+
+| Finding | State | Evidence |
+|---|---|---|
+| **F-001** maker–checker bypass | ✅ **remediated & verified** (`971d0d1`) | `:submit` is a `creator-only-events` set enforced in `payments.repository/transition!` **under the row lock, before the lifecycle** (mirroring `amend!`), so a non-creator gets `403` by any route into the repository, not just the handler. C-01's own published evidence query — the one COMPLIANCE tells an auditor to run — is now a regression assertion. Master Control re-read the enforcement path and re-ran the exploit reasoning: killed. |
+| **F-002** TRUNCATE bypass | ✅ **remediated & verified** (`971d0d1`, migration `0007`) | `BEFORE TRUNCATE FOR EACH STATEMENT` on all four append-only tables reusing `reject_mutation()`. Master Control re-probed from an empty schema (0001–0007): `audit_event`, `journal_line`, `approval` refuse `TRUNCATE`; `journal_entry` refuses (FK first, trigger on cascade); `truncate … cascade` and truncate-laundered-through-`organisation` both refused. Test harness reworked to disarm only the named TRUNCATE triggers, discovered from `pg_trigger`, restoring each `tgenabled`, in one transaction — the cleanup **is** the schema-owner-adversary demonstration COMPLIANCE §4 names. |
+| **F-003** zero-line journal entry | ⏳ dispatched (should-fix) | Next remediation batch. |
+| **F-004** freeze/post TOCTOU race | ⏳ dispatched (should-fix) | Next remediation batch (lesson L-8). |
+| **F-005** `payment.approved` on non-final approval | ⏳ dispatched (should-fix) | Next remediation batch (lesson L-7). |
+| **F-006** amendment invalidates approvals with no approval event | ⏳ dispatched (should-fix) | Next remediation batch (lesson L-7). |
+
+**Merge posture.** The two **blocking** findings are remediated and verified,
+so the blocking bar is cleared. The hold on PR #4 and PR #5 is **deliberately
+kept** until F-003–F-006 land, so the milestone merges fully remediated on a
+coherent history — a batch-completion choice, not a claim that should-fix
+findings block. The stack is unmerged and nothing downstream waits, so the cost
+of holding is nil; reversible on request.
+
+**Rulings on the Worker's remediation open questions (2026-08-03):**
+
+- **`:cancel` provenance — ratified as left.** Cancellation stays
+  permission-gated (`:payment/cancel`), **not** creator-gated. It destroys no
+  control — it reaches a terminal state and can never produce an approval — and
+  `controller` holds `:payment/cancel` precisely so a non-maker can *halt* a
+  payment; creator-restricting it would remove that safety valve. PR-004 names
+  cancellation as a creator's act for a *draft*, which the permission model
+  already serves (the creator, an operator, holds the permission). Settled, not
+  open.
+- **`session_replication_role = 'replica'` — ratified as F-002 residue, not a
+  new finding.** Setting it requires superuser, and a superuser can already
+  `DROP`/`DISABLE TRIGGER` as owner — the same adversary class L-5 names. The
+  Worker's rejection of `ENABLE ALWAYS` is upheld: it diverges from the
+  specified DDL and closes one superuser door in a room with no walls. The real
+  fix is the runtime role split (named debt). The next batch adds
+  `session_replication_role` to the COMPLIANCE §4 residue text so the debt is
+  named completely.
+- **A refused submission/approval leaves no audit event — deferred to its own
+  brief.** C-05 scopes the trail to state *changes*; a refused attempt is not
+  one, and recording attempted control violations is a distinct control
+  (security-event logging: different volume, retention, likely a different
+  table) — genuinely separate from TASK-005's *successful-write* coverage gap.
+  Recorded as a **future-brief candidate**; not folded into this remediation.
 
 ### Submissions awaiting review
 

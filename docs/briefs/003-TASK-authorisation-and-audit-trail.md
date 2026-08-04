@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | **Increment** | 4 |
-| **Status** | `IN PROGRESS` — returned from `IMPLEMENTED` 2026-08-03: FEEDBACK-M1 blocking findings F-001 (maker–checker bypass via unrestricted `submit`) and F-002 (`TRUNCATE` bypasses append-only triggers), both verified by Master Control; remediation dispatched to the owning Worker. Prior state: PR #5 green at `6f58857`, all four REQ rulings actioned |
+| **Status** | `IN PROGRESS` — FEEDBACK-M1 remediation. Blockers **F-001 and F-002 remediated & verified** (`971d0d1`, migration `0007`); should-fix **F-003–F-006 dispatched**. Merge held for batch completion (blocking bar cleared). See the [remediation log](../audits/README.md#feedback-m1-remediation-log) |
 | **Depends on** | TASK-002 — needs the instruction lifecycle to attach approval to |
 | **Base branch** | `feat/payment-instruction-lifecycle` at `f529663` — TASK-002 is implemented but unmerged (PR #4), so **stack on its tip and open the PR against that branch**, not `main`, per AGENT_HANDOFF §1b. When PR #4 merges, retarget to `main` and rebase |
 | **Blocks** | Increment 5 (settlement) |
