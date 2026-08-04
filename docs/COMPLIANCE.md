@@ -80,16 +80,29 @@ defect in it. It does **not** hold against an adversary who can choose the
 no signature — see §4. C-01 is enforced; the identity it is enforced against is
 asserted by the caller.
 
-**Evidence.** `audit_event` rows for `payment.submitted` and `payment.approved`
-carry the actor. The control-failure query returns no rows:
+**Evidence.** `audit_event` rows for `payment.submitted` and
+`approval.recorded` carry the actor. The control-failure query returns no rows:
 
 ```sql
 select s.subject_id
   from audit_event s
-  join audit_event a
-    on a.subject_id = s.subject_id and a.actor_id = s.actor_id
- where s.action = 'payment.submitted' and a.action = 'payment.approved';
+  join approval ap on ap.instruction_id = s.subject_id
+  join audit_event d on d.subject_id = ap.id
+                    and d.action = 'approval.recorded'
+ where s.action = 'payment.submitted'
+   and d.actor_id = s.actor_id;
 ```
+
+The join goes through the `approval` table rather than matching two events on
+one subject, because after audit finding **F-005** an approval decision is
+`approval.recorded` against the approval, and `payment.approved` is emitted
+once, in the transaction that actually moved the payment. Joining the two
+`audit_event` rows directly would have quietly stopped seeing the second and
+third approver on a two-approval payment — a control query that returns no rows
+because it no longer looks anywhere is indistinguishable, on the page, from a
+control that holds. `clofin.api.approvals-api-test` runs this query and then
+plants the violation it is meant to catch, asserting it is found: an evidence
+query is only evidence if it can fail.
 
 **Tests.** `clofin.authz.approval-test` is table-driven across the full actor ×
 instruction matrix — every role set, every limit, every amount — and calls
@@ -180,7 +193,8 @@ correction; the original row is unchanged and still present.
 
 ### C-04 Ledger integrity ✅
 
-**Statement.** Total debits equal total credits, per currency, for every entry.
+**Statement.** Total debits equal total credits, per currency, for every entry —
+and every entry has at least two lines to balance.
 
 **Design.** Enforced twice, deliberately: once in the domain constructor and
 once in the database. A defect in application code must not be able to commit an
@@ -188,12 +202,32 @@ unbalanced entry. See [ADR-0008](ADR/0008-double-entry-journal-as-source-of-trut
 
 **Enforcement point.**
 - `clofin.ledger.entry/entry` raises with the per-currency shortfall ✅
-- Deferred constraint trigger `journal_entry_must_balance` ✅
+- Deferred constraint trigger `journal_entry_must_balance` on `journal_line` ✅
+- Deferred constraint trigger `journal_entry_must_be_complete` on `journal_entry`,
+  checking **line cardinality ≥ 2 and per-currency balance** at commit
+  (migration `0008`, after audit finding F-003) ✅
 - Property test over generated many-to-many postings ✅
 - Integration test bypassing the domain layer entirely ✅
 
+**Why two triggers and not one.** `journal_entry_must_balance` fires on
+`journal_line`. An entry with **no lines** fires it zero times, so until
+migration `0008` a single `insert into journal_entry` with no lines at all
+committed cleanly — an entry that is not merely unbalanced but not
+double-entry at all, and one the balance check can never see. Audit finding
+**F-003** reproduced it. The fix could not be a stricter line trigger; it had
+to be a guard on the entry, since the entry is the only row that exists in the
+zero-line case. `journal_entry_must_be_complete` is `DEFERRABLE INITIALLY
+DEFERRED`, so a transaction that writes the entry before its lines — which is
+the only order a foreign key permits — is still legal, and only its *commit* is
+judged. The balance check is duplicated inside it deliberately, with the same
+message wording, so that the two guards cannot disagree about what balanced
+means.
+
 **Evidence.** The property test's seed and case count; a direct SQL attempt that
-fails with the imbalance named.
+fails with the imbalance named. For F-003, `clofin.db.ledger-constraints-test`
+opens a transaction, inserts an entry with zero lines and then with one line,
+and asserts the commit is refused in both cases — with a third case proving a
+transiently incomplete entry mid-transaction is still allowed to complete.
 
 ---
 
@@ -215,6 +249,35 @@ connection available to a caller *is* the transaction carrying the change.
 requires no `clofin.db.*` namespace at all — a service that could open its own
 connection is a service that could write an audit event outside the change it
 describes, and `clofin.ledger.purity-test` fails the build if it acquires one.
+
+**One event per state change, named after the change it is.** `clofin.audit`
+holds a closed vocabulary and `event` refuses anything outside it. Two rules
+govern what goes in, both learned from audit findings rather than chosen up
+front:
+
+- **An action named `<subject>.<transition>` is emitted only in the transaction
+  where that transition commits.** Finding **F-005**: `payment.approved` was
+  written by *every* approval, so a payment on a two-approval band produced two
+  `payment.approved` events and had been approved once. An evidence pack read
+  literally said the payment reached `approved` twice, and a count of
+  `payment.approved` was a count of decisions rather than of approvals — the
+  reading an auditor would take is the one that was wrong. An approval decision
+  now emits **`approval.recorded`** against the approval, every time; the
+  payment's own transition emits `payment.approved` once, where it happens.
+- **A state change with no event is an unaudited state change, whoever caused
+  it.** Finding **F-006**: amending an instruction invalidates the approvals
+  standing against it, and that is a change to *those rows* — but the trail
+  recorded only `payment.amended`. Who lost their approval, and under which
+  correlation id, had to be inferred from a column. Amendment now emits one
+  **`approval.invalidated`** per approval, with the before and after
+  projections, in the same transaction as the amendment and its own event, so
+  the whole set commits or none of it does.
+
+Because an approval's events carry the *approval* as their subject,
+`clofin.audit.repository/events-for-payment` relates them back through
+`approval.instruction_id`, and the evidence pack for a payment shows its
+approvals' history without the subject column having to lie about what an event
+is about.
 
 **Enforcement points.**
 
@@ -238,7 +301,12 @@ proof that nothing happened.
 failure is the *database* refusing rather than a thrown exception.
 `clofin.db.audit-constraints-test` attempts `UPDATE`, `DELETE`, a bulk delete
 and a no-op update directly in SQL, bypassing the application entirely, and
-asserts each is refused.
+asserts each is refused. For F-005 and F-006,
+`clofin.api.approvals-api-test` asserts the exact multiset of actions a
+two-approval payment produces, that a partial approval records a decision and
+no transition, that an amendment emits one `approval.invalidated` per approval,
+and that the amendment event and every invalidation event roll back together
+when the transaction fails.
 
 **What a trigger cannot do, stated because the previous wording claimed
 otherwise.** This table used to say the guard was "not revoked privileges — a

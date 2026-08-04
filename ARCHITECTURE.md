@@ -152,9 +152,19 @@ authoritative value. Each journal entry carries two or more lines, each with an
 explicit `:debit` or `:credit` direction and a positive amount. The invariant —
 total debits equal total credits, per currency, per entry — is checked when the
 entry is constructed, and again by a database constraint when it is persisted.
-Entries are immutable once posted; a mistake is corrected by a reversing entry
-that references the original. See
+So is the "two or more" part: a second deferred constraint, on the entry rather
+than on its lines, refuses an entry that reaches commit with fewer than two
+lines. It is on the entry because a `for each row` guard over lines cannot see
+an entry that has none, which is how a zero-line entry committed cleanly until
+migration `0008`. Entries are immutable once posted; a mistake is corrected by a
+reversing entry that references the original. See
 [ADR-0008](docs/ADR/0008-double-entry-journal-as-source-of-truth.md).
+
+Account status is checked under a row lock, not merely read: the transaction
+that posts against an account takes `for update` on every account it will touch,
+in id order, so a freeze committing concurrently is serialised against the
+posting rather than racing it. Validating a row and then writing on the strength
+of that validation is a race under `READ COMMITTED` unless the row is held.
 
 ### 5.3 Payment lifecycle
 
@@ -214,7 +224,14 @@ saw success
 
 Every payment instruction and approval state change is appended to
 `audit_event` with actor, action, subject, before/after **digest**, correlation
-id and timestamp. The table is append-only: `UPDATE` and `DELETE` are rejected
+id and timestamp. The action comes from a closed vocabulary, and an action named
+`<subject>.<transition>` is written **only in the transaction where that
+transition commits** — so a payment on a two-approval band emits two
+`approval.recorded` events, one per decision, and exactly one
+`payment.approved`. An approval's own events name the approval as their subject;
+the evidence pack for a payment relates them back through
+`approval.instruction_id` rather than mislabelling them. The table is
+append-only: `UPDATE` and `DELETE` are rejected
 by a row-level trigger and `TRUNCATE` by a statement-level one, so all three of
 PostgreSQL's destructive verbs are refused. `TRUNCATE` was added by migration
 `0007` after an audit found it uncovered — it visits no rows, so a `for each
@@ -280,8 +297,14 @@ ledger:
 
 - `CHECK` constraints on positive amounts and known currency codes
 - A deferred constraint trigger asserting per-entry zero-sum on commit
+- A second deferred constraint trigger, on `journal_entry`, asserting at commit
+  that the entry has at least two lines **and** balances — the first alone is
+  vacuous for an entry with no lines
 - Unique constraints backing idempotency keys
-- Revoked `UPDATE`/`DELETE` on journal and audit tables
+- Refused `UPDATE`, `DELETE` and `TRUNCATE` on journal, approval and audit
+  tables, by trigger rather than by revoked privilege — with the limits of that
+  choice stated in §5.5 and carried as debt in
+  [COMPLIANCE §4](docs/COMPLIANCE.md)
 
 Migrations are **forward-only**, numbered SQL files in
 `resources/migrations/`, applied by a small runner that records applied

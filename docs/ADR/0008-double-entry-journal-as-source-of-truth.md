@@ -33,6 +33,13 @@ The model:
 - **Invariant:** within an entry, total debits equal total credits, per currency.
   Checked when the entry value is constructed, and again by a deferred database
   constraint at commit ([ADR-0006](0006-postgresql-as-system-of-record.md)).
+- **Invariant:** an entry has **at least two lines**. "Two or more lines" above
+  was prose until migration `0008`; the balance constraint fires on
+  `journal_line`, so an entry with no lines at all satisfied it vacuously —
+  zero debits equal zero credits, and nothing ever ran. A second deferred
+  constraint, on `journal_entry` rather than on its lines, checks cardinality
+  and balance together at commit. See the migration's header for the
+  reproduction; the finding was **F-003** in Milestone 1's external audit.
 - **Accounts** carry a type — `asset`, `liability`, `equity`, `revenue`,
   `expense` — which determines the normal balance side and therefore how a
   balance is computed from debits and credits.
@@ -71,10 +78,14 @@ The model:
 **Risks and how they are mitigated**
 - *Risk:* someone adds a `balance` column "for performance" and it silently becomes authoritative. *Mitigation:* no such column exists in the schema; any snapshot table is named `*_snapshot` and is documented as derived.
 - *Risk:* an unbalanced entry reaches the database through a code path that skips the domain constructor. *Mitigation:* the deferred database constraint, tested directly in integration tests.
+- *Risk:* a database guard is written against the wrong row and is therefore satisfied vacuously. *Mitigation:* stated, because it happened — see the second invariant above. The general form is that a `for each row` trigger cannot see a case with no rows, so any cardinality rule has to be enforced on the parent. The integration tests now assert the zero-line and one-line cases explicitly rather than only the unbalanced one.
 
 ## Verification
 
 `test/clofin/ledger/entry_test.clj` contains a property test asserting that every
 generated entry accepted by the constructor sums to zero per currency, and that
-every unbalanced entry is rejected. An integration test asserts that the database
-rejects an unbalanced entry inserted directly, bypassing the domain layer.
+every unbalanced entry is rejected. Integration tests in
+`test/clofin/db/ledger_constraints_test.clj` assert that the database rejects an
+unbalanced entry, an entry with no lines and an entry with one line, each
+inserted directly and bypassing the domain layer — and that an entry which is
+merely *transiently* incomplete part-way through a transaction still commits.

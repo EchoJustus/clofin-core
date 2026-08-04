@@ -745,3 +745,367 @@ Migrations re-applied from an empty schema, all seven in order, before and after
   public data" reaches the caller, which has been inaccurate since TASK-001.
   Not fixed here — it is TASK-001 code and outside this remediation — but it
   should be corrected or made true.
+
+---
+
+## 9. Remediation addendum — Milestone 1 audit findings F-003 to F-006
+
+Four should-fix findings, remediated as one batch on the same branch. All four
+are in this increment's code; none required a change to the brief's scope.
+
+Two of them share a shape worth naming before the detail, because it is the
+same mistake twice: **a guard that cannot see the case it is meant to judge.**
+F-003's balance trigger fired on `journal_line` and so never fired for an entry
+with no lines. F-004's status check read a row it did not hold and so never saw
+the write that invalidated it. In both, the enforcement existed, was tested, and
+passed — against every case except the one it was blind to.
+
+---
+
+### F-003 — a journal entry with no lines commits
+
+**The defect.** `journal_entry_must_balance` is a deferred constraint trigger on
+`journal_line`. An entry with no lines fires it **zero times**. So this
+committed, cleanly, and appeared in the journal as a posted record:
+
+```sql
+begin;
+insert into journal_entry (id, organisation_id, occurred_at, narrative,
+                           reference_type, reference_id)
+values (…, …, now(), 'No lines', 'payment_instruction', …);
+commit;   -- succeeded
+```
+
+Reproduced before the fix and re-run after it. Not merely an unbalanced entry —
+an entry that is not double-entry at all, and one the balance check can never
+reach, because zero debits do equal zero credits and nothing runs to say so.
+ADR-0008 has said "two or more lines" since TASK-001; it was prose.
+
+**The fix — migration `0008`.** The guard had to move to the row that exists in
+the failing case, so it is on `journal_entry`:
+
+```sql
+create constraint trigger journal_entry_must_be_complete
+  after insert on journal_entry
+  deferrable initially deferred
+  for each row
+  execute function assert_journal_entry_complete();
+```
+
+`assert_journal_entry_complete()` checks **line cardinality ≥ 2 first**, then
+per-currency balance. Both, in one trigger, at commit.
+
+Three decisions in that, each of which could have gone the other way:
+
+- **Deferred, not immediate.** The foreign key forces the entry to be written
+  before its lines, so *every* legal transaction passes through a state this
+  trigger would refuse. Only the commit is judged. A test asserts that a
+  transiently incomplete entry still commits, because that is the property a
+  future reader is most likely to break while "tightening" this.
+- **Cardinality before balance.** A zero-line entry is refused as
+  `has 0 line(s): a double-entry record needs at least two`, not as an
+  imbalance of zero against zero, which would be true and useless.
+- **The balance message is byte-identical to `0002`'s**, deliberately. Two
+  guards checking one invariant must not be able to disagree about what it
+  means, and the first thing a reader compares is the wording. The migration
+  header says so, because the duplication otherwise reads as an oversight.
+
+Prototyped on scratch tables across six cases before the migration was written
+(lesson **L-3**): zero-line refused, one-line refused, balanced two-line
+commits, unbalanced gives `0002`'s wording, multi-currency balanced commits,
+transiently unbalanced commits.
+
+---
+
+### F-004 — account status is read without a lock
+
+**The defect.** `assert-postable!` and the debtor-account check read an
+account's status and then wrote on the strength of it. CloFin runs at
+`READ COMMITTED`, where every statement takes a fresh snapshot: a freeze
+committing between the read and the insert is invisible to the first and fully
+in effect by the second. The posting lands on a frozen account.
+
+ADR-0012 had positively asserted the opposite — "an account frozen concurrently
+is either visible to this transaction or it is not, and either way the outcome
+is consistent." That is a property of a snapshot, and `READ COMMITTED` does not
+give one. The ADR is corrected rather than quietly reworded.
+
+**The fix.** Lock the rows the validation is about, in a stable order, inside
+the writing transaction:
+
+```sql
+select … from ledger_account where id in (…) order by id for update
+```
+
+Applied at both sites. `order by id` is the lock order for accounts; where a
+transaction locks more than one kind of row the order between kinds is fixed
+too — **`payment_instruction` first, `ledger_account` second** — and is stated
+in `clofin.payments.repository`'s namespace docstring rather than in a commit
+message.
+
+**Adding the lock exposed an ordering inversion that had been harmless without
+it.** `create-instruction!` took its account lock before its instruction lock;
+`amend!` took them the other way round. Unlocked, that is nothing. Locked, it is
+a deadlock between an amendment and a creation touching the same account.
+Fixed by reordering `create-instruction!` so `assert-reversal-target!` runs
+before `assert-debtor-account!`.
+
+**The riskiest part of this was the test, again.** The first version of the race
+test passed against the **unfixed** code, three runs in a row — the window
+between the status read and the insert is microseconds, so an ordinary two-thread
+test almost never lands in it. A green test there would have certified the
+defect as fixed. The rewrite makes the interleaving deterministic: the freezing
+thread holds its transaction open across a latch while the posting thread runs,
+so the posting must either block on the lock or race past it. Verified to fail
+without the fix (`:posted`, one entry written) and pass with it.
+
+Two smaller traps inside that: `tdb/*pool*` is a dynamic binding and dynamic
+bindings do not cross thread boundaries, so the pool is captured into a local
+before the threads start; and the ledger fixture uses a fixed organisation short
+name, so a retry loop needs a per-attempt name.
+
+---
+
+### F-005 — `payment.approved` was emitted per decision
+
+**The defect.** Every approval wrote `payment.approved`. A payment on a
+two-approval band therefore had two `payment.approved` events and had been
+approved once. The first of them described a payment that was still
+`pending-approval`, with `beforeDigest` equal to `afterDigest` because nothing
+had changed.
+
+The trail was not merely noisy, it was **wrong in the reading an auditor would
+take**: `count(*) where action = 'payment.approved'` counted decisions and
+looked like it counted approved payments, and an evidence pack read literally
+said the payment reached `approved` twice.
+
+**The fix.** Standing lesson **L-7**, applied: *an action named
+`<subject>.<transition>` is emitted only in the transaction where that
+transition commits.*
+
+- **`approval.recorded`** is new vocabulary, emitted for every decision, approve
+  or reject, with the **approval** as its subject and the approval's own before
+  and after projections. It lands in the same commit as its first emitter.
+- **`payment.approved`** is now emitted only inside `(when moved …)` — the
+  branch where the instruction actually transitioned — using that transition's
+  own before and after.
+
+`clofin.audit/actions` carries the rule in its docstring, so the next person
+adding a term is asked which of the three it is: a decision, a partial step, or
+a state change.
+
+**C-01's published evidence query had to change with it**, and this is the part
+that would have been easy to miss. The query joined two `audit_event` rows on
+one subject and matched `payment.approved`. Run unchanged after this fix it
+returns no rows — because it no longer looks anywhere, not because the control
+holds. It now joins through the `approval` table:
+
+```sql
+select s.subject_id
+  from audit_event s
+  join approval ap on ap.instruction_id = s.subject_id
+  join audit_event d on d.subject_id = ap.id
+                    and d.action = 'approval.recorded'
+ where s.action = 'payment.submitted'
+   and d.actor_id = s.actor_id;
+```
+
+A test runs it, asserts no rows, then **plants the violation** by writing an
+approval and an `approval.recorded` for the maker directly, and asserts the
+query finds it. A control query that cannot fail is not evidence of anything —
+the same lesson F-001 taught about docstrings, applied to SQL.
+
+---
+
+### F-006 — invalidating an approval left no trace
+
+**The defect.** Amending an instruction invalidates every approval standing
+against it (PR-014). That is a state change on real records, and it emitted
+nothing. The trail said `payment.amended`; who lost their approval, when, and
+under which correlation id had to be inferred from an `invalidated_at` column an
+evidence pack does not show.
+
+**The fix.** `invalidate-approvals-for!` now selects the live approvals
+**`for update` before updating them** and returns `[{:before … :after …} …]`,
+one pair per approval. The amend handler writes one **`approval.invalidated`**
+event per pair, on the same `tx` as the amendment and its `payment.amended`
+event, carrying the amending actor and the request's correlation id.
+
+The select-then-update is not incidental. The `before` value has to be read to
+be digested, and reading it unlocked is the same race F-004 is about (**L-8**).
+`now()` is the transaction timestamp, so every row invalidated here shares one
+`invalidated_at`; selecting first means the events describe exactly the rows
+that changed rather than whatever a second scan would match.
+
+**The evidence pack had to learn the relation.** `approval.invalidated` names
+the *approval* as its subject — keying it on the payment would be F-005's
+mislabelling in the other direction — so a pack built from `subject_id = ?`
+could not see it. `events-for-payment` relates them through
+`approval.instruction_id`:
+
+```sql
+where organisation_id = ?
+  and (subject_id = ?
+       or subject_id in (select id from approval where instruction_id = ?))
+```
+
+`evidence-pack` now derives `:subject-type` from the event matching the
+requested subject rather than from the first event in the pack, since the first
+event is whichever happened earliest and the pack now mixes two subject types.
+Harmless when the requested subject is itself an approval: no approval names an
+approval as its instruction, so the sub-select adds nothing.
+
+A test asserts the amendment event and **every** invalidation event survive
+together, and roll back together, since a partial write here is exactly the
+failure C-05 exists to prevent.
+
+---
+
+### One thing found while fixing F-004, and fixed with it
+
+F-004's lock is `select … for update`, and `for update` holds its locks until
+**its transaction** ends. That makes the fix depend on a claim nothing was
+checking: that a repository handed a `Connection` is a repository inside a
+transaction.
+
+`clofin.db.core/transactionally` branched on `(instance? Connection source)` and
+took that as proof. It is not. The pool is configured `autoCommit true`, so a
+caller passing a raw pooled connection would get every statement committed on
+its own — and would get it silently, because every write still succeeds and only
+atomicity is missing. Under that, `for update` releases before the insert it was
+taken for and F-004 is back, with the lock still plainly visible in the SQL.
+
+A guarantee a reader can see in the code and cannot rely on at runtime is worse
+than none, so the connection is now checked rather than trusted: one
+`getAutoCommit` call, refusing with "must run inside a transaction".
+
+**And that exposed a second copy of the rule.** `clofin.ledger.repository` had
+its own private `transactionally`, body-identical to `db/core`'s. Guarding
+`db/core`'s therefore left unguarded the one path that actually takes the F-004
+lock — the ledger's posting path. Found by the guard's own test failing for the
+wrong reason. The private copy is deleted and the call site points at
+`db/transactionally`; a comment stands where it was, because "there used to be
+two of these" is the useful thing for the next reader to know.
+
+Worth noting how the failure surfaced: under autocommit the entry insert
+committed alone, with no lines, and **F-003's new entry-level trigger caught
+it** — the wrong error for this test, but the right refusal, from a guard added
+in the same batch for an unrelated reason. That is what the second enforcement
+point is for.
+
+`assert-postable!`'s docstring still opened with the sentence F-004 disproved —
+"an account frozen concurrently is either visible here or is not, and either way
+the outcome is consistent" — directly above the corrected paragraph. Fixed.
+
+### An observation the tests forced, recorded rather than smuggled in
+
+Events written in one transaction share `occurred_at` to the microsecond —
+`now()` is the transaction's start time — so `id` orders them, and `id` is
+random. Within a transaction the order is therefore **stable** (the same query
+returns the same order every time, which is what stops an evidence pack looking
+tampered with) but **not causal**.
+
+Ordering two events that happened atomically is a question with no answer. The
+tests assert action *frequencies* and cross-transaction ordering rather than a
+strict sequence, and `clofin.audit.repository` says why in a comment. A
+monotonic sequence column would give a causal order; it is recorded as a
+candidate rather than added here, because it is a schema change and schema
+changes belong in a brief.
+
+---
+
+### Tests added
+
+16 tests, 90 assertions.
+
+| Namespace | What was added |
+|---|---|
+| `clofin.db.ledger-constraints-test` | 5 for F-003: zero-line refused at commit, one-line refused, a transiently incomplete entry still commits, the imbalance message is unchanged, a complete entry commits. Also rewrote `an-entry-may-be-reversed-only-once`, whose fixture had been creating zero-line entries to probe a different constraint — legal before `0008`, refused after. |
+| `clofin.ledger.repository-test` | 4 for F-004: the latch-based freeze-versus-post race, a posting to an already-frozen account, two postings over the same pair of accounts from opposite directions completing without deadlock, and a repository write refusing a connection that is in autocommit. |
+| `clofin.api.approvals-api-test` | 7 for F-005 and F-006: a partial approval records a decision and no transition; the recorded decision describes the approval, not the payment; a rejection records both; C-01's evidence query still detects a planted violation; an amendment emits one event per invalidated approval; the amendment and its invalidations roll back together; a withdrawal appears in the payment's pack. |
+| `clofin.db.audit-constraints-test` | Guard count updated for `0008` and scoped to the `public` schema. |
+| `clofin.authz.repository-test` | `invalidating-approvals-leaves-them-visible` updated to the pair-returning shape. |
+| `clofin.test-db` | `insert-balanced-entry!` — entry plus two mirrored lines in one transaction, which is now the only way a fixture can write an entry. |
+
+The F-003 pair earns a note. A one-line entry can never balance —
+`amount_minor > 0` rules out a zero-amount line — so the balance check refuses
+it anyway, and lowering the cardinality threshold from 2 to 1 leaves the
+*outcome* unchanged. Only the message differs, and it differs in a way that
+sends a reader hunting for a counter-line that was never going to be there.
+Verified by mutating the live function: the message assertion in
+`f-003-an-entry-with-one-line-cannot-be-committed` is the only thing in the
+whole suite that fails. Cardinality and balance are distinguishable in the
+diagnosis long before they are distinguishable in the refusal, which is why that
+assertion is load-bearing rather than cosmetic — and the test says so. The
+guard-count assertion in `clofin.db.audit-constraints-test` proves the trigger is
+*present*, never that it still means what it meant.
+
+Existing tests changed rather than added: `ac-12-*` now asserts an action
+multiset and ordering properties instead of a literal sequence, for the reason
+in the section above; and `audit-events-can-be-listed-and-narrowed` expects 6
+events rather than 5, since a decision and a transition are now two events.
+
+### Documentation
+
+| File | Change |
+|---|---|
+| `COMPLIANCE.md` C-01 | Evidence query rewritten to join through `approval`, with why the old one would have silently stopped looking. |
+| `COMPLIANCE.md` C-04 | F-003's trigger added as a second enforcement point, with why two triggers and not one. |
+| `COMPLIANCE.md` C-05 | The two vocabulary rules, both stated as corrections rather than as design. |
+| `DOMAIN_MODEL.md` §2.6 | The audit vocabulary as a table, split by whose lifecycle each term describes. |
+| `DOMAIN_MODEL.md` §5 | **I11** (≥ 2 lines) and **I12** (status read under lock). |
+| `ADR-0008` | The "two or more lines" invariant made mechanical; a risk entry for vacuously-satisfied guards. |
+| `ADR-0012` | Decision 2 corrected — inside the transaction is necessary and not sufficient — with the lock, the lock order, the autocommit guard, and both `FOR SHARE` and `SERIALIZABLE` recorded as considered-and-rejected alternatives with their reasons. |
+| `ARCHITECTURE.md` §5.2, §5.5, §6 | Entry completeness, the locking discipline, the emission rule. |
+| `api/openapi.yaml` | `AuditAction` gains `approval.recorded` and `approval.invalidated`; the enum and the evidence endpoint both document that approval events carry the approval as subject and appear in the payment's pack anyway. |
+| `UAT-002` | A zero-line and one-line probe as step 11, plus a deferral check. Also renumbered the TRUNCATE step, which F-002's edit had added as a duplicate "Step 6" at the wrong heading level. |
+| `UAT-005` | The evidence query updated; the expected evidence pack now names `approval.recorded` and `approval.invalidated` and says what each is; step 12's query widened to both actions. |
+
+**`session_replication_role` in COMPLIANCE §4** — ruled as an addition to make.
+On checking, it was already named there beside `DISABLE TRIGGER` and
+`DROP TRIGGER` in commit `971d0d1`, in the runtime-role-split row, together with
+the note that it defeats the row-level guards that have existed since `0002` and
+so predates F-002. No change was needed; recorded here so the ruling is visibly
+discharged rather than silently skipped.
+
+### Verification
+
+```
+$ clojure -M:test        # what `make test` runs
+Ran 223 tests containing 1259 assertions.   0 failures, 0 errors.
+
+$ clojure -M:test:it
+Ran 456 tests containing 2515 assertions.   0 failures, 0 errors.
+
+$ sh scripts/check-doc-links.sh
+Documentation links OK (40 markdown files checked).
+```
+
+| | After F-001/F-002 | After F-003–F-006 | Added |
+|---|---|---|---|
+| Unit | 223 / 1257 | **223 / 1259** | +0 / +2 |
+| With integration | 440 / 2425 | **456 / 2515** | +16 / +90 |
+
+Migration `0008` applied from an empty schema, all eight in order.
+
+### Left open
+
+- **A refused submission leaves no audit event** — deferred by ruling to its own
+  brief. Untouched here, and still untested either way.
+- **A monotonic audit sequence column**, so that two events written in one
+  transaction have a causal order and not merely a stable one. A schema change;
+  belongs in a brief.
+- **`SERIALIZABLE` instead of per-site locks** — recorded in ADR-0012 as
+  considered and rejected for now. It closes F-004's whole class rather than one
+  instance, at the cost of a retry policy CloFin does not have. Worth revisiting
+  when the number of locking sites grows.
+- **`FOR SHARE` rather than `FOR UPDATE`** at F-004's two sites. It gives the
+  identical freeze-versus-post guarantee without serialising concurrent postings
+  to a shared account — and `1100-CLIENT-FUNDS` is on every payment, so that
+  serialisation is not hypothetical. `FOR UPDATE` was the ruled fix and is what
+  shipped; the weaker lock is recorded here rather than substituted, because
+  lock strength is not a decision to take quietly. Note for whoever revisits it:
+  a future freeze operation must not `select … for share` and then `update` the
+  same row — that self-upgrade is the classic `FOR SHARE` deadlock.
+- **Approver limit at the time of an approval** (O-4) and the **runtime role
+  split** (F-002's residue) are unchanged and still carried in COMPLIANCE §4.

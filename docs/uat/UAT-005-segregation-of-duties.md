@@ -284,13 +284,22 @@ Then check the query C-01 publishes as its evidence:
 ```sql
 select s.subject_id
   from audit_event s
-  join audit_event a
-    on a.subject_id = s.subject_id and a.actor_id = s.actor_id
- where s.action = 'payment.submitted' and a.action = 'payment.approved';
+  join approval ap on ap.instruction_id = s.subject_id
+  join audit_event d on d.subject_id = ap.id
+                    and d.action = 'approval.recorded'
+ where s.action = 'payment.submitted'
+   and d.actor_id = s.actor_id;
 ```
 
 **Expected:** no rows. Before the fix this returned one for the chain above —
 the control's own evidence reported the control failing.
+
+> The query joins through the `approval` table because an approval decision is
+> `approval.recorded` against the approval, not `payment.approved` against the
+> payment (finding **F-005**). The earlier version matched two `audit_event`
+> rows on one subject; run unchanged after F-005 it would return no rows
+> because it no longer looks anywhere, which on this page is indistinguishable
+> from the control holding.
 
 Remove the extra grants before continuing:
 
@@ -496,8 +505,27 @@ curl -sS "$BASE/audit/evidence/$PI" -H "X-Actor-Id: $RAE"
 
 **Expected:** every state change of that instruction, in order, each carrying
 the actor who caused it: `payment.created` and `payment.submitted` by Priya,
-`payment.approved` by Wei, `payment.amended` by Priya. The pack states the
-period it spans and `"truncated": false`.
+`approval.recorded` by Wei, `payment.approved` for the instruction,
+`payment.amended` by Priya, and one `approval.invalidated` for the approval the
+amendment revoked. The pack states the period it spans and
+`"truncated": false`.
+
+**Two of those are worth pausing on.**
+
+`approval.recorded` and `payment.approved` are separate events because they are
+separate facts: Wei made a decision, and the payment reached `approved`. On a
+band requiring two approvals there would be two of the first and still one of
+the second. Until finding **F-005** both were called `payment.approved`, so a
+payment approved once appeared in the trail as approved twice — the earlier of
+the two describing a payment that was still `pending-approval`, with identical
+before and after digests because nothing had changed.
+
+`approval.invalidated` names the **approval** as its subject, not the payment,
+and it appears in this pack anyway because the pack relates a payment to its
+approvals. Until finding **F-006** it did not exist: an amendment revoked
+standing approvals and the trail said only that the payment had been amended,
+leaving who lost their approval — and under which correlation id — to be
+inferred from a column.
 
 **Look at what is *not* there.** No creditor name, no account identifier — only
 `beforeDigest` and `afterDigest`, each prefixed `v1:`. An audit table is
@@ -596,13 +624,18 @@ Instead, use the refusal you already produced in step 5. Priya's self-approval
 attempt was refused. Check the trail:
 
 ```sql
-select count(*) from audit_event where action = 'payment.approved'
-  and actor_id = '11111111-1111-1111-1111-111111111111';
+select count(*) from audit_event
+ where action in ('approval.recorded', 'payment.approved')
+   and actor_id = '11111111-1111-1111-1111-111111111111';
 ```
 
 **Expected:** zero. A refused approval leaves no approval row **and** no audit
 event: the two commit together or not at all, so an event for something that did
 not happen is not representable — and neither is a change with no event.
+
+Both actions are named because a decision and a transition are different events
+after finding **F-005**, and a query that checked only the transition would
+miss a recorded decision that should not exist.
 
 The automated suite asserts the converse directly, by rolling a transaction back
 after the audit write has been issued on it

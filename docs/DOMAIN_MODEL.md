@@ -168,6 +168,21 @@ states what this costs an auditor.
 event. Account opening, journal posting and organisation creation do not yet —
 named as a gap in [COMPLIANCE §4](COMPLIANCE.md) rather than left implicit.
 
+**Vocabulary.** The action is drawn from a closed set (`clofin.audit/actions`);
+anything else is refused before it reaches the table, so a question like "show
+me every approval in August" has a complete answer rather than a best-effort
+one. Two naming rules hold, both of them corrections from Milestone 1's audit:
+
+| | |
+|---|---|
+| `payment.created`, `payment.submitted`, `payment.approved`, `payment.rejected`, `payment.amended`, `payment.cancelled` | The **payment's** transitions. Each is emitted exactly once, in the transaction where that transition commits — finding **F-005** found `payment.approved` emitted per *decision*, so a two-approval payment appeared to have been approved twice. |
+| `approval.recorded`, `approval.withdrawn`, `approval.invalidated` | The **approval's** own lifecycle, with the approval as subject. `approval.recorded` is written for every decision, approve or reject. `approval.invalidated` is written per approval when an amendment revokes it — finding **F-006**; before it, the trail said only that the payment had been amended. |
+
+An approval's events name the approval, not the payment, because that is what
+they are about. `clofin.audit.repository/events-for-payment` relates them back
+through `approval.instruction_id`, so a payment's evidence pack still shows
+them without the subject column having to misdescribe them.
+
 ### 2.7 Authorisation context ✅
 
 **Actor** ✅ — `id`, `organisation-id`, `display-name`, `status`
@@ -324,3 +339,5 @@ enforcement point is named — an invariant with no enforcement is a wish.
 | I8 | An instruction's approver is never its maker. | `clofin.authz.approval/evaluate`, a pure function — refused with no HTTP layer involved, and table-driven over the whole actor × instruction matrix ✅ |
 | I9 | A state change and its audit event commit together. | Same transaction. `clofin.audit.repository/record!` takes the caller's connection and cannot open one, so an audit write outside the change it describes is not expressible ✅ |
 | I10 | A replayed idempotency key never performs work twice. | Primary key `(organisation_id, key)` plus the stored response, written in the same transaction as the effect ✅ |
+| I11 | A committed journal entry has at least two lines. | Deferred constraint trigger `journal_entry_must_be_complete` on `journal_entry` (migration `0008`). I1's trigger fires on `journal_line`, so an entry with no lines never fired it — audit finding **F-003** ✅ |
+| I12 | An account's status is read under a lock by the transaction that writes against it. | `select … for update` in `clofin.ledger.repository/assert-postable!` and `clofin.payments.repository/assert-debtor-account!`. Reading a status and then writing on it is a race under `READ COMMITTED` (standing lesson **L-8**) — audit finding **F-004** ✅ |

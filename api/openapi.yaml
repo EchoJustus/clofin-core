@@ -1125,6 +1125,13 @@ paths:
         Every state change of one payment instruction or approval, in the order
         it happened, each entry carrying the actor who caused it.
 
+        For a payment instruction the pack **also includes its approvals' own
+        events** — `approval.recorded`, `approval.invalidated`,
+        `approval.withdrawn` — even though those name the approval as their
+        subject. Without them the pack cannot answer "who approved this, and
+        what happened to their approval?", which is most of what an approval
+        trail is for.
+
         The pack **states its own boundaries** — the period it spans and
         whether it hit the row cap — so an auditor never has to infer
         completeness from the absence of a warning.
@@ -1973,6 +1980,18 @@ components:
         A constrained vocabulary rather than free text. An audit trail that has
         to be searched with `like '%approv%'` is an audit trail nobody can
         produce a complete answer from.
+
+        An action named `<subject>.<transition>` is emitted only in the
+        transaction where that transition commits. `approval.recorded` is
+        therefore one event per decision, and `payment.approved` is one event
+        for the payment — a payment on a two-approval band produces two of the
+        first and one of the second. Counting `payment.approved` counts
+        approved payments; counting `approval.recorded` counts decisions.
+
+        Events whose action starts with `approval.` carry the **approval** as
+        their `subjectId`, not the payment. `GET /audit/evidence/{subjectId}`
+        for a payment includes them anyway, related through the approval's
+        instruction.
       enum:
         - payment.created
         - payment.submitted
@@ -1980,6 +1999,8 @@ components:
         - payment.cancelled
         - payment.approved
         - payment.rejected
+        - approval.recorded
+        - approval.invalidated
         - approval.withdrawn
 
     AuditEvent:

@@ -229,7 +229,7 @@ movement, and is prevented.
 
 ---
 
-## Step 6 — Try to empty the journal with `TRUNCATE`
+### Step 10 — Try to empty the journal with `TRUNCATE`
 
 `UPDATE` and `DELETE` were refused above. `TRUNCATE` is a **third** verb, with
 its own trigger event and its own privilege — and until migration `0007` it was
@@ -255,9 +255,59 @@ truncate journal_line, journal_entry cascade;
 
 ---
 
+### Step 11 — An entry with no lines at all
+
+Step 2 proved that an *unbalanced* entry is refused. This step asks the
+question one level below it: what refuses an entry with nothing to balance?
+
+```sql
+begin;
+insert into journal_entry
+  (id, organisation_id, occurred_at, narrative, reference_type, reference_id)
+values ('cccccccc-cccc-cccc-cccc-cccccccccccc',
+        '11111111-1111-1111-1111-111111111111',
+        now(), 'No lines', 'payment_instruction',
+        '22222222-2222-2222-2222-222222222222');
+commit;
+```
+
+**Expected:** `COMMIT` fails with `Journal entry cccccccc-… has 0 line(s): a
+double-entry record needs at least two`.
+
+Then repeat with a single line attached, and commit again:
+
+**Expected:** `COMMIT` fails with `… has 1 line(s): …`.
+
+**Pass criterion:** both are refused, at `COMMIT`.
+
+> **Why this step exists.** Until migration `0008` the zero-line insert
+> *succeeded*. The balance guard fires on `journal_line`, so an entry with no
+> lines fired it zero times — zero debits do equal zero credits, and nothing
+> ever ran. The journal could hold a record that was not double-entry at all,
+> and every balance query would agree it was fine. Audit finding **F-003**. A
+> guard that cannot see the case it is meant to judge is worth checking for by
+> hand, which is what this step is.
+
+**Confirm the deferral still works** — an entry that is incomplete *during* a
+transaction is still legal, because the foreign key forces the entry to be
+written before its lines:
+
+```sql
+begin;
+insert into journal_entry (…) values ('dddddddd-…', …);   -- 0 lines so far
+insert into journal_line  (…) values (…, 'debit',  10000);
+insert into journal_line  (…) values (…, 'credit', 10000);
+commit;
+```
+
+**Expected:** succeeds. Only the *commit* is judged, never the intermediate
+state.
+
+---
+
 ## Teardown
 
-The journal cannot be truncated, and that is the point of step 6. Reset the
+The journal cannot be truncated, and that is the point of step 10. Reset the
 whole environment instead:
 
 ```bash
@@ -285,6 +335,8 @@ table, and the table's owner decides what the table is.
 | 7 Unknown currency refused | | | |
 | 8 Reversal restores balance | | | |
 | 9 Double reversal refused | | | |
+| 10 `TRUNCATE` refused | | | |
+| 11 Zero-line and one-line entries refused | | | |
 
 **Overall:** Pass / Fail
 **Executed by:** ____________ **Date:** ____________ **Build:** ____________
