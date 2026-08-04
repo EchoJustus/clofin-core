@@ -5,7 +5,7 @@
 | **Increment** | 5 |
 | **Status** | `READY` |
 | **Depends on** | TASK-003 — settlement drives the `release` arrow the authorisation increment left in the table |
-| **Base branch** | `claude/authorisation-audit-trail-r5fzw3` — TASK-003 unmerged (PR #5, itself stacked on PR #4), so **stack on its tip and open the PR against that branch**, not `main`, per AGENT_HANDOFF §1b. `6f58857` at authoring; the FEEDBACK-M1 remediation moves the tip — **build on the tip as you find it, verified green**. If PR #5 retargets or rebases after PR #4 merges, rebase promptly and follow it |
+| **Base branch** | `main` — TASK-003 merged 2026-08-04 (`5ff00eb`), so this is an ordinary branch off `main` with the PR against `main`. Verify TASK-005's landing state before you start: if its PR is unmerged, stack on **its** branch instead per AGENT_HANDOFF §1b (you share the `clofin.audit/actions` literal) |
 | **Blocks** | Increment 6 (reconciliation) |
 | **Requirements** | PRD §5.3 (settlement); NFR-003 |
 | **Controls touched** | C-03, C-04 exercised; **no control moves 📋 → ✅ here** — C-07 (screening before release) stays 📋 and is increment 7's |

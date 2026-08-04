@@ -3,9 +3,9 @@
 | Field | Value |
 |---|---|
 | **Increment** | 4 (completion) — closes debt TASK-003 named, it does not open new product surface |
-| **Status** | `READY` |
+| **Status** | `IN PROGRESS` — dispatched 2026-08-04 |
 | **Depends on** | TASK-003 — `clofin.audit` and the authenticated principal must exist |
-| **Base branch** | `claude/authorisation-audit-trail-r5fzw3` (PR #5, stacked on PR #4) — stack on its tip, open the PR against that branch, per AGENT_HANDOFF §1b. `6f58857` at authoring; the FEEDBACK-M1 remediation moves the tip — build on the tip as you find it, verified green. If PR #5 retargets or rebases, follow it |
+| **Base branch** | `main` at `5ff00eb` — TASK-003 merged 2026-08-04, so this is an ordinary branch off `main` with the PR against `main`. *(The stacking instructions this field carried before the merge are obsolete.)* |
 | **Blocks** | Nothing hard; C-05 stays scope-qualified until this lands |
 | **Requirements** | PR-072 (every state change), C-05 |
 | **Controls touched** | C-05 — from ✅-with-scope-paragraph to **unqualified ✅** |

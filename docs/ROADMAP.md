@@ -20,7 +20,7 @@ and this table is stale.
 | 2 | Ledger persistence and account API | [TASK-001](briefs/001-TASK-ledger-persistence-and-account-api.md) | ✅ `IMPLEMENTED` — merged to `main` in PR #2 (`f7018a1`); `FEEDBACK-001` outstanding | green, 757 assertions |
 | 3 | Payment lifecycle and idempotency | [TASK-002](briefs/002-TASK-payment-instruction-lifecycle.md) | ✅ `CLOSED` — merged to `main` in PR #4 (`31306dd`); audited in FEEDBACK-M1, no new findings | green, 1547+ assertions |
 | 4 | Authorisation, maker–checker, audit | [TASK-003](briefs/003-TASK-authorisation-and-audit-trail.md) | ✅ `CLOSED` — merged to `main` in PR #5 (`5ff00eb`); FEEDBACK-M1 fully remediated & verified (migrations `0007`/`0008`) | green, 2515 assertions |
-| 4c | Audit coverage completion (C-05 unqualified) | [TASK-005](briefs/005-TASK-audit-coverage-completion.md) | 📋 `READY` — stacks on PR #5's branch | — |
+| 4c | Audit coverage completion (C-05 unqualified) | [TASK-005](briefs/005-TASK-audit-coverage-completion.md) | 🔨 `IN PROGRESS` — dispatched 2026-08-04; branches off `main` | — |
 | 5 | Settlement simulation | [TASK-004](briefs/004-TASK-settlement-simulation.md) | 📋 `READY` — stacks on PR #5's branch; DDL validated per L-3 | — |
 | 6–9 | Reconciliation onwards | not yet briefed | 💭 later | — |
 
@@ -131,7 +131,7 @@ to rediscover them:
 
 - **Ledger and organisation writes emit no audit events** — C-05's scope
   paragraph names the gap; **briefed as
-  [TASK-005](briefs/005-TASK-audit-coverage-completion.md)**, `READY`.
+  [TASK-005](briefs/005-TASK-audit-coverage-completion.md)**, dispatched 2026-08-04.
 - **The approver's limit at decision time is not retained** (O-4): two capture
   columns on `approval` belong in a future brief.
 - **Authentication does not resist an adversary** — `X-Actor-Id` names a seeded
