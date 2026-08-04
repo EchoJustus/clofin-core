@@ -39,12 +39,15 @@
     clofin.db.ledger-constraints-test
     clofin.db.audit-constraints-test
     clofin.organisations.repository-test
+    clofin.organisations.service-test
     clofin.ledger.repository-test
+    clofin.ledger.service-test
     clofin.payments.repository-test
     clofin.api.ledger-api-test
     clofin.authz.repository-test
     clofin.api.payments-api-test
     clofin.api.approvals-api-test
+    clofin.api.audit-coverage-test
     clofin.system-test])
 
 (defn integration?

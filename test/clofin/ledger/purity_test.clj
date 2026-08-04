@@ -95,8 +95,18 @@
   own transaction is a service that can write an audit event outside the
   transaction carrying the change it describes — which is the one failure C-05
   exists to prevent, and the one this rule makes unavailable rather than
-  merely discouraged."
-  {'clofin.payments.approval-service "src/clofin/payments/approval_service.clj"})
+  merely discouraged.
+
+  Extend this list when a service is added — the same discipline as
+  `pure-namespaces` above, and for a stronger reason: a service missing from
+  here is a service free to open its own connection, which is the failure the
+  rule exists to make unavailable."
+  {'clofin.payments.approval-service "src/clofin/payments/approval_service.clj"
+   ;; TASK-005: the three writes that emitted no audit event until this brief.
+   ;; Their handlers open the transaction; these compose the change and its
+   ;; event onto it.
+   'clofin.ledger.service            "src/clofin/ledger/service.clj"
+   'clofin.organisations.service     "src/clofin/organisations/service.clj"})
 
 (deftest a-service-cannot-open-its-own-transaction
   (doseq [[namespace-sym path] service-namespaces]
@@ -110,8 +120,12 @@
                  "is how an audit write ends up outside the change it describes."))))))
 
 (deftest a-domain-namespace-cannot-be-quietly-dropped-from-the-guard
-  (testing "every pure namespace named here still exists at the path claimed"
-    (doseq [[namespace-sym path] pure-namespaces]
+  (testing "every guarded namespace named here still exists at the path claimed"
+    ;; `ns-form` asserts the file exists too, but `clojure.core/assert` compiles
+    ;; to nothing when `*assert*` is false — a guard that can be compiled away
+    ;; is not a guard. This one cannot be, so a namespace renamed without its
+    ;; entry being updated fails here rather than passing vacuously.
+    (doseq [[namespace-sym path] (merge pure-namespaces service-namespaces)]
       (is (.exists (io/file path))
           (str namespace-sym " no longer exists at " path
                " — update or remove its entry rather than leaving the guard stale.")))))

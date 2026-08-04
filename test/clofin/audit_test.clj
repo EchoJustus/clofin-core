@@ -92,6 +92,89 @@
   (is (= (audit/digest {:roles #{:approver :operator}})
          (audit/digest {:roles #{:operator :approver}}))))
 
+;; ---------------------------------------------------------------------------
+;; The subjects TASK-005 added
+;; ---------------------------------------------------------------------------
+
+(defn- organisation []
+  {:id (random-uuid) :legal-name "Meridian Freight Holdings Pte Ltd"
+   :short-name "meridian" :status :active})
+
+(defn- account []
+  {:id (random-uuid) :organisation-id (random-uuid) :code "1100-CLIENT-FUNDS"
+   :name "Client funds — pooled" :type :asset :currency "SGD" :status :active})
+
+(defn- journal-entry [& {:keys [lines]}]
+  (let [debit (random-uuid) credit (random-uuid)]
+    {:id (random-uuid) :organisation-id (random-uuid)
+     :occurred-at (Instant/parse "2026-08-04T09:00:00Z")
+     :narrative "Client funds received"
+     :reference {:type :opening-balance :id (random-uuid)}
+     :lines (or lines
+                [{:account-id debit  :direction :debit  :amount (money/of "SGD" 125000)}
+                 {:account-id credit :direction :credit :amount (money/of "SGD" 125000)}])}))
+
+(deftest a-changed-organisation-field-changes-the-digest
+  (let [org (organisation)]
+    (doseq [[field value] [[:legal-name "Someone Else Pte Ltd"]
+                           [:short-name "elsewhere"]
+                           [:status :suspended]
+                           [:id (random-uuid)]]]
+      (is (not= (audit/digest (audit/organisation-subject org))
+                (audit/digest (audit/organisation-subject (assoc org field value))))
+          (str "changing " field " must change the digest")))))
+
+(deftest a-changed-account-field-changes-the-digest
+  (let [acct (account)]
+    (doseq [[field value] [[:code "1200-OTHER"]
+                           [:name "Renamed"]
+                           [:type :liability]
+                           [:currency "JPY"]
+                           ;; Freezing and closing are account state changes.
+                           ;; When they gain events of their own, their before
+                           ;; and after digests have to differ.
+                           [:status :frozen]
+                           [:organisation-id (random-uuid)]]]
+      (is (not= (audit/digest (audit/account-subject acct))
+                (audit/digest (audit/account-subject (assoc acct field value))))
+          (str "changing " field " must change the digest")))))
+
+(deftest a-journal-entry-digest-covers-its-lines
+  (testing "an entry digest that covered only the header would be identical for two entries moving different money"
+    (let [entry (journal-entry)
+          moved (update-in entry [:lines 0 :amount] (constantly (money/of "SGD" 125001)))
+          elsewhere (assoc-in entry [:lines 0 :account-id] (random-uuid))
+          flipped (-> entry
+                      (assoc-in [:lines 0 :direction] :credit)
+                      (assoc-in [:lines 1 :direction] :debit))]
+      (doseq [[label variant] [["amount" moved] ["account" elsewhere] ["direction" flipped]]]
+        (is (not= (audit/digest (audit/journal-entry-subject entry))
+                  (audit/digest (audit/journal-entry-subject variant)))
+            (str "a changed line " label " must change the entry digest"))))))
+
+(deftest a-journal-entry-digest-covers-its-header
+  (let [entry (journal-entry)]
+    (doseq [[field value] [[:narrative "Something else entirely"]
+                           [:occurred-at (Instant/parse "2026-08-05T09:00:00Z")]
+                           [:reference {:type :reversal :id (random-uuid)}]
+                           [:organisation-id (random-uuid)]]]
+      (is (not= (audit/digest (audit/journal-entry-subject entry))
+                (audit/digest (audit/journal-entry-subject (assoc entry field value))))
+          (str "changing " field " must change the digest")))))
+
+(deftest a-journal-entry-digests-the-same-whether-it-was-posted-or-read-back
+  (testing "`recorded_at` is assigned by the database, so it is outside the projection deliberately"
+    (let [entry (journal-entry)]
+      (is (= (audit/digest (audit/journal-entry-subject entry))
+             (audit/digest (audit/journal-entry-subject
+                            (assoc entry :recorded-at (Instant/now)))))))))
+
+(deftest the-new-subjects-are-nil-safe-like-the-existing-ones
+  (testing "nil in, nil out — the same shape `instruction-subject` has, so a creation's before is a null digest"
+    (is (nil? (audit/organisation-subject nil)))
+    (is (nil? (audit/account-subject nil)))
+    (is (nil? (audit/journal-entry-subject nil)))))
+
 (defspec two-different-instructions-never-share-a-digest 200
   (prop/for-all [minor-a gen/nat
                  minor-b gen/nat]
@@ -144,13 +227,69 @@
   (is (thrown? Exception (audit/event (valid-event :subject-id "not-a-uuid"))))
   (is (thrown? Exception (audit/event (valid-event :organisation-id nil)))))
 
-(deftest an-event-may-have-no-actor
-  (testing "the column is nullable for the bootstrap case alone, and the value must survive it"
-    (is (nil? (:actor-id (audit/event (valid-event :actor-id nil)))))))
+;; ---------------------------------------------------------------------------
+;; The vocabulary and the subject each term is about
+;; ---------------------------------------------------------------------------
+
+(defn- subject-type-for
+  "The subject type an action names, derived from the action itself.
+
+  Every action is `<subject>.<past-tense-verb>`, and — with one deliberate
+  exception — the prefix *is* the subject type. Deriving it here rather than
+  listing it is what makes the test below a statement about the naming rule and
+  not merely a table someone remembered to extend: an action whose prefix names
+  no subject type fails, which is the drift worth catching.
+
+  The exception is `payment.*`, whose subject type is spelt `payment-instruction`
+  because the row it addresses is the instruction record."
+  [action]
+  (let [prefix (first (str/split action #"\." 2))]
+    (if (= "payment" prefix) "payment-instruction" prefix)))
 
 (deftest every-action-names-a-subject-type-that-exists
   (doseq [action audit/actions]
-    (let [subject-type (if (str/starts-with? action "approval.")
-                         "approval" "payment-instruction")]
-      (is (some? (audit/event (valid-event :action action :subject-type subject-type)))
+    (let [subject-type (subject-type-for action)]
+      (is (contains? audit/subject-types subject-type)
+          (str action " names subject type " (pr-str subject-type)
+               ", which is not in the vocabulary"))
+      (is (some? (audit/event (valid-event :action action
+                                           :subject-type subject-type
+                                           ;; Bootstrap actions may carry no
+                                           ;; actor; every other action must,
+                                           ;; and `valid-event` supplies one.
+                                           :actor-id (random-uuid))))
           (str action " must be recordable")))))
+
+(deftest the-writes-this-brief-covers-are-in-the-vocabulary
+  (testing "TASK-005: organisation creation, account opening and journal posting each have a term"
+    (doseq [action ["organisation.created" "account.created" "journal-entry.posted"]]
+      (is (contains? audit/actions action)))
+    (doseq [subject-type ["organisation" "account" "journal-entry"]]
+      (is (contains? audit/subject-types subject-type)))))
+
+;; ---------------------------------------------------------------------------
+;; The bootstrap identity — AC-1
+;; ---------------------------------------------------------------------------
+
+(deftest the-bootstrap-action-may-have-no-actor
+  (testing "`POST /organisations` is unauthenticated: no actor exists before the first organisation"
+    (is (nil? (:actor-id (audit/event (valid-event :action "organisation.created"
+                                                   :subject-type "organisation"
+                                                   :actor-id nil))))
+        "and the null must survive the round trip rather than becoming a placeholder")))
+
+(deftest an-actorless-event-outside-the-bootstrap-is-refused
+  (testing "standing lesson L-6: `a null actor_id means the bootstrap` is enforced, not merely commented"
+    (doseq [action (remove audit/bootstrap-actions audit/actions)]
+      (is (thrown? Exception
+                   (audit/event (valid-event :action action
+                                             :subject-type (subject-type-for action)
+                                             :actor-id nil)))
+          (str action " must name the actor that caused it — an unattributed "
+               "state change is the half of C-05 that says who")))))
+
+(deftest every-bootstrap-action-is-itself-a-known-action
+  (testing "a term misspelt here would silently stop exempting anything, or exempt something unnamed"
+    (is (every? audit/actions audit/bootstrap-actions))
+    (is (= #{"organisation.created"} (set audit/bootstrap-actions))
+        "the bootstrap is one endpoint; widening this set is a control decision, not a detail")))

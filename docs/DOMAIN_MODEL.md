@@ -164,9 +164,17 @@ prefixed with the canonicalisation version that produced it. See
 [ADR-0016](ADR/0016-audit-events-store-digests-not-payloads.md), which also
 states what this costs an auditor.
 
-**Coverage.** Every payment instruction and approval state change emits one
-event. Account opening, journal posting and organisation creation do not yet —
-named as a gap in [COMPLIANCE §4](COMPLIANCE.md) rather than left implicit.
+**Coverage.** Every state change the API can perform emits one event: payment
+instructions, approvals, and — since TASK-005 — organisation creation, account
+opening and journal posting. There is no qualification left on
+[C-05](COMPLIANCE.md).
+
+**Attribution, including where there is none.** `actor` is null on exactly one
+action, `organisation.created`, because `POST /organisations` is the bootstrap
+and no actor can exist before the organisation that holds one. That is enforced
+rather than conventional: `clofin.audit/event` refuses a null actor for every
+action outside `clofin.audit/bootstrap-actions`
+([ADR-0017](ADR/0017-bootstrap-identity-for-organisation-creation.md)).
 
 **Vocabulary.** The action is drawn from a closed set (`clofin.audit/actions`);
 anything else is refused before it reaches the table, so a question like "show
@@ -177,6 +185,7 @@ one. Two naming rules hold, both of them corrections from Milestone 1's audit:
 |---|---|
 | `payment.created`, `payment.submitted`, `payment.approved`, `payment.rejected`, `payment.amended`, `payment.cancelled` | The **payment's** transitions. Each is emitted exactly once, in the transaction where that transition commits — finding **F-005** found `payment.approved` emitted per *decision*, so a two-approval payment appeared to have been approved twice. |
 | `approval.recorded`, `approval.withdrawn`, `approval.invalidated` | The **approval's** own lifecycle, with the approval as subject. `approval.recorded` is written for every decision, approve or reject. `approval.invalidated` is written per approval when an amendment revokes it — finding **F-006**; before it, the trail said only that the payment had been amended. |
+| `organisation.created`, `account.created`, `journal-entry.posted` | The three writes that emitted nothing until TASK-005. Each is a creation, so each is written once, in the transaction where the row it names first exists, with a null before-digest. None has a decision or a partial step to distinguish it from, so none needs a second term the way `approval.recorded` needed one beside `payment.approved`. `posted` rather than `created` for a journal entry: an entry is never drafted and never amended (C-03), so posting is the only transition it has. |
 
 An approval's events name the approval, not the payment, because that is what
 they are about. `clofin.audit.repository/events-for-payment` relates them back

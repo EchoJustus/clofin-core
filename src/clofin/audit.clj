@@ -73,11 +73,58 @@
          ;; amended (PR-014). A real state change on a real record, and until
          ;; finding F-006 it emitted nothing at all.
          "approval.invalidated"
-         "approval.withdrawn"]))
+         "approval.withdrawn"
+         ;; The three writes that were silent until TASK-005. Each is a
+         ;; creation, so each is emitted once, in the transaction where the row
+         ;; it names first exists — which is what L-7 asks of a term named
+         ;; `<subject>.<transition>`. None of the three has a decision or a
+         ;; partial step to distinguish it from, so none needs a second term
+         ;; the way `approval.recorded` needed one beside `payment.approved`.
+         "organisation.created"
+         "account.created"
+         ;; `posted` rather than `created`: a journal entry is not drafted and
+         ;; then posted, and it is never amended afterwards (C-03) — posting is
+         ;; the only transition it has, and naming the event after the act
+         ;; keeps the vocabulary a description of what happened rather than of
+         ;; how a row arrived.
+         "journal-entry.posted"]))
 
 (def subject-types
-  "Every kind of thing an audit event may be about."
-  (into (sorted-set) ["payment-instruction" "approval"]))
+  "Every kind of thing an audit event may be about.
+
+  One term per kind of row an event can name. `payment-instruction` is spelt
+  out rather than shortened to `payment` because the subject is the
+  *instruction* record, which is what `subject_id` addresses."
+  (into (sorted-set)
+        ["payment-instruction" "approval"
+         "organisation" "account" "journal-entry"]))
+
+(def bootstrap-actions
+  "The actions that may be recorded with no actor at all.
+
+  `POST /organisations` is the bootstrap, and it is deliberately
+  unauthenticated: no actor can exist before the organisation that holds one,
+  so there is no principal for its event to carry (`clofin.api.principal`, and
+  003-REQ §6). `audit_event.actor_id` is nullable for exactly this case and
+  migration `0005` says so in a column comment — *\"null only where there is
+  genuinely no authenticated actor. Today that is the bootstrap case alone; a
+  null here on a payment action would be a defect.\"*
+
+  **A column comment is not an enforcement point** (standing lesson **L-6**).
+  Left at that, \"a null actor means the bootstrap\" is a sentence an auditor is
+  asked to trust, while nothing stops a future caller writing a null actor on a
+  payment action and making it false — and an unattributed state change is the
+  half of C-05 that says *who*. So the exemption is named here as a set, and
+  `event` refuses a null actor for every action outside it. The trail's null
+  column then has one meaning, and that meaning is checked rather than
+  described.
+
+  The rule is one-directional on purpose. A bootstrap action *may* carry no
+  actor; it is not required to be actorless. An administered
+  organisation-creation path arriving later records its principal without this
+  set having to change — and if it ever should stop being exempt, removing the
+  term here is the whole change."
+  (into (sorted-set) ["organisation.created"]))
 
 ;; ---------------------------------------------------------------------------
 ;; Digests
@@ -149,15 +196,22 @@
   caller never computes a digest itself, so there is one place that decides
   what an audit digest is taken over.
 
-  Refuses an unknown action, an unknown subject type, or a missing subject.
-  A `record!` that quietly accepted anything would make the vocabulary above a
-  suggestion, and an audit trail whose vocabulary is a suggestion cannot answer
-  \"show me every approval in August\" completely."
+  Refuses an unknown action, an unknown subject type, a missing subject, or a
+  missing actor outside the bootstrap. A `record!` that quietly accepted
+  anything would make the vocabulary above a suggestion, and an audit trail
+  whose vocabulary is a suggestion cannot answer \"show me every approval in
+  August\" completely."
   [{:keys [organisation-id actor-id action subject-type subject-id
            before after correlation-id]}]
   (when-not (contains? actions action)
     (err/invalid! (str "Unknown audit action: " action)
                   {:action (str action) :known (vec actions)}))
+  ;; Checked after the action, because it is the action that decides whether an
+  ;; absent actor is the documented bootstrap or a missing attribution. See
+  ;; `bootstrap-actions` for why this is code rather than a column comment.
+  (when (and (nil? actor-id) (not (contains? bootstrap-actions action)))
+    (err/invalid! (str "An audit event for " action " must name the actor that caused it")
+                  {:action action :bootstrap-actions (vec bootstrap-actions)}))
   (when-not (contains? subject-types subject-type)
     (err/invalid! (str "Unknown audit subject type: " subject-type)
                   {:subject-type (str subject-type) :known (vec subject-types)}))
@@ -206,3 +260,57 @@
   [approval]
   (when approval
     (select-keys approval approval-fields)))
+
+(def organisation-fields
+  "The fields of an organisation that a digest covers.
+
+  Identity and everything a later change could alter. `status` is here even
+  though nothing changes it today: the projection describes what the digest
+  proves about the row, and a field left out is a field an alteration could
+  move without the digest noticing."
+  [:id :legal-name :short-name :status])
+
+(defn organisation-subject
+  "The projection of an organisation that its audit digests are taken over."
+  [organisation]
+  (when organisation
+    (select-keys organisation organisation-fields)))
+
+(def account-fields
+  "The fields of a ledger account that a digest covers.
+
+  `status` in particular: freezing and closing are account state changes, and
+  when they gain audit events of their own their before and after digests have
+  to differ, which they only do if the projection covers the column that moved.
+  Balances are deliberately absent — an account has no balance column to
+  digest, only an aggregation over journal lines (ADR-0008)."
+  [:id :organisation-id :code :name :type :currency :status])
+
+(defn account-subject
+  "The projection of a ledger account that its audit digests are taken over."
+  [account]
+  (when account
+    (select-keys account account-fields)))
+
+(def journal-entry-fields
+  "The fields of a journal entry that a digest covers, including its lines.
+
+  The lines are the entry: an entry digest that covered only the header would
+  be identical for two entries moving different amounts between different
+  accounts, which is the one thing a ledger digest must never be. `normalise`
+  walks the vector and the money values inside it, so each line's account,
+  direction, amount and currency all reach the digest.
+
+  `recorded-at` is deliberately outside the projection, for the same reason
+  `instruction-fields` excludes `created-at`: it is assigned by the database
+  and is therefore present on an entry read back from a row and absent from the
+  one just posted. A digest that differed depending on which of the two it was
+  handed would prove nothing (an entry is append-only in any case — C-03 — so
+  there is no later value for it to be compared against)."
+  [:id :organisation-id :occurred-at :narrative :reference :lines])
+
+(defn journal-entry-subject
+  "The projection of a journal entry that its audit digests are taken over."
+  [entry]
+  (when entry
+    (select-keys entry journal-entry-fields)))

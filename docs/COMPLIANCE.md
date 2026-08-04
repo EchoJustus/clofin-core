@@ -245,10 +245,12 @@ the audit table while still proving what changed
 The transactional property is made structural rather than remembered.
 `clofin.audit.repository/record!` takes a `tx` and never opens one, so the only
 connection available to a caller *is* the transaction carrying the change.
-`clofin.payments.approval-service` likewise takes the caller's transaction and
-requires no `clofin.db.*` namespace at all — a service that could open its own
-connection is a service that could write an audit event outside the change it
-describes, and `clofin.ledger.purity-test` fails the build if it acquires one.
+Every service that composes a change with its event likewise takes the caller's
+transaction and requires no `clofin.db.*` namespace at all —
+`clofin.payments.approval-service`, `clofin.ledger.service` and
+`clofin.organisations.service`. A service that could open its own connection is
+a service that could write an audit event outside the change it describes, and
+`clofin.ledger.purity-test` fails the build if any of them acquires one.
 
 **One event per state change, named after the change it is.** `clofin.audit`
 holds a closed vocabulary and `event` refuses anything outside it. Two rules
@@ -288,6 +290,8 @@ is about.
 | `approval_no_delete` | An approval may be *invalidated* (`UPDATE`) and never removed. The asymmetry is deliberate and is commented in the migration, because the next reader will want to "fix" it. |
 | `clofin.audit.repository/record!` | Writes on the caller's transaction. Cannot open one. |
 | `clofin.audit/event` | Refuses an action outside the vocabulary — default deny reaching the audit trail, so "show me every approval in August" has a complete answer. |
+| `clofin.audit/event`, actor rule | Refuses a **null actor** for any action outside `clofin.audit/bootstrap-actions`, so the trail's one unattributed case is the one that is documented and not merely the one that happens to be there ([ADR-0017](ADR/0017-bootstrap-identity-for-organisation-creation.md)). |
+| `clofin.ledger.purity-test` | Fails the build if `clofin.payments.approval-service`, `clofin.ledger.service` or `clofin.organisations.service` acquires a `clofin.db.*` dependency. A service that can open a connection is a service that can write an event outside the change it describes. |
 
 **Evidence.** Evidence pack extraction for a nominated payment or period
 (PR-074): `GET /audit/evidence/{subjectId}` returns every state change in order
@@ -307,6 +311,16 @@ two-approval payment produces, that a partial approval records a decision and
 no transition, that an amendment emits one `approval.invalidated` per approval,
 and that the amendment event and every invalidation event roll back together
 when the transaction fails.
+
+The same pair is asserted for each of the three writes TASK-005 added.
+`clofin.organisations.service-test` and `clofin.ledger.service-test` carry the
+committed and rolled-back halves — and, for posting, the rollback where the
+*database* refuses at commit rather than where application code throws.
+`clofin.api.audit-coverage-test` asserts the whole claim end to end through the
+router, middleware and error boundary: every write leaves exactly one event,
+every refused request (`400`, `401`, `403`, `409`, `422`) leaves none, no payload
+field reaches `audit_event`, and `GET /audit/events` returns the ledger and
+payment events together, in order, with no change to the query.
 
 **What a trigger cannot do, stated because the previous wording claimed
 otherwise.** This table used to say the guard was "not revoked privileges — a
@@ -343,13 +357,39 @@ ERROR:  permission denied to set parameter "session_replication_role"
 demonstrates the residue in a rolled-back transaction, so the boundary is a
 passing test rather than a paragraph.
 
-**Scope of this control.** It covers **payment instructions and approvals** —
-every state change either can undergo emits exactly one event. It does **not**
-yet cover organisation creation, account opening or journal posting. Those are
-TASK-001's endpoints and outside this increment's scope; the journal is
-separately immutable under C-03 and carries its own `recorded_at`, but a
-literal reading of PR-072 includes them and they are not done. Named here rather
-than left for a reader to discover, and carried in §4 below.
+**Coverage: every write the API can perform.** Organisation creation, account
+opening and journal posting emitted no event until TASK-005, so this control
+carried an explicit scope paragraph saying so. It no longer does. Each of the
+three now records one event in the transaction that carries the change:
+
+| Write | Action | Subject | Composed by |
+|---|---|---|---|
+| `POST /organisations` | `organisation.created` | `organisation` | `clofin.organisations.service` |
+| `POST /accounts` | `account.created` | `account` | `clofin.ledger.service` |
+| `POST /journal-entries` | `journal-entry.posted` | `journal-entry` | `clofin.ledger.service` |
+
+Both services take the caller's transaction and require no `clofin.db.*`
+namespace, exactly as `clofin.payments.approval-service` does — the handler
+opens the transaction, because a transport layer may and a service may not.
+`clofin.ledger.purity-test` fails the build if either acquires a connection.
+
+Posting is the case worth stating separately. The zero-sum and completeness
+guards on a journal entry are `deferrable initially deferred`, so they fire at
+`commit` — after the service has returned and after the event has been written.
+No application code sees that failure and nothing catches it, and the event
+still must not survive it. It does not, because it is inside the transaction the
+database refused. That is the concrete reason `record!` cannot open a connection
+of its own, and `clofin.ledger.service-test` asserts it by unbalancing an entry
+after it has been posted and letting the commit fail.
+
+**Attribution, including where there is none.** `POST /organisations` is the
+bootstrap: no actor can exist before the organisation that holds one, so it is
+unauthenticated and its event records a **null actor**. That null is not left as
+a convention — `clofin.audit/bootstrap-actions` names the one action allowed to
+carry it and `clofin.audit/event` refuses every other action a null actor, so
+`actor_id is null` has a single checked meaning rather than a documented one
+(standing lesson **L-6**; [ADR-0017](ADR/0017-bootstrap-identity-for-organisation-creation.md),
+which also records why a seeded `system` actor row was rejected).
 
 ---
 
@@ -574,7 +614,6 @@ Being explicit about gaps is part of the control design.
 | Key management and HSM integration | Out of scope ([ARCHITECTURE.md §10](../ARCHITECTURE.md)) |
 | Rate limiting and abuse protection | Not built; local posture only |
 | Authentication provider integration | **Permission model built (C-08); provider wiring not.** The actor is named by an `X-Actor-Id` header against a seeded table — anyone who can reach the service can claim to be any seeded actor. The authorisation model is real; the authentication in front of it is not adversarial |
-| Audit coverage of ledger and organisation writes | **Payment instructions and approvals emit audit events; account opening, journal posting and organisation creation do not yet.** A literal reading of PR-072 covers them. See C-05 §Scope |
 | Approver limit at the time of an approval | Not retained. `approver_limit` is mutable and unversioned, so a limit raised after an approval is indistinguishable from one that was always that high (C-02 §Known limit). Raised as objection O-4 and **accepted by ruling**: the capture columns (`actor_limit_minor`, `approvals_required` on `approval`, written at decision time) are carried forward as debt for a future brief, because a schema change belongs in a brief |
 | Actor administration | No endpoint creates an actor, grants a role or sets a limit. Deliberate for this increment — an actor that could grant itself the approver role would make C-01 unenforceable — but a real deployment needs an administered path with its own controls |
 | Runtime role split for append-only enforcement | **Not built.** The append-only triggers on `journal_entry`, `journal_line`, `audit_event` and `approval` refuse `UPDATE`, `DELETE` and `TRUNCATE` — but a trigger cannot bind the table's *owner*, and CloFin connects as the owner (and, in the shipped stack, as a superuser). `DISABLE TRIGGER`, `DROP TRIGGER` and `session_replication_role = 'replica'` all succeed for that role; the last defeats the row-level guards that have existed since migration `0002`, so this residue predates audit finding F-002 rather than being introduced by it. The fix — application role ≠ owner, `TRUNCATE` and DDL revoked — is foreshadowed in `0002`'s own comment and verified to refuse all four attempts. Named here rather than left to be discovered |
