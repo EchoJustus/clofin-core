@@ -88,14 +88,16 @@ Dependency rule: **the ledger's domain depends on nothing.** Payments depends on
 ledger and authz. Settlement and reconciliation depend on ledger. Nothing depends
 on HTTP. This is what makes the domain testable without a server or a database.
 
-**Audit is the one context every writing context depends on, and it depends on
-none of them.** An audit event has to be written by the transaction that carries
-the change (§5.5, C-05), so the namespace composing a change with its event
-necessarily sees both — payments already did, and since TASK-005 the ledger and
-organisations contexts do too. That direction is safe because `clofin.audit`
-knows nothing about payments, accounts or entries: it holds a vocabulary and a
-digest, and each context supplies its own projection of the subject. The arrow
-never points back, so no cycle is possible.
+**Audit is a sink: anything may depend on it, and it depends on nothing.** An
+audit event has to be written by the transaction that carries the change (§5.5,
+C-05), so whichever namespace composes a change with its event necessarily sees
+both contexts — payments already did, and since TASK-005 the ledger and
+organisations contexts do too. (A context's *repository* generally does not:
+`clofin.authz.repository` writes approvals and requires no audit namespace,
+because the composing is `clofin.payments.approval-service`'s job.) That
+direction is safe because `clofin.audit` knows nothing about payments, accounts
+or entries: it holds a vocabulary and a digest, and each context supplies its own
+projection of the subject. The arrow never points back, so no cycle is possible.
 
 ---
 
@@ -131,19 +133,28 @@ trusting review to remember
 ([ADR-0012](docs/ADR/0012-repository-seam-and-posting-time-validation.md)).
 
 **A `service` namespace owns no connection either.** `clofin.payments.approval-service`,
-`clofin.ledger.service` and `clofin.organisations.service` sequence repositories
+`clofin.ledger.service`, `clofin.organisations.service` and
+`clofin.settlement.service` sequence repositories
 inside a transaction the *caller* owns, and require no `clofin.db.*` namespace at
 all. That is not tidiness: a service able to open its own transaction is a
 service able to write an audit event outside the change it describes, which is
 the one failure C-05 exists to prevent. The same purity test enforces it.
 
 Something has to open that transaction, and it is the **handler** — a transport
-concern, and the layer that already knows the pool. What the handler does *not*
-do is decide what gets written into it: an audit event emitted by
-`clofin.api.accounts` would be a control that exists only for callers arriving
-through `clofin.api.accounts`, which is the shape audit finding **F-001** found
-segregation of duties in. The handler parses, opens the transaction and renders;
-the service decides.
+concern, and the layer that already knows the pool. What the handler should
+*not* do is decide what gets written into it: an audit event emitted by
+`clofin.api.accounts` is a control that exists only for callers arriving through
+`clofin.api.accounts`. Audit finding **F-001** is the argument for putting such a
+control lower — its fix moved the maker–checker check down into
+`clofin.payments.repository/transition!` so a non-creator is refused *by any
+route into the repository, not just the handler* — and an audit write has the
+same property: it is worth nothing on the paths that skip it.
+
+**One place does not follow this yet.** `clofin.api.payments` records its four
+payment events inline in the handler, from before the service split existed.
+Moving them is a refactor of TASK-002's endpoints with no behavioural change, and
+it has not been done — stated here rather than left for a reader to trip over,
+because a rule with a silent exception is worse than a rule with a named one.
 
 A repository is also where rules that **cannot** be checked purely belong —
 those that are properties of stored state rather than of a value, such as
@@ -207,7 +218,12 @@ status. They are held as named sets beside the table rather than as conditionals
 in a handler, so that "what does status control?" has one answer and one file
 ([ADR-0014](docs/ADR/0014-payment-lifecycle-as-data.md)).
 
-Built so far: `submit` and `cancel` have endpoints. The rest are in the table,
+Built so far: `submit`, `cancel`, `approve`, `reject`, `amend`, `release`,
+`settle` and `return` all have drivers. **`fail` does not, deliberately** — a
+settlement item's outcome is settled, returned or timed-out, a scheme failure
+that sends the money back *is* a return, and an unknown outcome leaves the
+instruction `released` because CloFin cannot claim the payment did not happen.
+The arrow stays in the table; see 004-REQ objection O-1. The rest are in the table,
 tested, and driven by nothing until approval (TASK-003) and settlement
 (increment 5) arrive.
 
@@ -287,7 +303,45 @@ rather than described — `clofin.audit/event` refuses a null actor for every
 action outside `clofin.audit/bootstrap-actions`, which contains exactly one term
 ([ADR-0017](docs/ADR/0017-bootstrap-identity-for-organisation-creation.md)).
 
-### 5.6 Multi-tenancy and access
+### 5.6 Settlement
+
+Approved payments are grouped into a **settlement batch** — one scheme, one
+currency, one value date — released to that scheme, and carried to a terminal
+outcome. The scheme is **always simulated**: `SIM-RTGS` and `SIM-ACH` are the
+only names a database check constraint permits, and outcomes enter the system
+only through `POST /settlement-batches/{id}/scheme-responses`. There is no
+listener, no file drop and no correspondent.
+
+**A release posts** ([ADR-0018](docs/ADR/0018-release-posts-to-settlement-in-transit.md)).
+Value moves from pooled client funds into `1300-IN-TRANSIT` at submission and
+leaves it at finality, so the balance of that one account is CloFin's clearing
+exposure at any instant — readable from the ledger with no knowledge of the
+settlement tables. A timeout posts nothing, because the value is already
+where value of unknown fate belongs.
+
+**A batch's status is derived** from its items' outcomes, never set — the same
+doctrine that makes a balance an aggregation over the journal. The derivation is
+stated once, in `clofin.settlement.batch`, and the repository records what that
+function returned.
+
+The failure modes are the increment, not its edge cases:
+
+- **Duplicate responses.** Every response is stored verbatim under a replay key
+  `(batch, instruction, kind, reference)`. A second delivery does no work — no
+  posting, no audit event, no transition — and the first row stays as the
+  evidence that a duplicate arrived.
+- **Out-of-order responses.** A genuinely new response for an item that already
+  has an outcome is a conflict, not a silent overwrite.
+- **Timeouts.** An unanswered item is swept to `timed-out`, which means
+  **unknown, not failed**: the instruction stays `released`, and a partial unique
+  index makes it un-re-batchable until a late `timeout-resolution` says what
+  really happened. Treating unknown as failed and re-batching is how a payment
+  gets made twice, which is the single failure this context exists to prevent.
+
+The sweep is an explicit operator call rather than a daemon — a timeout that
+fires itself is one nobody can point at afterwards.
+
+### 5.7 Multi-tenancy and access
 
 Every business record carries an organisation identifier, and the organisation a
 request acts on comes from the **authenticated actor**, never from the request.
@@ -327,10 +381,13 @@ ledger:
   that the entry has at least two lines **and** balances — the first alone is
   vacuous for an entry with no lines
 - Unique constraints backing idempotency keys
-- Refused `UPDATE`, `DELETE` and `TRUNCATE` on journal, approval and audit
-  tables, by trigger rather than by revoked privilege — with the limits of that
-  choice stated in §5.5 and carried as debt in
+- Refused `UPDATE`, `DELETE` and `TRUNCATE` on journal, approval, audit and
+  scheme-response tables, by trigger rather than by revoked privilege — with the
+  limits of that choice stated in §5.5 and carried as debt in
   [COMPLIANCE §4](docs/COMPLIANCE.md)
+- A partial unique index making it impossible for one payment instruction to be
+  in two *live* settlement memberships — the no-double-settlement guard, in the
+  schema so it binds a fix-up script as well as a handler
 
 Migrations are **forward-only**, numbered SQL files in
 `resources/migrations/`, applied by a small runner that records applied

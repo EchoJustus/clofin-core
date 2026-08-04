@@ -28,8 +28,13 @@
 
   The transaction is opened here because something must open it and a service
   may not (`ARCHITECTURE.md` §4): the row and its audit event commit together
-  or not at all (C-05, invariant I9). The request is parsed *before* the
-  transaction, so a `400` never opens one."
+  or not at all (C-05, invariant I9). Wire parsing happens *before* the
+  transaction, so a malformed body never opens one — but the value type's own
+  rules run inside it, since `organisation/organisation` is called by the
+  repository. A short name the pattern refuses is therefore a `400` raised
+  within an open transaction, which rolls back with nothing written. Correct
+  either way, and worth stating precisely rather than claiming no `400` reaches
+  the transaction."
   [pool]
   (fn [request]
     (let [body      (wire/read-object request)

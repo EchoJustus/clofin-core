@@ -129,11 +129,48 @@ timeout the control exists for. See
 | `decided-at` | ✅ |
 | `invalidated-at` | ✅ Set when the instruction was amended (PR-014) or the actor withdrew the approval. **The row is never deleted** — the database refuses it. An approval that was given and then invalidated is exactly the history an investigation needs; a deleted one is a decision nobody can prove was taken. |
 
-### 2.3 Settlement context 📋
+### 2.3 Settlement context ✅
 
-**SettlementBatch** — instructions grouped by scheme, currency and value date.
-**SettlementItem** — one instruction within a batch, with its own outcome.
-Partial batch failure is the normal case, not an edge case.
+```
+SettlementBatch 1───* SettlementBatchItem *───1 PaymentInstruction
+        │
+        └──* SchemeResponse
+```
+
+**SettlementBatch** ✅
+| Field | Notes |
+|---|---|
+| `id`, `organisation-id` | ✅ |
+| `scheme` | ✅ `SIM-RTGS` or `SIM-ACH`. **Simulated only** — the `SIM-` prefix is a database check constraint, so a synthetic record can never name a real network. An operator's routing choice: an instruction carries no scheme attribute. |
+| `currency`, `value-date` | ✅ With `scheme`, the triple that defines a batch. One batch, one triple. |
+| `status` | ✅ `open` → `submitted` → `settled` / `partially-settled` / `failed`. **Derived from the items' outcomes**, never set directly — the same doctrine as a balance deriving from the journal. |
+| `created-by`, `created-at` | ✅ |
+
+**SettlementBatchItem** ✅ — one instruction within a batch, keyed
+`(batch, instruction)` and having no identity of its own.
+| Field | Notes |
+|---|---|
+| `outcome` | ✅ `settled`, `returned`, `timed-out`, or null while pending. There is deliberately **no `failed`** — see §3. |
+| `outcome-reason` | ✅ Required on a `returned` item: an exception queue whose entries do not say why is one nobody can work. |
+| `resolved-at` | ✅ Set exactly once. |
+
+**An instruction is in at most one *live* membership** — pending, settled or
+timed out. Only a `returned` item frees it for re-batching, and that is a partial
+unique index rather than a check in application code, so it binds a fix-up
+script and a defect too. **`timed-out` blocks precisely because the outcome is
+unknown:** treating unknown as failed and re-batching is how a payment is made
+twice, which is the single failure this context exists to prevent.
+
+**SchemeResponse** ✅ — what a simulated scheme said, stored **verbatim**, kept
+whether or not it caused work. The replay key
+`(batch, instruction, kind, reference)` — `nulls not distinct`, so two identical
+batch-level acks collide rather than coexisting — makes a duplicate delivery
+detectable and idempotent. Append-only against all three destructive verbs.
+
+Responses arriving **late, twice, or out of order** is the normal case in the
+world this simulates, not an edge case; so is **partial batch failure**. A
+duplicate does no work and says so; a genuinely new response for an item that
+already has an outcome is a conflict.
 
 ### 2.4 Reconciliation context 📋
 
@@ -185,6 +222,8 @@ one. Two naming rules hold, both of them corrections from Milestone 1's audit:
 |---|---|
 | `payment.created`, `payment.submitted`, `payment.approved`, `payment.rejected`, `payment.amended`, `payment.cancelled` | The **payment's** transitions. Each is emitted exactly once, in the transaction where that transition commits — finding **F-005** found `payment.approved` emitted per *decision*, so a two-approval payment appeared to have been approved twice. |
 | `approval.recorded`, `approval.withdrawn`, `approval.invalidated` | The **approval's** own lifecycle, with the approval as subject. `approval.recorded` is written for every decision, approve or reject. `approval.invalidated` is written per approval when an amendment revokes it — finding **F-006**; before it, the trail said only that the payment had been amended. |
+| `payment.released`, `payment.settled`, `payment.returned` | Settlement's payment transitions, each written where that transition commits. `payment.released` is one event **per instruction** in the batch's submission transaction — counting `settlement-batch.submitted` to learn how many payments left would be F-005's mistake with a new name. `payment.failed` is in the vocabulary and is emitted by nothing; see §3. |
+| `settlement-batch.created`, `.submitted`, `.completed`, `.timeout-swept` | The **batch's** own lifecycle, with the batch as subject. `.completed` is written **only** in the transaction where the last unresolved item resolves — a batch with items outstanding is not completed however many responses have arrived. `.timeout-swept` is its own term because "we stopped waiting" is not "the scheme answered", and a sweep that swept nothing writes nothing. |
 | `organisation.created`, `account.created`, `journal-entry.posted` | The three writes that emitted nothing until TASK-005. Each is a creation, so each is written once, in the transaction where the row it names first exists, with a null before-digest. None has a decision or a partial step to distinguish it from, so none needs a second term the way `approval.recorded` needed one beside `payment.approved`. `posted` rather than `created` for a journal entry: an entry is never drafted and never amended (C-03), so posting is the only transition it has. |
 
 An approval's events name the approval, not the payment, because that is what
@@ -293,10 +332,20 @@ beside the table rather than as conditionals in a handler
   transition either.
 
 **Built so far:** `submit`, `cancel`, `approve`, `reject` and `amend` have
-endpoints. `release`, `settle`, `fail` and `return` are in the table, tested,
-and driven by nothing — a transition with no caller is still part of the model,
-and the increment that adds the endpoint gets to drive it, not to decide where
-it leads.
+endpoints. `release`, `settle` and `return` are driven by settlement
+(increment 5): a batch's submission releases every member, and a simulated
+scheme response settles or returns one. TASK-004 drove those arrows without
+changing any of them — the table already said where they led.
+
+**`fail` is still driven by nothing**, and that is now a deliberate gap rather
+than an unbuilt one. A settlement item's outcome is `settled`, `returned` or
+`timed-out`: a scheme failure that sends the money back **is** a return, and an
+outcome nobody knows is a timeout, which leaves the instruction `released`
+because CloFin cannot claim the payment did not happen. Nothing in the
+settlement model produces "the payment definitively failed and no money came
+back". The arrow stays in the table — a transition with no caller is still part
+of the model — and whether it should acquire one is recorded as objection **O-1**
+in `004-REQ`.
 
 ---
 
@@ -320,11 +369,26 @@ A minimal chart sufficient to express supplier payment, fees and settlement.
 |---|---|---|---|
 | Release | `1300-IN-TRANSIT` | `1100-CLIENT-FUNDS` | 1,250.00 |
 | Fee | `2100-CLIENT-PAYABLE` | `4100-FEE-INCOME` | 5.00 |
-| Settlement | `1100-CLIENT-FUNDS`* | `1300-IN-TRANSIT` | 1,250.00 |
+| Settlement | `2100-CLIENT-PAYABLE` | `1300-IN-TRANSIT` | 1,250.00 |
+| Return *(instead of settlement)* | `1100-CLIENT-FUNDS` | `1300-IN-TRANSIT` | 1,250.00 |
 
-\* On settlement the in-transit asset is released against the nostro movement;
-the exact pair depends on the scheme, which is why posting templates are per
-payment type rather than global.
+**Release moves value between two assets and leaves the liability alone** —
+until the scheme settles, CloFin still owes the client the money it is holding.
+**Settlement extinguishes both sides:** the in-transit asset is credited away and
+the obligation to the client is debited down. **A return touches no liability**
+and is the exact mirror of the release: the money is back in the pool and the
+client's claim on it never moved.
+
+The balance of `1300-IN-TRANSIT` is therefore, at any instant, the value CloFin
+has released and does not yet know the fate of — its clearing exposure, readable
+from the ledger alone. A **timed-out** payment posts nothing and stays in that
+balance, which is the visibility a stuck payment deserves.
+
+This table previously showed settlement as debit `1100-CLIENT-FUNDS`, under an
+asterisk deferring the pair to "the increment that has a scheme adapter". That
+pair is the *return*. Corrected by
+[ADR-0018](ADR/0018-release-posts-to-settlement-in-transit.md), which records
+what was chosen and what was rejected.
 
 Each row is one entry, balancing on its own. Every entry is reversible by
 mirroring its directions.

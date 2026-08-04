@@ -326,6 +326,40 @@
    :check-violation       "23514"
    :not-null-violation    "23502"})
 
+(defn tolerating-violation
+  "Run `(f tx)` inside a **savepoint**; on a constraint violation, roll back to
+  the savepoint and return `(on-violation v)` with the structured detail.
+
+  This exists because catching the exception is **not enough**. PostgreSQL
+  aborts the entire transaction on a constraint violation: every statement after
+  one fails with `current transaction is aborted, commands ignored until end of
+  transaction block`, so code that catches a duplicate-key error and carries on
+  reading is code whose next query fails for a reason that has nothing to do
+  with what it was asked. A savepoint is the only correct way to express
+  *\"insert, and if it collides, carry on in the same transaction\"*.
+
+  The distinction matters wherever a violation is an *expected outcome* rather
+  than a failure — a duplicate scheme response is the normal case in the world
+  settlement simulates. Where a violation should abort the unit of work, catch
+  it and throw a domain error instead; the transaction is going away regardless
+  and a savepoint would only add ceremony.
+
+  Anything that is not a constraint violation is rethrown after the savepoint is
+  released, so a defect still surfaces as one."
+  [tx f on-violation]
+  (let [^Connection conn tx
+        savepoint (.setSavepoint conn)]
+    (try
+      (let [result (f conn)]
+        (.releaseSavepoint conn savepoint)
+        result)
+      (catch Exception t
+        (if-let [v (violation t)]
+          (do (.rollback conn savepoint)
+              (on-violation v))
+          (do (try (.rollback conn savepoint) (catch Exception _))
+              (throw t)))))))
+
 ;; ---------------------------------------------------------------------------
 ;; Health
 ;; ---------------------------------------------------------------------------

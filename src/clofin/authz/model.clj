@@ -52,7 +52,19 @@
          :payment/approve
          :payment/reject
          :approval/read
-         :audit/read]))
+         :audit/read
+         ;; Settlement (TASK-004). One permission for every mutating settlement
+         ;; operation — creating a batch, submitting it, recording a scheme
+         ;; response, sweeping timeouts — because they are one job done by one
+         ;; person, and splitting them would suggest an organisation could grant
+         ;; the power to release money without the power to batch it.
+         ;;
+         ;; **No role holds this and `:payment/approve`.** Asserted in
+         ;; `clofin.authz.model-test` beside the existing separation
+         ;; assertions: an actor who could approve a payment and then settle it
+         ;; is a maker-checker boundary with one person on both sides of the
+         ;; last step (C-01, C-08).
+         :settlement/execute]))
 
 (def roles
   "Every role an actor may hold.
@@ -77,10 +89,12 @@
     acts with different consequences, and an organisation may reasonably want
     an actor who can do the first and not the second.
   - **`:controller` supervises; it does not approve.** It posts journal entries
-    and opens accounts — acts that move money in the ledger — and cancels
-    instructions. Giving it `:payment/approve` as well would produce a role
-    that is both maker-adjacent and checker, which is the exact shape C-01
-    exists to prevent.
+    and opens accounts — acts that move money in the ledger — cancels
+    instructions, and **executes settlement**. Giving it `:payment/approve` as
+    well would produce a role that is both maker-adjacent and checker, which is
+    the exact shape C-01 exists to prevent — and it is why `:settlement/execute`
+    lands here rather than on `:approver`: the actor who agreed a payment should
+    not also be the actor who pushes it out of the door.
   - **`:auditor` is read-only.** Every permission it holds is a read. An
     auditor who can change the thing being audited is not an auditor.
 
@@ -90,7 +104,8 @@
    :approver   #{:payment/approve :payment/reject :payment/read
                  :approval/read :account/read :entry/read}
    :controller #{:account/create :account/read :entry/post :entry/read
-                 :payment/read :payment/cancel :approval/read}
+                 :payment/read :payment/cancel :approval/read
+                 :settlement/execute}
    :compliance #{:payment/read :account/read :entry/read :audit/read}
    :auditor    #{:audit/read :payment/read :account/read :entry/read}})
 

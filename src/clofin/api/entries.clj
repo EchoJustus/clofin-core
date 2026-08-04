@@ -77,9 +77,14 @@
   `journal-entry.posted` audit event commit together or not at all (C-05,
   invariant I9). That includes the case where the *database* refuses the entry
   — the zero-sum and completeness guards are deferred, so they fire at this
-  commit, and the event is inside it. The request is parsed and the principal
-  resolved *before* the transaction, so a `400`, `401`, `403` or `422` from
-  validation never opens one."
+  commit, and the event is inside it.
+
+  Parsing, the principal and the balance check all happen *before* the
+  transaction, so a `401`, a `403`, a malformed-body `400` and the unbalanced
+  `422` never open one. What runs inside it is `entry/entry` and the
+  posting-time rules that need stored state — an unknown or frozen account, a
+  currency mismatch — so those refusals roll back an open transaction with
+  nothing written."
   [pool]
   (fn [request]
     (let [body  (wire/read-object request)

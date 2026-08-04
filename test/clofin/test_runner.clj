@@ -26,6 +26,8 @@
     clofin.authz.model-test
     clofin.authz.approval-test
     clofin.audit-test
+    clofin.settlement.batch-test
+    clofin.settlement.scheme-test
     clofin.config-test
     clofin.http.router-test
     clofin.http.middleware-test
@@ -48,6 +50,8 @@
     clofin.api.payments-api-test
     clofin.api.approvals-api-test
     clofin.api.audit-coverage-test
+    clofin.settlement.repository-test
+    clofin.api.settlement-api-test
     clofin.system-test])
 
 (defn integration?

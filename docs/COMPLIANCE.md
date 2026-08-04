@@ -223,6 +223,20 @@ judged. The balance check is duplicated inside it deliberately, with the same
 message wording, so that the two guards cannot disagree about what balanced
 means.
 
+**Evidence — extended by settlement (increment 5).** The zero-sum invariant now
+has to survive a *flow* rather than a single insert: a batch release posts one
+entry per instruction, and each finality outcome posts another, with partial
+batch failure as the normal case.
+`clofin.api.settlement-api-test/ac-4-the-ledger-stays-balanced-across-every-outcome-mix`
+is a **property test over generated settled/returned mixes** — not three
+examples — which drives each mix through the whole API and then queries the
+journal directly for any entry whose lines do not net to zero per currency. It
+asserts on the ledger rather than on CloFin's opinion of the ledger, and it also
+asserts the entry count is exactly one release plus one finality entry per
+instruction, so an outcome that posted twice would fail even if both postings
+balanced. What each movement debits and credits, and why a timeout posts
+nothing, is [ADR-0018](ADR/0018-release-posts-to-settlement-in-transit.md).
+
 **Evidence.** The property test's seed and case count; a direct SQL attempt that
 fails with the imbalance named. For F-003, `clofin.db.ledger-constraints-test`
 opens a transaction, inserts an entry with zero lines and then with one line,
@@ -234,7 +248,10 @@ transiently incomplete entry mid-transaction is still allowed to complete.
 ### C-05 Complete and attributable audit trail ✅
 
 **Statement.** Every state change records who did what, to which subject, when,
-and what changed — and cannot be altered afterwards.
+and what changed — and cannot be altered afterwards. *Who* is null in exactly one
+case, the unauthenticated bootstrap, where there is no principal to record; that
+is not a coverage gap but a property of the one write that precedes identity, and
+it is enforced to stay the only one (see *Attribution* below).
 
 **Design.** `audit_event` is append-only and written **in the same transaction**
 as the change it describes, so an unaudited state change is not representable.

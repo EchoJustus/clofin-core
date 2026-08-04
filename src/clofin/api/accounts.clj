@@ -34,9 +34,12 @@
 
   The transaction is opened here because something must open it and a service
   may not (`ARCHITECTURE.md` §4): the account row and its `account.created`
-  audit event commit together or not at all (C-05, invariant I9). The request
-  is parsed and the principal resolved *before* the transaction, so a `400`,
-  `401` or `403` never opens one."
+  audit event commit together or not at all (C-05, invariant I9). Wire parsing
+  and the principal are resolved *before* the transaction, so a `401`, a `403`
+  and a malformed-body `400` never open one. The value type's own rules run
+  inside it — `account/account` is called by the repository — so a `400` from
+  those rolls back an open transaction with nothing written. Correct either way;
+  stated precisely because \"no 400 reaches the transaction\" would not be true."
   [pool]
   (fn [request]
     (let [body (wire/read-object request)

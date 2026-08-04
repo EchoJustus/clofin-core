@@ -21,11 +21,19 @@
 
   **Why it is not in the handler either.** An audit event written by
   `clofin.api.accounts` would be a control that exists only for callers arriving
-  through `clofin.api.accounts`. That is the shape of audit finding **F-001**,
-  which found segregation of duties enforced in a handler, and it is the shape
-  worth not repeating. The handler opens the transaction — that is a transport
-  concern, and something must — and this namespace decides what is written into
-  it.
+  through `clofin.api.accounts`. Audit finding **F-001** is the argument for
+  putting it lower: the fix there moved the maker–checker check down into
+  `clofin.payments.repository/transition!` precisely so a non-creator is refused
+  *by any route into the repository, not just the handler*. The same reasoning
+  applies to an audit write, which is a control with the same property — it is
+  worth nothing on the paths that skip it. The handler opens the transaction,
+  because that is a transport concern and something must; this namespace decides
+  what is written into it.
+
+  `clofin.api.payments` still records its four payment events inline in the
+  handler, from before this split existed. That is pre-existing and out of this
+  brief's scope — it is named here rather than papered over, because a reader
+  comparing the two will otherwise conclude one of them is wrong by accident.
 
   [C-05]: docs/COMPLIANCE.md"
   (:require [clofin.audit :as audit]

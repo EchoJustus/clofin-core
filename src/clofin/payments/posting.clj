@@ -75,6 +75,94 @@
                          :to-account-id   (account! accounts :client-payable)
                          :amount          fee}))
 
+(defn settlement-lines
+  "The finality movement of a settlement: debit client payable, credit
+  settlement-in-transit.
+
+  This is the entry that says the money is *gone*, and it is the counterpart of
+  `release-lines` rather than its mirror. Release moved value between two assets
+  — out of the pooled client-funds account and into in-transit — and left the
+  liability alone, because until the scheme settles CloFin still owes the client
+  the money it is holding on their behalf. Settlement extinguishes both sides:
+  the in-transit asset is credited away, and the obligation to the client
+  (`2100-CLIENT-PAYABLE`) is debited down by the same amount.
+
+  Contrast `return-lines`, which credits in-transit against **client funds** and
+  leaves the liability untouched — because a returned payment leaves the
+  obligation exactly where it was.
+
+  `DOMAIN_MODEL.md` §4 left the settlement pair to \"the increment that has a
+  scheme adapter to be specific about\", which is this one. See
+  [ADR-0018](../../../docs/ADR/0018-release-posts-to-settlement-in-transit.md)
+  for what an auditor sees mid-flight under this choice."
+  [accounts amount]
+  (when-not (money/pos? amount)
+    (err/invalid! "A settlement must be for a positive amount" {:amount amount}))
+  (entry/transfer-lines {:from-account-id (account! accounts :in-transit)
+                         :to-account-id   (account! accounts :client-payable)
+                         :amount          amount}))
+
+(defn return-lines
+  "The unwind of a release: debit client funds, credit settlement-in-transit.
+
+  Line for line the mirror of `release-lines`, and deliberately so — a returned
+  payment is one whose value movement did not happen, so the accounting that
+  said it had must be undone rather than compensated with something new. The
+  original release entry is untouched: ADR-0008's rule is that a mistake is
+  corrected by a reversing entry, never by editing the original, and this is
+  that reversing entry.
+
+  The client's payable is not touched, because it never moved: CloFin owed the
+  client their money before the release and owes it again now."
+  [accounts amount]
+  (when-not (money/pos? amount)
+    (err/invalid! "A return must be for a positive amount" {:amount amount}))
+  (entry/transfer-lines {:from-account-id (account! accounts :in-transit)
+                         :to-account-id   (account! accounts :client-funds)
+                         :amount          amount}))
+
+(defn- finality-entry
+  "One finality entry for an instruction, referencing the instruction that
+  caused it.
+
+  The reference is `:payment-instruction` rather than `:settlement-item`, even
+  though the latter is in `clofin.ledger.entry/reference-types`: a reference
+  needs a UUID, and a settlement item is keyed `(batch, instruction)` with no
+  identity of its own. Pointing at the instruction is also the more useful
+  answer — it is what makes the journal explainable back to an intent
+  (`DOMAIN_MODEL.md` I7), and the batch is one join away."
+  [instruction {:keys [entry-id occurred-at narrative lines]}]
+  (entry/entry {:id              entry-id
+                :organisation-id (:organisation-id instruction)
+                :occurred-at     occurred-at
+                :narrative       narrative
+                :reference       {:type :payment-instruction :id (:id instruction)}
+                :lines           lines}))
+
+(defn settlement-entry
+  "The single entry a settled instruction produces.
+
+  One entry, not a list: unlike a release — which may carry a fee — settlement
+  is one movement. Returning a bare entry rather than a one-element vector says
+  so at the call site."
+  [instruction {:keys [accounts entry-id occurred-at]}]
+  (finality-entry instruction
+                  {:entry-id    entry-id
+                   :occurred-at occurred-at
+                   :narrative   (str "Payment instruction " (:id instruction)
+                                     " settled to " (:creditor-name instruction))
+                   :lines       (settlement-lines accounts (:amount instruction))}))
+
+(defn return-entry
+  "The single entry a returned instruction produces — the release, unwound."
+  [instruction {:keys [accounts entry-id occurred-at]}]
+  (finality-entry instruction
+                  {:entry-id    entry-id
+                   :occurred-at occurred-at
+                   :narrative   (str "Payment instruction " (:id instruction)
+                                     " returned by the simulated scheme")
+                   :lines       (return-lines accounts (:amount instruction))}))
+
 (defn release-entries
   "Every entry a release produces: the value movement, and the fee when one
   applies.
