@@ -92,17 +92,18 @@ Tracks the consolidated remediation on PR #5's branch
 |---|---|---|
 | **F-001** maker–checker bypass | ✅ **remediated & verified** (`971d0d1`) | `:submit` is a `creator-only-events` set enforced in `payments.repository/transition!` **under the row lock, before the lifecycle** (mirroring `amend!`), so a non-creator gets `403` by any route into the repository, not just the handler. C-01's own published evidence query — the one COMPLIANCE tells an auditor to run — is now a regression assertion. Master Control re-read the enforcement path and re-ran the exploit reasoning: killed. |
 | **F-002** TRUNCATE bypass | ✅ **remediated & verified** (`971d0d1`, migration `0007`) | `BEFORE TRUNCATE FOR EACH STATEMENT` on all four append-only tables reusing `reject_mutation()`. Master Control re-probed from an empty schema (0001–0007): `audit_event`, `journal_line`, `approval` refuse `TRUNCATE`; `journal_entry` refuses (FK first, trigger on cascade); `truncate … cascade` and truncate-laundered-through-`organisation` both refused. Test harness reworked to disarm only the named TRUNCATE triggers, discovered from `pg_trigger`, restoring each `tgenabled`, in one transaction — the cleanup **is** the schema-owner-adversary demonstration COMPLIANCE §4 names. |
-| **F-003** zero-line journal entry | ⏳ dispatched (should-fix) | Next remediation batch. |
-| **F-004** freeze/post TOCTOU race | ⏳ dispatched (should-fix) | Next remediation batch (lesson L-8). |
-| **F-005** `payment.approved` on non-final approval | ⏳ dispatched (should-fix) | Next remediation batch (lesson L-7). |
-| **F-006** amendment invalidates approvals with no approval event | ⏳ dispatched (should-fix) | Next remediation batch (lesson L-7). |
+| **F-003** zero-line journal entry | ✅ **remediated & verified** (`2053fee`, migration `0008`) | Entry-level `deferrable initially deferred` constraint trigger checking cardinality ≥ 2 **and** per-currency balance; 0002's line-level trigger untouched — the two catch different absences. Master Control re-probed from an empty 0001–0008 schema: zero-line entry refused at commit by `assert_journal_entry_complete()`, one-line refused, two balanced lines commit. |
+| **F-004** freeze/post TOCTOU race | ✅ **remediated & verified** (`6d2c0a9`) | `assert-postable!` locks referenced account rows `for update` **`order by id`** inside the posting transaction; lock-order discipline documented repository-wide (instructions before accounts); a lock-order inversion and a private duplicate of `transactionally` found and removed in the process. The race test **forces** the interleaving with a latch (a freeze holding its lock across the posting) rather than hoping for it, and was verified failing on unfixed code. ADR-0012 corrected. |
+| **F-005** `payment.approved` on non-final approval | ✅ **remediated & verified** (`be3289e`) | `approval.recorded` emitted for every decision; `payment.approved`/`payment.rejected` emitted **only inside the branch where the payment transition commits** — verified in `approval-service` source. C-01's published evidence query, broken by the vocabulary change, was caught, rewritten to join through `approval`, and is itself now a tested assertion. |
+| **F-006** amendment invalidates approvals with no approval event | ✅ **remediated & verified** (`be3289e`) | `approval.invalidated` in the vocabulary and emitted per invalidated approval in the amendment's transaction; the pre-existing sibling gap (`approval.withdrawn` was invisible) closed with it. |
 
-**Merge posture.** The two **blocking** findings are remediated and verified,
-so the blocking bar is cleared. The hold on PR #4 and PR #5 is **deliberately
-kept** until F-003–F-006 land, so the milestone merges fully remediated on a
-coherent history — a batch-completion choice, not a claim that should-fix
-findings block. The stack is unmerged and nothing downstream waits, so the cost
-of holding is nil; reversible on request.
+**Merge posture — HOLDS CLEARED 2026-08-04.** All six findings remediated and
+independently verified; CI green on all three checks at `900ddee`; +32
+tests / +190 assertions over the pre-remediation baseline (456 / 2515 with
+integration). Merge sequence: **PR #4 first (merge commit, not squash — the
+stack shares SHAs), then retarget PR #5 to `main`, let CI re-run, then merge
+PR #5.** After both land, Master Control folds `main` into `meta` and moves
+briefs 002/003 to `CLOSED`.
 
 **Rulings on the Worker's remediation open questions (2026-08-03):**
 
