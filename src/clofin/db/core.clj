@@ -263,10 +263,28 @@
   work simply joins it — atomicity is then the caller's to guarantee. That is
   what lets a repository function stand alone *and* compose into a larger unit
   of work, such as a payment instruction whose state change and idempotency key
-  must commit together, without either caller knowing which it is."
+  must commit together, without either caller knowing which it is.
+
+  **The connection is checked, not trusted.** \"Already a connection\" and \"already
+  in a transaction\" are different claims, and until this guard existed only the
+  first was tested. The pool is configured `autoCommit true`, so a caller who
+  handed a raw pooled connection straight to a repository function would get
+  each statement committed on its own — and would get it *silently*: every
+  write still succeeds, and only atomicity is gone.
+
+  That became load-bearing with the F-004 fix. A `select … for update` releases
+  its locks at the end of its transaction, so under autoCommit the lock is gone
+  before the insert it was taken for, and the validate-then-write race is back
+  with the lock still visible in the SQL. A guarantee that a reader can see in
+  the code and cannot rely on at runtime is worse than no guarantee. One
+  `getAutoCommit` call is the whole cost of making it real."
   [source f]
   (if (instance? Connection source)
-    (f source)
+    (let [^Connection conn source]
+      (when (.getAutoCommit conn)
+        (err/invalid! "This work must run inside a transaction, and the connection it was given is in autocommit"
+                      {:hint "Wrap the call in `with-transaction`, or pass the pool and let it open one."}))
+      (f conn))
     (with-transaction* source f)))
 
 ;; ---------------------------------------------------------------------------

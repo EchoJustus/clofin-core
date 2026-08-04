@@ -19,7 +19,24 @@
   work without knowing which it was given. In practice every mutating call
   arrives on a connection owned by `clofin.idempotency.repository`, because the
   state change and the idempotency key protecting it commit together or not at
-  all."
+  all.
+
+  ## Lock order
+
+  Two row types are locked here, and **always in this sequence**:
+
+  1. `payment_instruction` — by `lock-instruction!` and
+     `assert-reversal-target!`
+  2. `ledger_account` — by `assert-debtor-account!`, and by
+     `clofin.ledger.repository/assert-postable!`, which orders by id within
+     itself
+
+  A single order across every caller is what stops two transactions that touch
+  the same rows from deadlocking. It is written down because it is invisible at
+  each call site individually: `create-instruction!` used to check the debtor
+  account before the reversal target, which was harmless only while neither
+  took a lock. Audit finding **F-004** added the locks; this ordering is the
+  half of that fix that is easy to miss and expensive to rediscover."
   (:require [clofin.authz.repository :as authz]
             [clofin.db.core :as db]
             [clofin.error :as err]
@@ -163,10 +180,18 @@
   An account belonging to another organisation is reported as unknown rather
   than forbidden. Saying \"forbidden\" would confirm that the id exists and
   belongs to someone else — a tenancy disclosure available to anyone able to
-  guess a UUID."
+  guess a UUID.
+
+  **Locked `for update`**, for the reason
+  `clofin.ledger.repository/assert-postable!` sets out at length: a status read
+  without a lock is a check that can stop being true before the write it gates
+  (audit finding **F-004**, lesson **L-8**). One row, so no ordering is needed
+  *within* this call — but the order *between* row types is, and it is stated
+  in this namespace's docstring: payment instructions first, accounts second."
   [tx {:keys [organisation-id debtor-account-id amount]}]
   (let [row (db/query-one tx ["select id, code, currency, status from ledger_account
-                                where organisation_id = ? and id = ?"
+                                where organisation_id = ? and id = ?
+                                for update"
                               organisation-id debtor-account-id])]
     (when-not row
       (err/fail! :unprocessable
@@ -229,9 +254,16 @@
     (db/transactionally
      source
      (fn [tx]
-       (assert-debtor-account! tx drafted)
+       ;; Reversal target first, debtor account second — the lock order this
+       ;; namespace's docstring fixes. `assert-reversal-target!` locks a
+       ;; `payment_instruction` row and `assert-debtor-account!` a
+       ;; `ledger_account` row; `amend!` takes the same two in the same
+       ;; sequence. Taken in opposite orders by two concurrent callers, these
+       ;; deadlock — which is why F-004's `for update` could not simply be added
+       ;; without also fixing the order here.
        (when (:reverses-id drafted)
          (assert-reversal-target! tx drafted))
+       (assert-debtor-account! tx drafted)
        (try
          (insert! tx drafted)
          (catch Exception t

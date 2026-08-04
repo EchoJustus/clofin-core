@@ -23,8 +23,7 @@
             [clofin.ledger.account :as account]
             [clofin.ledger.entry :as entry]
             [clofin.money :as money])
-  (:import [java.sql Connection]
-           [java.time Instant]))
+  (:import [java.time Instant]))
 
 (def row-cap
   "Maximum rows any list or statement query returns.
@@ -123,23 +122,18 @@
 ;; Posting
 ;; ---------------------------------------------------------------------------
 
-(defn- transactionally
-  "Run `(f conn)` in a transaction.
-
-  When `source` is already a connection the caller owns a transaction and this
-  work simply joins it — atomicity is then the caller's to guarantee, which is
-  what lets a payment instruction post its entry as part of a larger unit of
-  work in a later increment."
-  [source f]
-  (if (instance? Connection source)
-    (f source)
-    (db/with-transaction* source f)))
+;; `transactionally` used to be defined here too, privately, with a body
+;; identical to `clofin.db.core/transactionally` and a docstring saying the same
+;; thing. Two copies of one rule is one copy too many: when `db/transactionally`
+;; gained its autocommit guard for F-004, this path — the *only* path that takes
+;; the F-004 lock — silently kept the unguarded version. Deleted rather than
+;; also-fixed. See `clofin.db.core/transactionally` for what the guard is for.
 
 (defn- assert-postable!
   "Load every account an entry references and assert the entry may be posted.
 
-  Runs inside the posting transaction, so an account frozen concurrently is
-  either visible here or is not, and either way the outcome is consistent.
+  Runs inside the posting transaction, and — since audit finding **F-004** —
+  under a row lock, because the first of those on its own was not enough.
   Three rules, none of which the pure layer can check because none is a
   property of the entry value alone:
 
@@ -151,12 +145,29 @@
   An account belonging to another organisation is reported as unknown rather
   than as forbidden. Saying \"forbidden\" would confirm that the id exists and
   belongs to someone else — a tenancy disclosure available to anyone able to
-  guess a UUID (ADR-0012)."
+  guess a UUID (ADR-0012).
+
+  **The rows are locked `for update`, and that is what makes rule 2 mean
+  anything.** Reading a status without locking it is a check whose answer can
+  stop being true before the write it gates — audit finding **F-004**, standing
+  lesson **L-8**. Under `READ COMMITTED` a `freeze` committing between this
+  read and the entry insert produced a posting to a frozen account, with every
+  layer behaving exactly as written. `for update` makes the two transactions
+  serialise: the freeze waits for this posting to commit and then applies, or
+  it applies first and this read sees `frozen` and refuses.
+
+  **`order by id` is not cosmetic.** Two postings touching the same pair of
+  accounts in opposite orders would deadlock; a single stable order across
+  every caller means the second waits instead. That order is part of a
+  repository-wide discipline — see `clofin.payments.repository`, which locks
+  payment instructions before accounts, so the two row types are always taken
+  in one sequence."
   [tx {:keys [organisation-id lines]}]
   (let [ids   (into [] (comp (map :account-id) (distinct)) lines)
         rows  (db/query tx (into [(str account-columns
                                        "where organisation_id = ? and id in ("
-                                       (db/placeholders (count ids)) ")")
+                                       (db/placeholders (count ids)) ")"
+                                       " order by id for update")
                                   organisation-id]
                                  ids))
         by-id (into {} (map (juxt :id row->account)) rows)]
@@ -231,7 +242,7 @@
         reverses-id (when (= :reversal (get-in posted [:reference :type]))
                       (get-in posted [:reference :id]))]
     (try
-      (transactionally
+      (db/transactionally
        source
        (fn [tx]
          (assert-postable! tx posted)
