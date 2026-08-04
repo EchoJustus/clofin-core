@@ -23,6 +23,9 @@
     clofin.payments.instruction-test
     clofin.payments.posting-test
     clofin.idempotency-test
+    clofin.authz.model-test
+    clofin.authz.approval-test
+    clofin.audit-test
     clofin.config-test
     clofin.http.router-test
     clofin.http.middleware-test
@@ -34,11 +37,14 @@
   "Tests that need a reachable PostgreSQL instance."
   '[clofin.db.migrate-test
     clofin.db.ledger-constraints-test
+    clofin.db.audit-constraints-test
     clofin.organisations.repository-test
     clofin.ledger.repository-test
     clofin.payments.repository-test
     clofin.api.ledger-api-test
+    clofin.authz.repository-test
     clofin.api.payments-api-test
+    clofin.api.approvals-api-test
     clofin.system-test])
 
 (defn integration?

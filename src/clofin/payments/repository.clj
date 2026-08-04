@@ -19,8 +19,26 @@
   work without knowing which it was given. In practice every mutating call
   arrives on a connection owned by `clofin.idempotency.repository`, because the
   state change and the idempotency key protecting it commit together or not at
-  all."
-  (:require [clofin.db.core :as db]
+  all.
+
+  ## Lock order
+
+  Two row types are locked here, and **always in this sequence**:
+
+  1. `payment_instruction` — by `lock-instruction!` and
+     `assert-reversal-target!`
+  2. `ledger_account` — by `assert-debtor-account!`, and by
+     `clofin.ledger.repository/assert-postable!`, which orders by id within
+     itself
+
+  A single order across every caller is what stops two transactions that touch
+  the same rows from deadlocking. It is written down because it is invisible at
+  each call site individually: `create-instruction!` used to check the debtor
+  account before the reversal target, which was harmless only while neither
+  took a lock. Audit finding **F-004** added the locks; this ordering is the
+  half of that fix that is easy to miss and expensive to rediscover."
+  (:require [clofin.authz.repository :as authz]
+            [clofin.db.core :as db]
             [clofin.error :as err]
             [clofin.money :as money]
             [clofin.payments.instruction :as instruction]
@@ -101,14 +119,18 @@
     {:instructions (mapv row->instruction (take row-cap rows))
      :truncated?   (> (count rows) row-cap)}))
 
-(defn- lock-instruction!
+(defn lock-instruction!
   "Read an instruction `for update`, or `404`.
 
   `for update` is what makes a read-then-write safe: the row is held until this
   transaction ends, so a concurrent caller blocks here rather than deciding
   against a status that is about to change underneath it. Outside a transaction
   the lock would be released at the next statement and would guarantee nothing,
-  which is why every caller of this arrives on a connection that owns one."
+  which is why every caller of this arrives on a connection that owns one.
+
+  Public because `clofin.payments.approval-service` needs the same lock for the
+  same reason: an approval decided against a status that changed underneath it
+  is an approval given to a payment nobody submitted."
   [tx organisation-id id]
   (or (row->instruction
        (db/query-one tx [(str instruction-columns
@@ -158,10 +180,18 @@
   An account belonging to another organisation is reported as unknown rather
   than forbidden. Saying \"forbidden\" would confirm that the id exists and
   belongs to someone else — a tenancy disclosure available to anyone able to
-  guess a UUID."
+  guess a UUID.
+
+  **Locked `for update`**, for the reason
+  `clofin.ledger.repository/assert-postable!` sets out at length: a status read
+  without a lock is a check that can stop being true before the write it gates
+  (audit finding **F-004**, lesson **L-8**). One row, so no ordering is needed
+  *within* this call — but the order *between* row types is, and it is stated
+  in this namespace's docstring: payment instructions first, accounts second."
   [tx {:keys [organisation-id debtor-account-id amount]}]
   (let [row (db/query-one tx ["select id, code, currency, status from ledger_account
-                                where organisation_id = ? and id = ?"
+                                where organisation_id = ? and id = ?
+                                for update"
                               organisation-id debtor-account-id])]
     (when-not row
       (err/fail! :unprocessable
@@ -224,9 +254,16 @@
     (db/transactionally
      source
      (fn [tx]
-       (assert-debtor-account! tx drafted)
+       ;; Reversal target first, debtor account second — the lock order this
+       ;; namespace's docstring fixes. `assert-reversal-target!` locks a
+       ;; `payment_instruction` row and `assert-debtor-account!` a
+       ;; `ledger_account` row; `amend!` takes the same two in the same
+       ;; sequence. Taken in opposite orders by two concurrent callers, these
+       ;; deadlock — which is why F-004's `for update` could not simply be added
+       ;; without also fixing the order here.
        (when (:reverses-id drafted)
          (assert-reversal-target! tx drafted))
+       (assert-debtor-account! tx drafted)
        (try
          (insert! tx drafted)
          (catch Exception t
@@ -237,45 +274,117 @@
                           {:constraint constraint})
                (throw t)))))))))
 
-(defn amend!
-  "Apply `changes` to a **draft** instruction and return it as stored.
+(defn- assert-creator!
+  "Only an instruction's creator may perform `verb` on it.
 
-  Two rules, and neither is an `if` in this function. Whether the instruction's
-  status permits amendment at all is `state/assert-mutable!` — held as data
-  with every other rule about status. Which fields an amendment may touch, and
-  whether the result is still valid, is `instruction/amend`.
+  A real access control rather than a check that a caller copied a UUID
+  correctly: `actor` is the authenticated principal, and `created-by` is the
+  principal that created the instruction. Before there was a principal this
+  comparison would have compared two caller-asserted values and looked, from
+  outside, exactly like an access control while being none — which is why
+  TASK-002 left it undone and said so.
+
+  Used for two operations, for two different reasons:
+
+  - **amend** (PR-004) — a draft belongs to whoever raised it.
+  - **submit** ([C-01], audit finding **F-001**) — this one is load-bearing for
+    a *control*. `clofin.authz.approval/evaluate` refuses an approval by the
+    instruction's `created-by` actor and compares nothing else, so maker–checker
+    holds only while the submitter and the creator are the same actor. Until
+    this check existed, they need not have been.
+
+  `403` rather than `404`: the caller has been told this instruction exists —
+  they are inside the organisation that owns it and addressed it by id — so
+  hiding behind a `404` would only obscure the reason without concealing
+  anything. `401` when there is no actor at all, and it is deliberately not
+  possible to reach this with an absent actor and be permitted: an operation
+  restricted to the creator with nobody to compare against fails closed.
+
+  [C-01]: docs/COMPLIANCE.md"
+  [existing actor verb]
+  (when-not (:id actor)
+    (err/fail! :unauthorised
+               (str "Performing '" verb "' on a payment instruction requires an actor")
+               {:attempted verb}))
+  (when-not (= (:id actor) (:created-by existing))
+    (err/forbidden!
+     (str "Only the actor who created a payment instruction may " verb " it")
+     {:instruction-id (str (:id existing))
+      :attempted      verb
+      ;; Named so a caller can tell this apart from a missing permission: the
+      ;; answer is not "ask for a role", it is "this is not your instruction".
+      :rule           "creator-only"}))
+  existing)
+
+(defn amend!
+  "Apply `changes` to an instruction. Returns `{:before … :after … :approvals-invalidated n}`.
+
+  Two paths, and which one applies is decided by the lifecycle table rather
+  than by an `if` about status written here (ADR-0014):
+
+  - **The instruction is in a `mutable-state`** — `draft`. The substance is
+    edited in place and the status does not move. This is what
+    `DOMAIN_MODEL.md` §1 means by \"mutable while `draft`\".
+  - **The lifecycle permits `:amend` from its status** — `pending-approval` or
+    `approved`. Every approval given so far is invalidated and the instruction
+    returns to `draft` (`DOMAIN_MODEL.md` §3 rule 3, **PR-014**) *before* the
+    changes are applied. An approver agreed to the values that were in front of
+    them; after an amendment those are not the instruction's values any more,
+    so their approval cannot survive it.
+
+  Anything else is a `:conflict` from `state/assert-mutable!`, naming the state.
+
+  Both paths return `:before` and `:after`, because an audited change needs
+  both and re-reading the row afterwards to reconstruct the before is a read of
+  a value that has already changed.
 
   The row is locked for the duration, so an amendment and a concurrent
-  submission cannot interleave into a submitted instruction carrying amended
-  values that no approver will ever see."
-  [source organisation-id id changes opts]
+  submission or approval cannot interleave into a submitted instruction
+  carrying amended values that no approver will ever see."
+  [source organisation-id id changes {:keys [actor] :as opts}]
   (db/transactionally
    source
    (fn [tx]
-     (let [existing (lock-instruction! tx organisation-id id)
-           _        (state/assert-mutable! (:status existing))
-           ;; TODO(TASK-003): PR-004 says a draft may be amended *by its
-           ;; creator*. The creator is caller-asserted until there is an
-           ;; authenticated principal, so enforcing it here would check that a
-           ;; caller had copied a UUID correctly and look, from outside, like an
-           ;; access control. The check belongs here once the principal is real.
-           amended  (instruction/amend existing changes opts)]
+     (let [existing  (lock-instruction! tx organisation-id id)
+           _         (assert-creator! existing actor "amend")
+           ;; PR-014. Read from the table, so an amendable state added later is
+           ;; covered without this function being told about it.
+           reverting? (and (not (state/mutable? (:status existing)))
+                           (state/permitted? (:status existing) :amend))
+           _         (when-not reverting? (state/assert-mutable! (:status existing)))
+           ;; `[{:before … :after …} …]`, one per approval, so the caller can
+           ;; write an `approval.invalidated` event for each (F-006). A count
+           ;; was all this used to return, and a count cannot be audited.
+           invalidated (if reverting?
+                         (authz/invalidate-approvals-for! tx id)
+                         [])
+           reverted  (if reverting?
+                       (assoc existing :status (state/transition (:status existing) :amend))
+                       existing)
+           amended   (instruction/amend reverted changes opts)]
        (assert-debtor-account! tx amended)
        (db/execute! tx
                     ["update payment_instruction
                          set debtor_account_id = ?, creditor_name = ?,
                              creditor_account = ?, amount_minor = ?, currency = ?,
-                             value_date = ?, purpose_code = ?
+                             value_date = ?, purpose_code = ?, status = ?
                        where organisation_id = ? and id = ?"
                      (:debtor-account-id amended) (:creditor-name amended)
                      (:creditor-account amended)
                      (:minor-units (:amount amended)) (:currency (:amount amended))
                      (:value-date amended) (:purpose-code amended)
+                     (name (:status amended))
                      organisation-id id])
-       amended))))
+       {:before existing
+        :after  amended
+        ;; The pairs themselves, not just how many. The handler audits each one
+        ;; on this same transaction, so an amendment and every invalidation it
+        ;; caused commit together or not at all (C-05, PR-075).
+        :invalidated-approvals invalidated
+        :approvals-invalidated (count invalidated)}))))
 
 (defn transition!
-  "Apply `event` to an instruction and return it in its new state.
+  "Apply `event` to an instruction. Returns `{:before … :after …}`.
 
   Read then written under `for update` inside one transaction, so two
   concurrent submissions cannot both succeed: the second blocks on the row,
@@ -284,19 +393,50 @@
   and both would write — which is a payment submitted twice.
 
   The next state comes from `clofin.payments.state/transition` and from nowhere
-  else. This function never asks what state the instruction is in."
-  [source organisation-id id event]
-  (db/transactionally
-   source
-   (fn [tx]
-     (let [existing (lock-instruction! tx organisation-id id)
-           next     (state/transition (:status existing) event)]
-       ;; TODO(increment-7): screening gates submission here. `submit` requires
-       ;; screening to have completed — a pending screening blocks submission
-       ;; rather than queuing behind it (DOMAIN_MODEL §3 rule 1). Until
-       ;; increment 7 there is no screening decision to consult, and inventing a
-       ;; partial gate would look like a control that does not exist.
-       (db/execute! tx ["update payment_instruction set status = ?
-                          where organisation_id = ? and id = ?"
-                        (name next) organisation-id id])
-       (assoc existing :status next)))))
+  else. This function never asks what state the instruction is in.
+
+  Both the previous and the next value are returned, because every caller of
+  this writes an audit event describing the change and an audit event needs
+  both ends of it.
+
+  `opts` carries `:actor`, the authenticated principal. For an event in
+  `clofin.payments.state/creator-only-events` — today `:submit` — the actor
+  must be the instruction's creator, checked **here**, under the row lock, in
+  the same transaction as the state change. Not at the HTTP boundary: a
+  provenance rule enforced only in a handler is a rule that stops existing the
+  moment anything else calls this function, which is how audit finding F-001
+  reached an approved payment moved by one human.
+
+  The check is inside the lock for the same reason the lifecycle check is: an
+  instruction whose `created-by` was read outside the lock is provenance read
+  from a row that another transaction may be changing."
+  ([source organisation-id id event] (transition! source organisation-id id event {}))
+  ([source organisation-id id event {:keys [actor]}]
+   (db/transactionally
+    source
+    (fn [tx]
+      (let [existing (lock-instruction! tx organisation-id id)
+            ;; Provenance BEFORE the lifecycle, mirroring `amend!` — which
+            ;; asserts the creator and only then asks whether the status
+            ;; permits the change. An actor with no business touching this
+            ;; instruction is told that, rather than being handed its current
+            ;; state and the list of events that would have been permitted.
+            ;;
+            ;; The opposite order is right in `approval-service`, and
+            ;; deliberately so: an `approve` on a settled payment is a `409`
+            ;; whoever sent it, and answering `403` first would suggest that
+            ;; fixing permissions would help. Here it would not — no grant
+            ;; makes a non-creator the creator.
+            _        (when (state/creator-only? event)
+                       (assert-creator! existing actor (name event)))
+            next     (state/transition (:status existing) event)]
+        ;; TODO(increment-7): screening gates submission here. `submit` requires
+        ;; screening to have completed — a pending screening blocks submission
+        ;; rather than queuing behind it (DOMAIN_MODEL §3 rule 1). Until
+        ;; increment 7 there is no screening decision to consult, and inventing
+        ;; a partial gate would look like a control that does not exist.
+        (db/execute! tx ["update payment_instruction set status = ?
+                           where organisation_id = ? and id = ?"
+                         (name next) organisation-id id])
+        {:before existing
+         :after  (assoc existing :status next)})))))

@@ -8,6 +8,8 @@
   `operation-id` matches the corresponding OpenAPI `operationId`; that is the
   join key the contract test uses."
   (:require [clofin.api.accounts :as accounts]
+            [clofin.api.approvals :as approvals]
+            [clofin.api.audit :as audit]
             [clofin.api.entries :as entries]
             [clofin.api.health :as health]
             [clofin.api.organisations :as organisations]
@@ -106,4 +108,43 @@
    {:method :post :path "/payment-instructions/:id/cancellation"
     :operation-id "cancelPaymentInstruction"
     :handler (payments/cancel pool)
-    :summary "Cancel a payment instruction"}])
+    :summary "Cancel a payment instruction"}
+
+   ;; -------------------------------------------------------------------------
+   ;; Approvals
+   ;;
+   ;; An approval is a sub-resource of the instruction it decides, because that
+   ;; is what it is: a decision by one actor about one payment, which can be
+   ;; addressed, withdrawn and evidenced on its own. A `status` field a checker
+   ;; wrote would lose the identity of the decision and with it the ability to
+   ;; say who agreed to what (C-01, C-02).
+   ;; -------------------------------------------------------------------------
+
+   {:method :post :path "/payment-instructions/:id/approvals"
+    :operation-id "approvePaymentInstruction"
+    :handler (approvals/decide pool)
+    :summary "Approve or reject a payment instruction"}
+
+   {:method :delete :path "/payment-instructions/:id/approvals/:approvalId"
+    :operation-id "withdrawApproval"
+    :handler (approvals/withdraw pool)
+    :summary "Withdraw an approval already given"}
+
+   {:method :get :path "/approvals/queue"
+    :operation-id "getApprovalQueue"
+    :handler (approvals/queue pool)
+    :summary "List instructions awaiting approval with the context to decide them"}
+
+   ;; -------------------------------------------------------------------------
+   ;; Audit
+   ;; -------------------------------------------------------------------------
+
+   {:method :get :path "/audit/events"
+    :operation-id "listAuditEvents"
+    :handler (audit/index pool)
+    :summary "List an organisation's audit events"}
+
+   {:method :get :path "/audit/evidence/:subjectId"
+    :operation-id "getEvidencePack"
+    :handler (audit/evidence pool)
+    :summary "Extract a complete evidence pack for one subject"}])

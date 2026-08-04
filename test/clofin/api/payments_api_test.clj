@@ -35,18 +35,33 @@
 
 (defn- handler [] (system/handler {:config {:environment :test} :pool tdb/*pool*}))
 
+(def ^:private current-actor
+  "The actor every call authenticates as, unless one is named per request.
+
+  Set by `setup`, which seeds it. There is deliberately no default and no
+  fallback: a request with no actor is a `401`, which is what an unauthenticated
+  caller should get now that TASK-003 has replaced the caller-asserted
+  `organisationId` with a real principal."
+  (atom nil))
+
 (defn- call
-  "Issue a request through the whole stack and decode the response body."
+  "Issue a request through the whole stack and decode the response body.
+
+  `:actor` names the actor to authenticate as; `false` sends no actor header at
+  all, which is how the unauthenticated cases are exercised."
   ([method uri] (call (handler) method uri {}))
   ([method uri opts] (call (handler) method uri opts))
-  ([h method uri {:keys [body query idempotency-key]}]
+  ([h method uri {:keys [body query idempotency-key actor]}]
    ;; A `Location` header carries its query string inline, and the HTTP adapter
    ;; splits the two before a handler ever sees them. Splitting here is what
    ;; lets a test follow a Location the way a client does.
    (let [[path inline-query] (str/split uri #"\?" 2)
          query (or query inline-query)
+         ;; nil means "the fixture's actor"; false means "send no actor header".
+         actor (if (nil? actor) @current-actor actor)
          response (h (cond-> {:request-method method :uri path :headers {}}
                        query (assoc :query-string query)
+                       actor (assoc-in [:headers "x-actor-id"] (str actor))
                        idempotency-key (assoc-in [:headers "idempotency-key"] idempotency-key)
                        body (-> (assoc-in [:headers "content-type"] "application/json")
                                 (assoc :body (ByteArrayInputStream.
@@ -87,9 +102,32 @@
     (is (= 201 status))
     json))
 
-(defn- setup []
-  (let [org (new-organisation!)]
-    {:org org :account (new-account! org)}))
+(defn- seed-actor!
+  "Seed an actor with exactly the roles named — no more.
+
+  There is no `insert-superuser!` to reach for here, deliberately (C-08). Each
+  fixture states the rights it needs, which makes it readable as documentation
+  of what a role can do."
+  [org roles & {:keys [limits status] :or {limits {} status "active"}}]
+  (tdb/insert-actor! tdb/*pool*
+                     {:organisation-id (java.util.UUID/fromString (get org "id"))
+                      :display-name (str/join "+" (map name roles))
+                      :roles roles :limits limits :status status}))
+
+(defn- setup
+  "An organisation, an account, and the actors these tests act as.
+
+  `POST /organisations` is the bootstrap operation and is unauthenticated —
+  there is no actor until an organisation exists to hold one. Everything after
+  it authenticates."
+  []
+  (let [org (new-organisation!)
+        controller (seed-actor! org [:controller])
+        maker (seed-actor! org [:operator])
+        _ (reset! current-actor controller)
+        account (new-account! org)]
+    (reset! current-actor maker)
+    {:org org :account account :maker maker :controller controller}))
 
 (defn- instruction-body
   [{:keys [org account]} & {:as overrides}]
@@ -99,8 +137,7 @@
           "creditorAccount" "SG-SYNTH-88012345"
           "amount"          {"currency" "SGD" "minorUnits" 125000}
           "valueDate"       (str (.plusDays today 7))
-          "purposeCode"     "SUPP"
-          "createdBy"       (str (random-uuid))}
+          "purposeCode"     "SUPP"}
          overrides))
 
 (defn- new-instruction! [f & {:as overrides}]
@@ -151,12 +188,28 @@
 
 (deftest an-instruction-in-another-organisation-is-not-found
   (let [f (setup)
-        other (new-organisation!)
         pi (new-instruction! f)
-        {:keys [status]} (call :get (str "/payment-instructions/" (get pi "id"))
-                               {:query (str "organisationId=" (get other "id"))})]
-    (is (= 404 status)
-        "the same answer a non-existent id receives — anything else is a tenancy disclosure")))
+        other (setup)]
+    (testing "an actor in another organisation cannot read it, even knowing its id"
+      (is (= 404 (:status (call :get (str "/payment-instructions/" (get pi "id")))))
+          "the same answer a non-existent id receives — anything else is a tenancy disclosure"))
+
+    (testing "and naming someone else's organisation in the query is refused outright"
+      (let [{:keys [status json]}
+            (call :get (str "/payment-instructions/" (get pi "id"))
+                  {:query (str "organisationId=" (get-in f [:org "id"]))})]
+        (is (= 403 status)
+            "organisationId is verified against the principal now, not trusted (TASK-003)")
+        (is (= "https://clofin.dev/problems/forbidden" (get json "type")))))
+
+    (testing "and an unauthenticated caller gets no further than 401"
+      (is (= 401 (:status (call :get (str "/payment-instructions/" (get pi "id"))
+                                {:actor false})))))
+
+    (testing "while its own organisation's actor reads it"
+      (reset! current-actor (:maker f))
+      (is (= 200 (:status (call :get (str "/payment-instructions/" (get pi "id")))))))
+    (identity other)))
 
 (deftest instructions-can-be-listed-and-filtered
   (let [f (setup)
@@ -249,8 +302,8 @@
         (is (= 1 (key-count)))))))
 
 (deftest a-debtor-account-problem-is-422-not-a-field-error
-  (let [f (setup)
-        other (setup)
+  (let [other (setup)
+        f (setup)                       ; created second, so its maker is current
         {:keys [status json]}
         (call :post "/payment-instructions"
               {:idempotency-key (key!)
@@ -278,22 +331,68 @@
     (is (= "draft" (get json "status")) "an amendment is not a transition")
     (is (= (get pi "id") (get json "id")) "and not a new instruction either")))
 
-(deftest ac-3-a-submitted-instruction-cannot-be-amended
-  (let [f (setup)
-        pi (new-instruction! f)]
-    (is (= 200 (:status (submit! f pi))))
-    (let [{:keys [status json]}
+(deftest ac-7-amending-a-submitted-instruction-returns-it-to-draft
+  (testing "PR-014. TASK-002 refused this because the approval-invalidation
+            behind it did not exist; TASK-003 built it, and ADR-0014 amendment 1
+            records the change."
+    (let [f (setup)
+          pi (new-instruction! f)]
+      (is (= 200 (:status (submit! f pi))))
+      (let [{:keys [status json]}
+            (call :patch (str "/payment-instructions/" (get pi "id"))
+                  {:idempotency-key (key!)
+                   :body {"organisationId" (get-in f [:org "id"])
+                          "amount" {"currency" "SGD" "minorUnits" 1}}})]
+        (is (= 200 status))
+        (is (= "draft" (get json "status"))
+            "a submitted instruction that is amended goes back to draft, not forward")
+        (is (= 1 (get-in json ["amount" "minorUnits"]))))
+      (is (= "draft" (status-of f pi))))))
+
+(deftest pr-004-only-the-creator-may-amend
+  (testing "a real access control now that createdBy is an authenticated principal"
+    (let [f (setup)
+          pi (new-instruction! f)
+          someone-else (seed-actor! (:org f) [:operator])
+          {:keys [status json]}
           (call :patch (str "/payment-instructions/" (get pi "id"))
                 {:idempotency-key (key!)
-                 :body {"organisationId" (get-in f [:org "id"])
-                        "amount" {"currency" "SGD" "minorUnits" 1}}})]
-      (is (= 409 status))
-      (is (= "pending-approval" (get-in json ["errors" "instruction-status"])))
-      (is (= "amend" (get-in json ["errors" "attempted"]))))
-    (is (= 125000 (get-in (:json (call :get (str "/payment-instructions/" (get pi "id"))
-                                       {:query (str "organisationId=" (get-in f [:org "id"]))}))
-                          ["amount" "minorUnits"]))
-        "and nothing changed")))
+                 :actor someone-else
+                 :body {"organisationId" (get-in f [:org "id"]) "purposeCode" "TRAD"}})]
+      (is (= 403 status))
+      (is (= "https://clofin.dev/problems/forbidden" (get json "type")))
+      (is (= "SUPP" (get (:json (call :get (str "/payment-instructions/" (get pi "id"))))
+                         "purposeCode"))))))
+
+(deftest an-operator-cannot-approve-and-an-approver-cannot-create
+  (testing "C-08 at the API boundary: the permission is checked before anything is read"
+    (let [f (setup)
+          approver (seed-actor! (:org f) [:approver] :limits {"SGD" 10000000})
+          pi (new-instruction! f)]
+      (is (= 403 (:status (call :post "/payment-instructions"
+                                {:idempotency-key (key!) :actor approver
+                                 :body (instruction-body f)})))
+          "an approver may not raise a payment")
+      (submit! f pi)
+      (is (= 403 (:status (call :post (str "/payment-instructions/" (get pi "id") "/approvals")
+                                {:idempotency-key (key!) :actor (:maker f)
+                                 :body {"decision" "approved"}})))
+          "and an operator may not approve one — here the maker, so the reason
+           that governs is self-approval rather than the missing permission"))))
+
+(deftest createdBy-is-the-authenticated-actor-and-cannot-be-set-by-the-caller
+  (let [f (setup)
+        pi (new-instruction! f)]
+    (is (= (str (:maker f)) (get pi "createdBy"))
+        "no longer a caller assertion — this is who the request authenticated as")
+    (let [{:keys [status json]}
+          (call :post "/payment-instructions"
+                {:idempotency-key (key!)
+                 :body (instruction-body f "createdBy" (str (random-uuid)))})]
+      (is (= 422 status))
+      (is (some? (get-in json ["errors" "createdBy"]))
+          "rejected rather than ignored: silently overriding it would leave the caller
+           believing it had recorded who raised the payment"))))
 
 (deftest amending-something-that-is-not-amendable-is-rejected-not-ignored
   (let [f (setup)
@@ -350,8 +449,28 @@
     (payments/transition! tdb/*pool*
                           (java.util.UUID/fromString (get-in f [:org "id"]))
                           (java.util.UUID/fromString (get pi "id"))
-                          event))
+                          event
+                          ;; `:submit` is creator-only (F-001). `new-instruction!`
+                          ;; creates as the fixture's maker, so this walk is one
+                          ;; that actor could really have performed.
+                          {:actor {:id (:maker f)}}))
   pi)
+
+(deftest amending-a-terminal-instruction-is-still-refused
+  (testing "the lifecycle table decides: `settled` has no `amend` arrow, so 409 naming the state"
+    (let [f (setup)
+          pi (settle! f (new-instruction! f))
+          {:keys [status json]}
+          (call :patch (str "/payment-instructions/" (get pi "id"))
+                {:idempotency-key (key!)
+                 :body {"organisationId" (get-in f [:org "id"])
+                        "amount" {"currency" "SGD" "minorUnits" 1}}})]
+      (is (= 409 status))
+      (is (= "settled" (get-in json ["errors" "instruction-status"])))
+      (is (= "amend" (get-in json ["errors" "attempted"])))
+      (is (= 125000 (get-in (:json (call :get (str "/payment-instructions/" (get pi "id"))))
+                            ["amount" "minorUnits"]))
+          "and nothing changed"))))
 
 (deftest ac-5-a-settled-instruction-refuses-every-transition-by-name
   (let [f (setup)
@@ -519,9 +638,11 @@
           b (setup)
           k "shared-key"
           first-call (call :post "/payment-instructions"
-                           {:body (instruction-body a) :idempotency-key k})
+                           {:body (instruction-body a) :idempotency-key k
+                            :actor (:maker a)})
           second-call (call :post "/payment-instructions"
-                            {:body (instruction-body b) :idempotency-key k})]
+                            {:body (instruction-body b) :idempotency-key k
+                             :actor (:maker b)})]
       (is (= 201 (:status first-call)))
       (is (= 201 (:status second-call)))
       (is (not= (get-in first-call [:json "id"]) (get-in second-call [:json "id"])))

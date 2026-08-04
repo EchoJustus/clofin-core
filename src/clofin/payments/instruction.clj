@@ -172,10 +172,15 @@
          :value-date        (value-date-error value-date today)
          :purpose-code      (purpose-code-error purpose-code)
          :status            (status-error status)
-         ;; TODO(TASK-003): `created-by` is caller-asserted. Once there is an
-         ;; authenticated principal it comes from there, and this becomes a
-         ;; check that the principal may act for the organisation rather than a
-         ;; check that a UUID was supplied.
+         ;; `created-by` is the authenticated actor, supplied by the handler
+         ;; from `clofin.api.principal` — a caller that sends it is refused
+         ;; rather than quietly overridden. This layer still checks it is a
+         ;; UUID and present, because the domain does not get to assume its
+         ;; caller is an HTTP handler: `instruction` is the guarantee that
+         ;; holds when something else builds an instruction. *Whether that
+         ;; actor may act for the organisation* is a question about stored
+         ;; state, so it belongs at the seam (ADR-0012) and is answered by
+         ;; `clofin.api.principal/assert-organisation!`.
          :created-by        (uuid-error created-by)
          ;; Optional. Present only on a reversal, where it names the settled
          ;; instruction being reversed; that the target exists, is in this

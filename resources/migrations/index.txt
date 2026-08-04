@@ -8,3 +8,7 @@
 0002-ledger-accounts-and-journal.sql
 0003-payment-instructions.sql
 0004-idempotency-digest-scope.sql
+0005-authorisation-and-audit.sql
+0006-approver-limit-wildcard-currency.sql
+0007-append-only-truncate-guards.sql
+0008-journal-entry-completeness.sql

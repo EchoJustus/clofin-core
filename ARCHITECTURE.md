@@ -114,11 +114,19 @@ supplied by the caller. Two consequences that matter in a regulated context:
 **The persistence seam is named, not implied.** One namespace per context may
 require `clofin.db.*`, and it is the one called `repository` —
 `clofin.ledger.repository`, `clofin.organisations.repository`,
-`clofin.payments.repository`, `clofin.idempotency.repository`. Every other
-domain namespace beside it stays pure. The rule is checked by
+`clofin.payments.repository`, `clofin.idempotency.repository`,
+`clofin.authz.repository`, `clofin.audit.repository`. Every other domain
+namespace beside it stays pure. The rule is checked by
 `test/clofin/ledger/purity_test.clj`, which reads the `ns` forms rather than
 trusting review to remember
 ([ADR-0012](docs/ADR/0012-repository-seam-and-posting-time-validation.md)).
+
+**A `service` namespace owns no connection either.** `clofin.payments.approval-service`
+sequences repositories inside a transaction the *caller* owns, and requires no
+`clofin.db.*` namespace at all. That is not tidiness: a service able to open its
+own transaction is a service able to write an audit event outside the change it
+describes, which is the one failure C-05 exists to prevent. The same purity test
+enforces it.
 
 A repository is also where rules that **cannot** be checked purely belong —
 those that are properties of stored state rather than of a value, such as
@@ -144,9 +152,19 @@ authoritative value. Each journal entry carries two or more lines, each with an
 explicit `:debit` or `:credit` direction and a positive amount. The invariant —
 total debits equal total credits, per currency, per entry — is checked when the
 entry is constructed, and again by a database constraint when it is persisted.
-Entries are immutable once posted; a mistake is corrected by a reversing entry
-that references the original. See
+So is the "two or more" part: a second deferred constraint, on the entry rather
+than on its lines, refuses an entry that reaches commit with fewer than two
+lines. It is on the entry because a `for each row` guard over lines cannot see
+an entry that has none, which is how a zero-line entry committed cleanly until
+migration `0008`. Entries are immutable once posted; a mistake is corrected by a
+reversing entry that references the original. See
 [ADR-0008](docs/ADR/0008-double-entry-journal-as-source-of-truth.md).
+
+Account status is checked under a row lock, not merely read: the transaction
+that posts against an account takes `for update` on every account it will touch,
+in id order, so a freeze committing concurrently is serialised against the
+posting rather than racing it. Validating a row and then writing on the strength
+of that validation is a race under `READ COMMITTED` unless the row is held.
 
 ### 5.3 Payment lifecycle
 
@@ -204,17 +222,70 @@ saw success
 
 ### 5.5 Audit trail
 
-Every domain event is appended to `audit_event` with actor, action, subject,
-before/after digest, correlation id and timestamp. The table is append-only:
-`UPDATE` and `DELETE` are revoked at the database role level. Audit writes
-participate in the same transaction as the change they describe, so an
-un-audited state change is not representable.
+Every payment instruction and approval state change is appended to
+`audit_event` with actor, action, subject, before/after **digest**, correlation
+id and timestamp. The action comes from a closed vocabulary, and an action named
+`<subject>.<transition>` is written **only in the transaction where that
+transition commits** — so a payment on a two-approval band emits two
+`approval.recorded` events, one per decision, and exactly one
+`payment.approved`. An approval's own events name the approval as their subject;
+the evidence pack for a payment relates them back through
+`approval.instruction_id` rather than mislabelling them. The table is
+append-only: `UPDATE` and `DELETE` are rejected
+by a row-level trigger and `TRUNCATE` by a statement-level one, so all three of
+PostgreSQL's destructive verbs are refused. `TRUNCATE` was added by migration
+`0007` after an audit found it uncovered — it visits no rows, so a `for each
+row` guard never saw it, and it emptied the table past a guard that had just
+refused the other two.
+
+A trigger binds the application, not the table's **owner**: an owner can
+disable or drop it, and a superuser can turn all triggers off with
+`session_replication_role`. CloFin currently connects as that owner, so the
+guarantee holds against the application and against defects in it, and not
+against an operator with the deployment's credentials. Closing that needs a
+runtime role split, which is named debt in
+[COMPLIANCE §4](docs/COMPLIANCE.md).
+
+Audit writes participate in the same transaction as the change they describe, so
+an un-audited state change is not representable. That is made structural rather
+than remembered: `clofin.audit.repository/record!` takes a connection and never
+opens one, so the only connection a caller can hand it is the transaction
+carrying the change.
+
+Digests rather than payloads
+([ADR-0016](docs/ADR/0016-audit-events-store-digests-not-payloads.md)): an
+append-only table holding counterparty names is a second copy of the data C-09
+minimises, and one that can never be cleaned. What that costs an auditor — a
+digest cannot be read back — is stated in the ADR rather than discovered.
+
+Ledger and organisation writes do not yet emit audit events; the gap is named in
+[COMPLIANCE §4](docs/COMPLIANCE.md).
 
 ### 5.6 Multi-tenancy and access
 
-Every business record carries an organisation identifier. Authorisation is
-role-based with explicit permissions, and segregation of duties is enforced as a
-domain rule: the actor who submits a payment cannot be the actor who approves it.
+Every business record carries an organisation identifier, and the organisation a
+request acts on comes from the **authenticated actor**, never from the request.
+An `organisationId` in a body or query string is verified against it and a
+mismatch is refused rather than ignored.
+
+Authorisation is role-based with explicit permissions and **default deny**: an
+absent permission is a denied permission, and there is no superuser role — a
+test asserts that no role holds every permission. Permission sets live in code
+(`clofin.authz.model`) rather than in rows, because a permission set stored as
+data is editable by anyone able to write those rows.
+
+Segregation of duties is enforced as a **domain rule**: the actor who submits a
+payment cannot be the actor who approves it, refused by a pure function that
+takes values and returns a decision. If the only thing stopping self-approval
+were a check in a handler, the control would not exist for any caller that did
+not go through that handler.
+
+Authentication itself is deliberately minimal — a seeded actor named by an
+`X-Actor-Id` header, with no token and no signature. It does not resist an
+adversary and is not presented as doing so ([COMPLIANCE §4](docs/COMPLIANCE.md));
+identity-provider integration is later work. The permission model is the part
+that had to be built first, because it is what everything else is enforced
+against.
 
 ---
 
@@ -226,8 +297,14 @@ ledger:
 
 - `CHECK` constraints on positive amounts and known currency codes
 - A deferred constraint trigger asserting per-entry zero-sum on commit
+- A second deferred constraint trigger, on `journal_entry`, asserting at commit
+  that the entry has at least two lines **and** balances — the first alone is
+  vacuous for an entry with no lines
 - Unique constraints backing idempotency keys
-- Revoked `UPDATE`/`DELETE` on journal and audit tables
+- Refused `UPDATE`, `DELETE` and `TRUNCATE` on journal, approval and audit
+  tables, by trigger rather than by revoked privilege — with the limits of that
+  choice stated in §5.5 and carried as debt in
+  [COMPLIANCE §4](docs/COMPLIANCE.md)
 
 Migrations are **forward-only**, numbered SQL files in
 `resources/migrations/`, applied by a small runner that records applied

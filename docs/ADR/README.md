@@ -24,7 +24,9 @@ is a justification, not a decision.
 | [0011](0011-statement-periods-ordering-and-row-caps.md) | Statement periods, movement ordering and the row cap | Accepted |
 | [0012](0012-repository-seam-and-posting-time-validation.md) | Repository namespaces as the persistence seam, and where posting-time validation lives | Accepted |
 | [0013](0013-canonical-request-digest-for-idempotency.md) | Canonical request digest for idempotency keys | Accepted |
-| [0014](0014-payment-lifecycle-as-data.md) | The payment instruction lifecycle is data, and rules that are not transitions say so | Accepted |
+| [0014](0014-payment-lifecycle-as-data.md) | The payment instruction lifecycle is data, and rules that are not transitions say so | Accepted (amended 1) |
+| [0015](0015-approval-thresholds-are-per-currency.md) | Approval thresholds and approver limits are per currency, never normalised | Accepted |
+| [0016](0016-audit-events-store-digests-not-payloads.md) | The audit trail stores digests, not payloads | Accepted |
 
 ## Conventions
 
@@ -33,4 +35,8 @@ is a justification, not a decision.
 - An accepted ADR is **never edited to change its decision**. It is superseded by
   a new ADR that links back to it. The record of what was believed at the time is
   the point.
+- An ADR whose decision was explicitly conditional — "not until X exists" — may
+  gain an **amendment** section when X arrives, stating what changed and why the
+  original reasoning no longer applies. The original decision text stays intact
+  above it. ADR-0013 and ADR-0014 both carry one.
 - Start from [`0000-adr-template.md`](0000-adr-template.md).

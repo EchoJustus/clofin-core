@@ -27,15 +27,19 @@ Legend: **✅ built** · **🔨 in progress** · **📋 specified, not built**
 | **Journal Line** | One account's participation in an entry: a direction and a positive amount. | A "transaction". |
 | **Posting** | The act of writing a journal entry. | Sending money. Posting is an accounting act; release is a payment act. |
 | **Balance** | Derived by aggregating an account's journal lines. Never stored as authority. | A stored figure. There isn't one. |
-| **Maker** | The actor who creates and submits an instruction. | The beneficiary. |
-| **Checker** | The actor who approves. Must not be the maker. | A reviewer with no system authority. |
+| **Maker** | The actor who creates an instruction **and the only actor who may submit it** — enforced by `clofin.payments.state/creator-only-events` and `clofin.payments.repository/transition!`, not merely stated here. Without that enforcement, "creates and submits" is two actors described as one, and the Checker rule below stops being a control. | The beneficiary. |
+| **Checker** | The actor who approves. Must not be the maker — refused by `clofin.authz.approval/evaluate`, which compares the approver against `created-by` and relies on the Maker row above for that to be the whole comparison. | A reviewer with no system authority. |
 | **Release** | The act of handing an approved instruction to settlement. | Approval. Approval permits release; it is not release. |
 | **Settlement** | Irrevocable transfer of value through a scheme. | Clearing, which is the exchange of instructions preceding it. |
 | **Reversal** | A new entry mirroring an original, leaving both visible. | Deletion, amendment, or "cancellation" of a posted entry — none of which exist. |
 | **Return** | A payment sent back by the receiving institution after settlement. | A Refund, which CloFin's own user initiates. |
 | **Break** | A reconciliation item that did not match, with an age and an owner. | A discrepancy that someone will look at later. A break is a tracked object. |
 | **Idempotency Key** | A caller-supplied identifier making a retry safe. | A payment reference. |
-| **Audit Event** | An append-only record of a state change: who, what, when, before/after. | An application log line. |
+| **Audit Event** | An append-only record of a state change: who, what, when, before/after **as digests**. | An application log line. Also not a copy of the record — a digest proves a value, it does not carry one. |
+| **Actor** | A person or system able to act within one organisation, holding roles and per-currency approval limits. | An Organisation, which is the tenant the actor acts within. |
+| **Role** | A named bundle of permissions. Five exist and none of them is a superuser. | A job title. A role here is exactly its permission set. |
+| **Permission** | A single verb an actor may exercise. **Absent means denied**, always. | A preference or a UI affordance. |
+| **Approval Threshold** | A band of amounts, in one currency, and how many approvals it requires. Lower bound inclusive. | A limit. A threshold is the organisation's rule; a limit is one approver's ceiling. |
 
 ---
 
@@ -115,10 +119,15 @@ timeout the control exists for. See
 [C-06](COMPLIANCE.md) and
 [ADR-0013](ADR/0013-canonical-request-digest-for-idempotency.md).
 
-**Approval**
+**Approval** ✅
 | Field | Notes |
 |---|---|
-| `instruction-id`, `actor-id`, `decision`, `reason`, `decided-at` | A rejection reason is mandatory. Approvals are invalidated by any amendment. |
+| `id` | ✅ An approval is addressable: it can be withdrawn and it appears in an evidence pack on its own. |
+| `instruction-id`, `actor-id` | ✅ The actor is the authenticated principal, not a caller assertion. |
+| `decision` | ✅ `approved` or `rejected`. No default — the safe default would have to be one of the two, and either is a decision nobody made. |
+| `reason` | ✅ Mandatory on a rejection and retained (PR-013). Enforced twice: the domain produces the `422` naming the field, and `approval_rejection_needs_reason` makes a reasonless rejection unrepresentable. |
+| `decided-at` | ✅ |
+| `invalidated-at` | ✅ Set when the instruction was amended (PR-014) or the actor withdrew the approval. **The row is never deleted** — the database refuses it. An approval that was given and then invalidated is exactly the history an investigation needs; a deleted one is a decision nobody can prove was taken. |
 
 ### 2.3 Settlement context 📋
 
@@ -141,20 +150,70 @@ Without the version, a past decision cannot be reproduced.
 **FraudAssessment** — score, contributing reasons, and the rule-set version.
 **Case** — an alert requiring human disposition, with rationale retained.
 
-### 2.6 Audit context 📋
+### 2.6 Audit context ✅ (payments and approvals)
 
-**AuditEvent** — `actor`, `action`, `subject-type`, `subject-id`,
+**AuditEvent** ✅ — `actor`, `action`, `subject-type`, `subject-id`,
 `before-digest`, `after-digest`, `correlation-id`, `occurred-at`. Append-only,
 written in the same transaction as the change it describes.
+
+**Digests, not payloads.** An event proves *that* something changed, and *what*
+it changed to when compared against a value the auditor already holds. It does
+not carry the counterparty name: an append-only table holding one is a second
+copy of the data C-09 minimises, and it can never be cleaned. Each digest is
+prefixed with the canonicalisation version that produced it. See
+[ADR-0016](ADR/0016-audit-events-store-digests-not-payloads.md), which also
+states what this costs an auditor.
+
+**Coverage.** Every payment instruction and approval state change emits one
+event. Account opening, journal posting and organisation creation do not yet —
+named as a gap in [COMPLIANCE §4](COMPLIANCE.md) rather than left implicit.
+
+**Vocabulary.** The action is drawn from a closed set (`clofin.audit/actions`);
+anything else is refused before it reaches the table, so a question like "show
+me every approval in August" has a complete answer rather than a best-effort
+one. Two naming rules hold, both of them corrections from Milestone 1's audit:
+
+| | |
+|---|---|
+| `payment.created`, `payment.submitted`, `payment.approved`, `payment.rejected`, `payment.amended`, `payment.cancelled` | The **payment's** transitions. Each is emitted exactly once, in the transaction where that transition commits — finding **F-005** found `payment.approved` emitted per *decision*, so a two-approval payment appeared to have been approved twice. |
+| `approval.recorded`, `approval.withdrawn`, `approval.invalidated` | The **approval's** own lifecycle, with the approval as subject. `approval.recorded` is written for every decision, approve or reject. `approval.invalidated` is written per approval when an amendment revokes it — finding **F-006**; before it, the trail said only that the payment had been amended. |
+
+An approval's events name the approval, not the payment, because that is what
+they are about. `clofin.audit.repository/events-for-payment` relates them back
+through `approval.instruction_id`, so a payment's evidence pack still shows
+them without the subject column having to misdescribe them.
+
+### 2.7 Authorisation context ✅
+
+**Actor** ✅ — `id`, `organisation-id`, `display-name`, `status`
+(`active`/`suspended`), with roles and per-currency approval limits. Seeded, not
+self-registered: an actor that could grant itself the approver role would make
+segregation of duties unenforceable however carefully the rule is written.
+
+**Role** ✅ — one of `operator`, `approver`, `controller`, `compliance`,
+`auditor`. What each *means* is `clofin.authz.model/role-permissions`, in code
+rather than in rows: a permission set stored as data is editable by anyone able
+to write those rows. **There is no superuser**, and a test asserts that no role
+holds every permission.
+
+**ApproverLimit** ✅ — the largest amount an actor may approve, per currency.
+Absent means zero, not unlimited.
+
+**ApprovalThreshold** ✅ — amount bands mapping to a required approval count,
+per organisation and per currency. `from-minor` is inclusive, so an amount
+exactly on a boundary falls in the higher band. A currency with no bands cannot
+have payments approved at all. See
+[ADR-0015](ADR/0015-approval-thresholds-are-per-currency.md), which resolves
+PRD Q1.
 
 ---
 
 ## 3. Payment instruction lifecycle 🔨
 
 ```
-                    ┌──────────────── amend ────────────────┐
-                    ▼                                       │
-   ┌───────┐    submit    ┌──────────────────┐   approve  ┌─┴────────┐
+       ┌────────── amend ──────────┬────────── amend ──────────┐
+       ▼                           │                           │
+   ┌───────┐    submit    ┌────────┴─────────┐   approve  ┌────┴─────┐
    │ draft │─────────────▶│ pending_approval │───────────▶│ approved │
    └───┬───┘              └────────┬─────────┘            └────┬─────┘
        │                           │                           │
@@ -177,17 +236,30 @@ written in the same transaction as the change it describes.
                                     └──────────────┘
 ```
 
+`amend` leaves **two** states — `pending_approval` and `approved` — and both
+land back in `draft`, invalidating every approval given so far. The diagram is
+checked against `clofin.payments.state/transitions`, which carries eleven
+permitted pairs; a drawing that disagreed with the table would be the failure
+[ADR-0014](ADR/0014-payment-lifecycle-as-data.md) exists to prevent, and it is
+the failure this diagram *was* until ruling O-2 (lesson L-4).
+
 Rules that the diagram alone does not carry:
 
 1. 📋 `submit` requires screening to have completed. A pending screening blocks
    submission rather than queuing behind it. *(Increment 7. There is a
    `TODO(increment-7)` at the precondition it will gate.)*
-2. 📋 `approve` requires an actor other than the maker, within their limit, and
-   enough approvals to satisfy the threshold for the amount. *(TASK-003.)*
-3. 📋 `amend` on a `pending_approval` instruction returns it to `draft` and
-   **invalidates every approval given so far** (PR-014). *(TASK-003. The
-   transition is in the table; nothing drives it yet. It is **not** what
-   `PATCH /payment-instructions/{id}` does — see below.)*
+2. ✅ `approve` requires an actor other than the maker, within their limit, and
+   enough approvals to satisfy the threshold for the amount. Decided by
+   `clofin.authz.approval/evaluate`, a pure function: the rule holds with no
+   HTTP layer involved, and a past decision replays against the values it was
+   decided on.
+3. ✅ `amend` on a `pending_approval` **or `approved`** instruction returns it
+   to `draft` and **invalidates every approval given so far** (PR-014). This
+   *is* what `PATCH /payment-instructions/{id}` does when the instruction is not
+   a draft — see [ADR-0014 amendment 1](ADR/0014-payment-lifecycle-as-data.md),
+   which lifted the restriction now that the invalidation behind it exists.
+   Approvals are invalidated, never deleted, so the same approver may approve
+   the amended instruction again.
 4. ✅ `settled` is terminal. A settled payment is never mutated; it is followed
    by a *new* reversal instruction.
 5. 📋 `returned` posts a reversing entry automatically and opens an exception
@@ -203,17 +275,19 @@ beside the table rather than as conditionals in a handler
 
 - ✅ `mutable-states` — an instruction is *mutable while `draft`, immutable in
   substance thereafter* (§1). Amending a draft leaves it in `draft`, so it moves
-  along no arrow. This, not the `amend` event, is what governs
-  `PATCH /payment-instructions/{id}`.
+  along no arrow. `PATCH /payment-instructions/{id}` chooses between this and
+  the `amend` *event* by reading the two values rather than by testing a status:
+  a draft is edited in place; anything the lifecycle permits `amend` from goes
+  back to `draft` with its approvals invalidated.
 - ✅ `reversible-states` — a reversal may be raised only against a `settled`
   instruction, per rule 4. The original is untouched, so this is not a
   transition either.
 
-**Built so far:** `submit` and `cancel` have endpoints. `approve`, `reject`,
-`amend`, `release`, `settle`, `fail` and `return` are in the table, tested, and
-driven by nothing — a transition with no caller is still part of the model, and
-the increment that adds the endpoint gets to drive it, not to decide where it
-leads.
+**Built so far:** `submit`, `cancel`, `approve`, `reject` and `amend` have
+endpoints. `release`, `settle`, `fail` and `return` are in the table, tested,
+and driven by nothing — a transition with no caller is still part of the model,
+and the increment that adds the endpoint gets to drive it, not to decide where
+it leads.
 
 ---
 
@@ -262,6 +336,8 @@ enforcement point is named — an invariant with no enforcement is a wish.
 | I5 | Money arithmetic never crosses currencies implicitly. | `clofin.money` raises ✅ |
 | I6 | An account holds exactly one currency. | Schema and balance computation ✅ |
 | I7 | Every entry references the business object that caused it. | `NOT NULL` plus a constrained vocabulary ✅ |
-| I8 | An instruction's approver is never its maker. | Domain rule in `clofin.authz` 📋 |
-| I9 | A state change and its audit event commit together. | Same transaction 📋 |
+| I8 | An instruction's approver is never its maker. | `clofin.authz.approval/evaluate`, a pure function — refused with no HTTP layer involved, and table-driven over the whole actor × instruction matrix ✅ |
+| I9 | A state change and its audit event commit together. | Same transaction. `clofin.audit.repository/record!` takes the caller's connection and cannot open one, so an audit write outside the change it describes is not expressible ✅ |
 | I10 | A replayed idempotency key never performs work twice. | Primary key `(organisation_id, key)` plus the stored response, written in the same transaction as the effect ✅ |
+| I11 | A committed journal entry has at least two lines. | Deferred constraint trigger `journal_entry_must_be_complete` on `journal_entry` (migration `0008`). I1's trigger fires on `journal_line`, so an entry with no lines never fired it — audit finding **F-003** ✅ |
+| I12 | An account's status is read under a lock by the transaction that writes against it. | `select … for update` in `clofin.ledger.repository/assert-postable!` and `clofin.payments.repository/assert-debtor-account!`. Reading a status and then writing on it is a race under `READ COMMITTED` (standing lesson **L-8**) — audit finding **F-004** ✅ |
