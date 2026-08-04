@@ -7,10 +7,56 @@
 > current state without checking out:
 > `git fetch origin meta && git show origin/meta:docs/audits/<file>`.
 
+## Assurance-chain decisions
+
+Append-only. A later change appends a new dated block; an existing block is
+never edited — the record of what was decided, and when, is the point.
+
+**2026-08-04 — Tiered assurance with a terminal release gate.** Proposed by
+Master Control; **ruled approved by the operator the same day, with amendments
+A1 and A2**, both applied below and in [*Release audits*](#release-audits).
+Continuous PR-batch review (the Principal Architect seat, AGENT_HANDOFF §1a) is
+performed by **GPT-5.6 Terra at maximum reasoning effort**. Review standards,
+the severity taxonomy, the `REQ`/`FEEDBACK` formats and the ingestion protocol
+below are **unchanged** — no requirement or method of PR review changes. Before
+each Release, **GPT-5.6 Sol** performs a full whole-repo audit of the release
+candidate — see [*Release audits*](#release-audits) and the standing
+[release-audit charter](RELEASE-AUDIT-CHARTER.md).
+
+*Rationale.* Continuous review at the Terra tier assures baseline quality. The
+risk it cannot cover is the **false negative** — a finding never reported,
+which no downstream reproduction can catch, because reproduction only ever
+re-runs what was reported. That risk is hedged by placing the stronger model at
+the terminal gate rather than by weakening anything upstream.
+
+*Invariant.* Master Control's independent reproduction and triage duties are
+**unchanged, and do not soften because a downstream net exists.** A later gate
+never justifies earlier laxity; if it ever does, the chain has two weak links
+instead of one.
+
+*Control-critical increments (amendment A1).* A milestone batch audit whose
+diff **modifies enforcement code or migrations** in the ledger, authorisation,
+settlement or financial-crime domains is performed at the **Sol** tier; other
+milestones remain Terra. An increment that touches these surfaces incidentally
+does not trigger the elevated tier; one that changes what they enforce does.
+The first release audit's findings are the evidence for widening or narrowing
+this rule; Master Control proposes adjustments against that data.
+
+*Review batches* are **one to two PRs** (stated again in the front matter below
+and in AGENT_HANDOFF §1a) — larger batches dilute scrutiny at the continuous
+tier; the milestone and release audits absorb the breadth instead.
+
+*Provenance* is recorded from this date onward — see *What an audit produces*
+and the register's provenance column. Tier judgments live here, in the dated
+decision record; the register and living operational text carry facts only
+(model, effort setting, date).
+
 CloFin is developed asynchronously: worker sessions implement briefs
 continuously on stacked feature branches, while architecture review happens
-**offline, at milestones, over batches of one to five PRs** — rather than
-blocking each increment. This directory is where that review lands and becomes
+**offline, at milestones, over batches of one to two PRs** — rather than
+blocking each increment. Batches were one to five before the 2026-08-04
+assurance-chain decision; smaller batches concentrate scrutiny at the
+continuous-review tier. This directory is where that review lands and becomes
 durable.
 
 **Naming:** `REQ` files are `NNN-REQ-<subject>.md` (a Worker's completion
@@ -50,6 +96,12 @@ An audit is expected to state, for each finding:
 | **Suggested direction** | Not necessarily a patch; a direction is enough |
 | **Affects** | Which briefs or namespaces |
 
+**Provenance (required from 2026-08-04).** Every `REQ` and `FEEDBACK` header
+records the **model**, its **reasoning-effort setting**, and the **session
+date** that produced it, and the register carries the same. An assurance
+record that does not say what performed the assurance cannot be read honestly
+by anyone deciding how much to trust it.
+
 ## How feedback is ingested
 
 When a `FEEDBACK` file lands, the orchestrating session:
@@ -73,19 +125,108 @@ A finding that is disputed must be answered with evidence — a test, a
 constraint, a benchmark — not with an assertion. The project's whole claim is
 that its statements are checkable; that applies to its replies to reviewers too.
 
+## Release audits
+
+**Release, for a reference implementation.** A tagged, whole-repo-audited
+public snapshot: a citable, reproducible state and an internal quality
+milestone. It is **not** a production deployment, **not** an attestation,
+**not** a claim of real institutional connectivity, and **not** a statement
+that anything here has handled real funds. CloFin runs on synthetic data at
+every tag.
+
+**Trigger and cadence.** A release follows a milestone: after that milestone's
+`FEEDBACK` is ingested and its blocking remediations are merged and `CLOSED`.
+A release may bundle several milestones. There is no calendar cadence — the
+trigger is remediated work, not elapsed time.
+
+**Release candidate (RC).** A captured `main` SHA, recorded in the audit
+artifact. The release audit runs against that SHA. Development continues on
+`main` during the audit; merges landing after the RC belong to the next
+release. The tag lands on the RC, or on its remediation descendant once
+blocking findings clear.
+
+**Tag scheme.** `ref-<n>` — `ref-1`, `ref-2`, … — annotated, with the date and
+RC SHA in the tag message. Deliberately not semantic versioning: `v1.0.0`
+reads as a product general-availability claim, which this is not.
+
+**Artifact.** `FEEDBACK-REL-<tag>.md`, beside `FEEDBACK-Mn`, ingested and
+registered exactly like a milestone audit. The audit is performed by **GPT-5.6
+Sol** from the standing [release-audit charter](RELEASE-AUDIT-CHARTER.md) —
+the first release audit runs from the written charter, not from anyone's
+memory.
+
+**Mandatory scope.** A release audit is whole-repo and must cover, at minimum:
+
+1. **Migrations replayed from an empty schema** to head, in order, recorded.
+2. **The full suite** — `make verify` and `make test-it` — with counts.
+3. **Cross-document consistency:** `COMPLIANCE.md` enforcement-point claims
+   against the code and constraints named; `DOMAIN_MODEL.md` invariants
+   against the constraints and tests said to enforce them; `api/openapi.yaml`
+   against the handlers via the contract test.
+4. **The partial-set sweep** — the F-001/F-002/L-6 class. Any guarantee stated
+   over an enumerable set (SQL verbs, enum values, audit actions, roles,
+   permissions) is checked across **every** instance, not the one its author
+   was looking at. A guard that covers part of its set is a false guard.
+5. **Standing-lessons compliance:** each lesson L-1…L-n — is its guard still
+   present and honoured? A regressed lesson is a finding.
+6. **Known-debt reconciliation:** `COMPLIANCE.md` §4 and the ROADMAP's
+   carried-forward lists against what is actually open in the code.
+7. **Synthetic-data and neutrality sweep:** no drift anywhere toward implying
+   production readiness, real connectivity, or external attestation.
+8. **Citation discipline:** every finding cites file and line **with the lines
+   quoted verbatim**, so a fabricated finding is cheap to detect.
+
+**The gating rule.** PR-batch reviews do not gate execution. **A release audit
+does** — a safety net that does not gate is a report.
+
+- **Blocking** — remediated and re-verified before the tag, by the auditor's
+  reproduction **and** Master Control's independent reproduction.
+- **Should-fix** — a recorded disposition before the tag: actioned now,
+  deferred with a stated target, or disputed with evidence. Deferred items
+  enter the ROADMAP and `COMPLIANCE.md` §4.
+- **Consider** — recorded; no gate.
+
+**Remediation goes through the chain — by finding class (amendment A2).**
+
+- **Code findings** are remediated on the normal data-plane path — brief,
+  Worker, PR, reproduction — and the L-9 merge precondition still applies.
+  There is no direct-to-`main` hotfix to "make the gate": puncturing the chain
+  at its most critical moment to satisfy a deadline defeats the gate's
+  purpose.
+- **Doc-only findings on meta-owned documents** follow the existing ingestion
+  rule: applied by Master Control on `meta` directly, with a recorded
+  disposition — the same way `FEEDBACK` ingestion has always corrected
+  control-plane documents.
+
+**Expectation for the first release audit.** It re-covers ground the
+continuous reviews already passed, at a higher tier. **A findings spike is the
+design working** — catching false negatives is precisely what the terminal
+gate exists for — and is not grounds to discredit the continuous reviews or
+the increments they cleared. Plan a remediation window after the first run; do
+not announce a tag date that assumes a clean sweep. If the release audit
+repeatedly surfaces the same *class* of finding the continuous tier misses,
+that class becomes a standing lesson (a tier-correlated miss-pattern), which
+is the most valuable thing this gate can produce.
+
 ## Register
 
-| Feedback | Reviews | Received | Findings (B/S/C) | Disposition |
-|---|---|---|---|---|
-| *(waived)* | Increment 1 / PR #1 | 2026-08-02 | — | Deep architectural audit **explicitly bypassed** by the reviewer to unblock the pipeline, with rigorous review to be enforced from PR #2 onward. Recorded so the assurance history is honest: increment 1 was consciously not audited. |
-| *(pending)* | Increment 2 / PR #2 — `001-REQ` filed by the Worker | requested 2026-08-02 | — | Awaiting `FEEDBACK-001` from the Principal Architect. PR #2 merged to `main` (`f7018a1`) ahead of the audit — reviews do not gate execution; any findings will be dispatched as fix instructions against `main`. |
-| *(pending)* | Increment 3 / PR #4 — [`002-REQ`](002-REQ-payment-instruction-lifecycle.md) | requested 2026-08-03 | — | Eight Worker objections triaged same day; rulings in the brief's changelog. O-3 fix ordered **and applied** (`f529663`). **Milestone batch audit deferred until after TASK-003** by decision of 2026-08-03 — FEEDBACK-001/002/003 expected as one batch review. |
-| *(pending)* | Increment 4 / PR #5 — [`003-REQ`](003-REQ-authorisation-and-audit-trail.md) | requested 2026-08-03 | — | Four Worker objections triaged same day; rulings in [TASK-003's changelog](../briefs/003-TASK-authorisation-and-audit-trail.md). O-1 fix ordered **and applied** (`6f58857`, migration `0006`); O-2 resolution ratified; lessons L-1 widened, L-3 and L-4 added. **TASK-003 is implemented, so the deferred milestone batch audit is now unblocked** — FEEDBACK-001/002/003 awaited as one batch. |
-| [`FEEDBACK-M1-foundation`](FEEDBACK-M1-foundation.md) — **ingested** | Milestone 1 batch — 001-REQ, 002-REQ, 003-REQ, plus the never-audited increment-1 substrate | commissioned 2026-08-03 · received & ingested 2026-08-03 | **2 B / 4 S / 0 C** | Executed via the **CodeSpace path** (external agent, read-only clone; transcript in the bridge at `audit/chats/20260803-01-first-audit.json`). Both blockers **independently verified by Master Control before the file arrived**: F-001 in source, F-002 reproduced empirically (with the `BEFORE TRUNCATE` guard verified effective). **Triage — all six actioned, none disputed, none deferred:** F-001 → creator-only submit (satisfies C-01's "creates *or submits*" by collapsing the two; stated explicitly in the OpenAPI contract per the auditor's caveat); F-002 → `BEFORE TRUNCATE` statement triggers on all four append-only tables **plus** the test-cleanup consequence the auditor caught — `test_db.clj` deliberately truncates past the triggers, so cleanup switches to an explicit, commented disable/re-enable bypass — and the runtime role split recorded as named debt; F-003 → deferred entry-level constraint (line cardinality + balance at commit); F-004 → `FOR UPDATE` on referenced accounts in stable order + latch-based race test; F-005 → `approval.recorded` action, `payment.approved` only on the completing transition; F-006 → `approval.invalidated` events per approval, same transaction, evidence pack extended. All six land as **one consolidated remediation on PR #5's branch** by the TASK-003 Worker (findings against TASK-001 ride the stack; briefs 001/002 stay `IMPLEMENTED` — their findings are should-fix). Lessons L-5…L-8. **Remediation log below.** |
+> **Provenance was not captured before 2026-08-04.** Entries record it from
+> that date onward. Known: `FEEDBACK-M1` and the in-flight M2 audit — GPT-5.6
+> Terra, CodeSpace path. Worker session models before this date are **not
+> recorded**, and are not reconstructed from inference — the same honesty
+> standard as the waived increment-1 audit recorded in the first row.
+
+| Feedback | Reviews | Received | Findings (B/S/C) | Disposition | Provenance |
+|---|---|---|---|---|---|
+| *(waived)* | Increment 1 / PR #1 | 2026-08-02 | — | Deep architectural audit **explicitly bypassed** by the reviewer to unblock the pipeline, with rigorous review to be enforced from PR #2 onward. Recorded so the assurance history is honest: increment 1 was consciously not audited. | — (audit waived) |
+| *(pending)* | Increment 2 / PR #2 — `001-REQ` filed by the Worker | requested 2026-08-02 | — | Awaiting `FEEDBACK-001` from the Principal Architect. PR #2 merged to `main` (`f7018a1`) ahead of the audit — reviews do not gate execution; any findings will be dispatched as fix instructions against `main`. | fulfilled by `FEEDBACK-M1` — see its row |
+| *(pending)* | Increment 3 / PR #4 — [`002-REQ`](002-REQ-payment-instruction-lifecycle.md) | requested 2026-08-03 | — | Eight Worker objections triaged same day; rulings in the brief's changelog. O-3 fix ordered **and applied** (`f529663`). **Milestone batch audit deferred until after TASK-003** by decision of 2026-08-03 — FEEDBACK-001/002/003 expected as one batch review. | fulfilled by `FEEDBACK-M1` — see its row |
+| *(pending)* | Increment 4 / PR #5 — [`003-REQ`](003-REQ-authorisation-and-audit-trail.md) | requested 2026-08-03 | — | Four Worker objections triaged same day; rulings in [TASK-003's changelog](../briefs/003-TASK-authorisation-and-audit-trail.md). O-1 fix ordered **and applied** (`6f58857`, migration `0006`); O-2 resolution ratified; lessons L-1 widened, L-3 and L-4 added. **TASK-003 is implemented, so the deferred milestone batch audit is now unblocked** — FEEDBACK-001/002/003 awaited as one batch. | fulfilled by `FEEDBACK-M1` — see its row |
+| [`FEEDBACK-M1-foundation`](FEEDBACK-M1-foundation.md) — **ingested** | Milestone 1 batch — 001-REQ, 002-REQ, 003-REQ, plus the never-audited increment-1 substrate | commissioned 2026-08-03 · received & ingested 2026-08-03 | **2 B / 4 S / 0 C** | Executed via the **CodeSpace path** (external agent, read-only clone; transcript in the bridge at `audit/chats/20260803-01-first-audit.json`). Both blockers **independently verified by Master Control before the file arrived**: F-001 in source, F-002 reproduced empirically (with the `BEFORE TRUNCATE` guard verified effective). **Triage — all six actioned, none disputed, none deferred:** F-001 → creator-only submit (satisfies C-01's "creates *or submits*" by collapsing the two; stated explicitly in the OpenAPI contract per the auditor's caveat); F-002 → `BEFORE TRUNCATE` statement triggers on all four append-only tables **plus** the test-cleanup consequence the auditor caught — `test_db.clj` deliberately truncates past the triggers, so cleanup switches to an explicit, commented disable/re-enable bypass — and the runtime role split recorded as named debt; F-003 → deferred entry-level constraint (line cardinality + balance at commit); F-004 → `FOR UPDATE` on referenced accounts in stable order + latch-based race test; F-005 → `approval.recorded` action, `payment.approved` only on the completing transition; F-006 → `approval.invalidated` events per approval, same transaction, evidence pack extended. All six land as **one consolidated remediation on PR #5's branch** by the TASK-003 Worker (findings against TASK-001 ride the stack; briefs 001/002 stay `IMPLEMENTED` — their findings are should-fix). Lessons L-5…L-8. **Remediation log below.** | GPT-5.6 Terra · CodeSpace path · 2026-08-03 · effort not recorded |
 
 **Milestone 2 batch audit — commissioned 2026-08-04.** Covers TASK-004 and
 TASK-005 (004-REQ, 005-REQ), including the TASK-005 tail and the L-9 process
-record. External Principal Architect via the CodeSpace path, in a
+record. External Principal Architect (**GPT-5.6 Terra**, effort not recorded) via the CodeSpace path, in a
 **three-session strategy designed by Master Control** (evidence capture →
 structured analysis → verification and report), reviewing `main` at `cba31c5`
 and `meta` for briefs/REQs/rulings. Deliverable:

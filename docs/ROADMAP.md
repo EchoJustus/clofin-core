@@ -39,6 +39,15 @@ operational-hardening brief alongside tools.build. C-07 (screening) remains 📋
 Do not describe any of this more generously in a
 README, a PR description or a conversation.
 
+**Releases.** A release is a tagged, whole-repo-audited snapshot (`ref-<n>`) —
+an internal quality milestone on a synthetic-data reference implementation,
+never a production deployment or an external attestation. It follows a
+milestone once that milestone's audit findings are remediated and closed, and
+is gated by a whole-repo release audit
+([AGENT_HANDOFF §1c](AGENT_HANDOFF.md); mechanics and charter in
+[audits/](audits/README.md)). **First candidate: `ref-1`, after Milestone 2 is
+ingested and any blocking remediation lands.**
+
 ---
 
 ## Increment 1 — Foundation and ledger core ✅
