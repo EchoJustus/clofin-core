@@ -88,14 +88,16 @@ Dependency rule: **the ledger's domain depends on nothing.** Payments depends on
 ledger and authz. Settlement and reconciliation depend on ledger. Nothing depends
 on HTTP. This is what makes the domain testable without a server or a database.
 
-**Audit is the one context every writing context depends on, and it depends on
-none of them.** An audit event has to be written by the transaction that carries
-the change (§5.5, C-05), so the namespace composing a change with its event
-necessarily sees both — payments already did, and since TASK-005 the ledger and
-organisations contexts do too. That direction is safe because `clofin.audit`
-knows nothing about payments, accounts or entries: it holds a vocabulary and a
-digest, and each context supplies its own projection of the subject. The arrow
-never points back, so no cycle is possible.
+**Audit is a sink: anything may depend on it, and it depends on nothing.** An
+audit event has to be written by the transaction that carries the change (§5.5,
+C-05), so whichever namespace composes a change with its event necessarily sees
+both contexts — payments already did, and since TASK-005 the ledger and
+organisations contexts do too. (A context's *repository* generally does not:
+`clofin.authz.repository` writes approvals and requires no audit namespace,
+because the composing is `clofin.payments.approval-service`'s job.) That
+direction is safe because `clofin.audit` knows nothing about payments, accounts
+or entries: it holds a vocabulary and a digest, and each context supplies its own
+projection of the subject. The arrow never points back, so no cycle is possible.
 
 ---
 
@@ -138,12 +140,20 @@ service able to write an audit event outside the change it describes, which is
 the one failure C-05 exists to prevent. The same purity test enforces it.
 
 Something has to open that transaction, and it is the **handler** — a transport
-concern, and the layer that already knows the pool. What the handler does *not*
-do is decide what gets written into it: an audit event emitted by
-`clofin.api.accounts` would be a control that exists only for callers arriving
-through `clofin.api.accounts`, which is the shape audit finding **F-001** found
-segregation of duties in. The handler parses, opens the transaction and renders;
-the service decides.
+concern, and the layer that already knows the pool. What the handler should
+*not* do is decide what gets written into it: an audit event emitted by
+`clofin.api.accounts` is a control that exists only for callers arriving through
+`clofin.api.accounts`. Audit finding **F-001** is the argument for putting such a
+control lower — its fix moved the maker–checker check down into
+`clofin.payments.repository/transition!` so a non-creator is refused *by any
+route into the repository, not just the handler* — and an audit write has the
+same property: it is worth nothing on the paths that skip it.
+
+**One place does not follow this yet.** `clofin.api.payments` records its four
+payment events inline in the handler, from before the service split existed.
+Moving them is a refactor of TASK-002's endpoints with no behavioural change, and
+it has not been done — stated here rather than left for a reader to trip over,
+because a rule with a silent exception is worse than a rule with a named one.
 
 A repository is also where rules that **cannot** be checked purely belong —
 those that are properties of stored state rather than of a value, such as

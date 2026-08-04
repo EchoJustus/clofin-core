@@ -76,18 +76,46 @@
       (is (str/includes? lowered "central bank"))
       (is (str/includes? lowered "regulatory")))))
 
+(defn- subject-type-enums
+  "Every `subjectType` enum anywhere in the spec's schemas, as `{schema-name enum}`.
+
+  **Discovered, not listed.** The first version of this test named
+  `AuditEvent.properties.subjectType` and asserted that one copy — and passed
+  green while `EvidencePack.properties.subjectType`, a second copy in the same
+  file, still declared the two subject types that existed before TASK-005. The
+  endpoint returned `account` and the contract said `account` was impossible.
+
+  A drift guard that checks the copy its author happened to look at is the same
+  defect it exists to catch, so this finds them all: a third copy added later is
+  covered without anyone remembering to extend this list."
+  [spec]
+  (into {}
+        (keep (fn [[schema-name schema]]
+                (when-let [enum (get-in schema ["properties" "subjectType" "enum"])]
+                  [schema-name enum])))
+        (get-in spec ["components" "schemas"])))
+
 (deftest the-audit-vocabulary-in-the-contract-is-the-one-the-service-enforces
-  (testing "`clofin.audit/actions` is a closed vocabulary and the contract publishes it —
-            two copies of one list, so the copies are asserted equal rather than trusted"
-    (let [spec (load-spec)]
+  (testing "`clofin.audit` holds a closed vocabulary and the contract publishes it —
+            several copies of two lists, so the copies are asserted equal rather than trusted"
+    (let [spec (load-spec)
+          by-schema (subject-type-enums spec)]
       (is (= (set audit/actions)
              (set (get-in spec ["components" "schemas" "AuditAction" "enum"])))
           "an action the service can write and the contract does not declare is an event a
            caller cannot filter for; one the contract declares and the service refuses is a
            400 the caller was invited to make")
-      (is (= (set audit/subject-types)
-             (set (get-in spec ["components" "schemas" "AuditEvent"
-                                "properties" "subjectType" "enum"])))))))
+
+      (is (seq by-schema) "the contract must declare the subject vocabulary somewhere")
+      (is (= #{"AuditEvent" "EvidencePack"} (set (keys by-schema)))
+          "a schema gained or lost a `subjectType` — check it is covered below rather than
+           letting this test quietly stop guarding it")
+
+      (doseq [[schema-name enum] by-schema]
+        (is (= (set audit/subject-types) (set enum))
+            (str "components.schemas." schema-name ".properties.subjectType declares "
+                 (pr-str (vec (sort enum))) " — the service can emit "
+                 (pr-str (vec audit/subject-types))))))))
 
 (deftest money-is-specified-as-integer-minor-units
   (let [money (get-in (load-spec) ["components" "schemas" "Money"])]

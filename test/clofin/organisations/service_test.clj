@@ -138,5 +138,8 @@
                                 from audit_event where subject_id = ?"
                              (:id org)])
           rendered (str/lower-case (pr-str row))]
+      ;; Without this the test passes when there is no row at all: `query-one`
+      ;; returns nil, and nil contains no payload.
+      (is (some? row) "there is a row to inspect")
       (is (not (str/includes? rendered (str/lower-case legal-name))))
       (is (not (str/includes? rendered "meridian"))))))

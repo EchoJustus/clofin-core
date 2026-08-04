@@ -1151,8 +1151,10 @@ paths:
       operationId: getEvidencePack
       summary: Extract a complete evidence pack for one subject
       description: |
-        Every state change of one payment instruction or approval, in the order
-        it happened, each entry carrying the actor who caused it.
+        Every state change of one subject, in the order it happened, each entry
+        carrying the actor who caused it. A subject is a payment instruction, an
+        approval, an organisation, a ledger account or a journal entry — every
+        record CloFin can write.
 
         For a payment instruction the pack **also includes its approvals' own
         events** — `approval.recorded`, `approval.invalidated`,
@@ -1172,7 +1174,9 @@ paths:
         - name: subjectId
           in: path
           required: true
-          description: A payment instruction id, or an approval id.
+          description: >-
+            The id of any audited subject: a payment instruction, an approval,
+            an organisation, a ledger account or a journal entry.
           schema: { type: string, format: uuid }
         - $ref: "#/components/parameters/ActorId"
         - $ref: "#/components/parameters/OptionalOrganisationId"
@@ -2123,7 +2127,7 @@ components:
         subjectId: { type: string, format: uuid }
         subjectType:
           type: string
-          enum: [payment-instruction, approval]
+          enum: [payment-instruction, approval, organisation, account, journal-entry]
         from:
           type: string
           format: date-time

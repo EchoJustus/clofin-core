@@ -256,6 +256,9 @@
                                 from audit_event where subject_id = ?"
                              (:id posted)])
           rendered (str/lower-case (pr-str row))]
+      ;; Without this the test passes when there is no row at all: `query-one`
+      ;; returns nil, and nil contains no payload.
+      (is (some? row) "there is a row to inspect")
       (is (not (str/includes? rendered (str/lower-case narrative))))
       (is (not (str/includes? rendered "pacific rim")))
       (is (not (str/includes? rendered "125000"))

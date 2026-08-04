@@ -234,7 +234,10 @@ transiently incomplete entry mid-transaction is still allowed to complete.
 ### C-05 Complete and attributable audit trail ✅
 
 **Statement.** Every state change records who did what, to which subject, when,
-and what changed — and cannot be altered afterwards.
+and what changed — and cannot be altered afterwards. *Who* is null in exactly one
+case, the unauthenticated bootstrap, where there is no principal to record; that
+is not a coverage gap but a property of the one write that precedes identity, and
+it is enforced to stay the only one (see *Attribution* below).
 
 **Design.** `audit_event` is append-only and written **in the same transaction**
 as the change it describes, so an unaudited state change is not representable.
