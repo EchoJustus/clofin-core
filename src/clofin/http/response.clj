@@ -40,9 +40,12 @@
   [t {:keys [correlation-id]}]
   (let [data   (ex-data t)
         type   (:clofin/error data)
-        {:keys [status title]} (get err/error-types type)]
+        {:keys [status title problem-type]} (get err/error-types type)]
     (problem {:status status
-              :type type
+              ;; A category may report under a problem type other than its own
+              ;; name, so that two categories a client treats alike share one
+              ;; stable `type` URI while keeping different status codes.
+              :type (or problem-type type)
               :title title
               :detail (ex-message t)
               :instance correlation-id

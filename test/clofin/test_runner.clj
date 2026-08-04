@@ -19,6 +19,10 @@
     clofin.ledger.entry-test
     clofin.ledger.purity-test
     clofin.organisations.organisation-test
+    clofin.payments.state-test
+    clofin.payments.instruction-test
+    clofin.payments.posting-test
+    clofin.idempotency-test
     clofin.config-test
     clofin.http.router-test
     clofin.http.middleware-test
@@ -32,7 +36,9 @@
     clofin.db.ledger-constraints-test
     clofin.organisations.repository-test
     clofin.ledger.repository-test
+    clofin.payments.repository-test
     clofin.api.ledger-api-test
+    clofin.api.payments-api-test
     clofin.system-test])
 
 (defn integration?

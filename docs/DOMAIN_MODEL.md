@@ -87,21 +87,33 @@ JournalEntry 1───* JournalLine
 against an ISO 4217 scale. Never floating point.
 See [ADR-0003](ADR/0003-money-as-integer-minor-units.md).
 
-### 2.2 Payments context 📋
+### 2.2 Payments context 🔨
 
-**PaymentInstruction**
+**PaymentInstruction** 🔨
 | Field | Notes |
 |---|---|
-| `id`, `organisation-id` | |
-| `idempotency-key` | Unique per organisation. |
-| `debtor-account-id` | A LedgerAccount. |
-| `creditor` | Counterparty and External Account details. |
-| `amount` | Money. |
-| `value-date` | Requested settlement date. |
-| `purpose-code` | Constrained vocabulary; several corridors require one. |
-| `status` | See §3. |
-| `created-by`, `created-at` | |
-| `screening-outcome` | Reference to the screening decision that permitted approval. |
+| `id`, `organisation-id` | ✅ |
+| `debtor-account-id` | A LedgerAccount. ✅ Must be `active` and hold the instruction's currency. |
+| `creditor-name`, `creditor-account` | ✅ Counterparty and External Account details, synthetic. |
+| `amount` | Money. ✅ |
+| `value-date` | Requested settlement date. ✅ A calendar date, not an instant. |
+| `purpose-code` | Constrained vocabulary; several corridors require one. ✅ |
+| `status` | See §3. ✅ |
+| `created-by`, `created-at` | ✅ `created-by` is caller-asserted until TASK-003 delivers authentication. |
+| `reverses-id` | ✅ Set on an instruction raised to reverse a settled one. |
+| `screening-outcome` | 📋 Reference to the screening decision that permitted approval. Increment 7. |
+
+**IdempotencyKey** ✅ — `(organisation-id, key)`, with the digest of the request
+and the response it produced.
+
+Modelled as a **record of its own** rather than as a field on the instruction,
+because the key protects *every* mutating operation — a submission, an
+amendment, a cancellation — and not only the creation of an instruction. A key
+that lived on `payment_instruction` could make creation idempotent and nothing
+else, which would leave submission unprotected: precisely the operation whose
+timeout the control exists for. See
+[C-06](COMPLIANCE.md) and
+[ADR-0013](ADR/0013-canonical-request-digest-for-idempotency.md).
 
 **Approval**
 | Field | Notes |
@@ -137,7 +149,7 @@ written in the same transaction as the change it describes.
 
 ---
 
-## 3. Payment instruction lifecycle 📋
+## 3. Payment instruction lifecycle 🔨
 
 ```
                     ┌──────────────── amend ────────────────┐
@@ -167,18 +179,41 @@ written in the same transaction as the change it describes.
 
 Rules that the diagram alone does not carry:
 
-1. `submit` requires screening to have completed. A pending screening blocks
-   submission rather than queuing behind it.
-2. `approve` requires an actor other than the maker, within their limit, and
-   enough approvals to satisfy the threshold for the amount.
-3. `amend` on a `pending_approval` instruction returns it to `draft` and
-   **invalidates every approval given so far** (PR-014).
-4. `settled` is terminal. A settled payment is never mutated; it is followed by
-   a *new* reversal instruction.
-5. `returned` posts a reversing entry automatically and opens an exception case.
+1. 📋 `submit` requires screening to have completed. A pending screening blocks
+   submission rather than queuing behind it. *(Increment 7. There is a
+   `TODO(increment-7)` at the precondition it will gate.)*
+2. 📋 `approve` requires an actor other than the maker, within their limit, and
+   enough approvals to satisfy the threshold for the amount. *(TASK-003.)*
+3. 📋 `amend` on a `pending_approval` instruction returns it to `draft` and
+   **invalidates every approval given so far** (PR-014). *(TASK-003. The
+   transition is in the table; nothing drives it yet. It is **not** what
+   `PATCH /payment-instructions/{id}` does — see below.)*
+4. ✅ `settled` is terminal. A settled payment is never mutated; it is followed
+   by a *new* reversal instruction.
+5. 📋 `returned` posts a reversing entry automatically and opens an exception
+   case. *(Increment 5.)*
 
 Transitions are held as data in `clofin.payments.state`, so the table above can
-be generated from the code and tested exhaustively rather than sampled.
+be generated from the code and tested exhaustively rather than sampled — every
+(state, event) pair is walked, not a chosen few.
+
+**Two rules about status are not transitions**, and are held as named sets
+beside the table rather than as conditionals in a handler
+([ADR-0014](ADR/0014-payment-lifecycle-as-data.md)):
+
+- ✅ `mutable-states` — an instruction is *mutable while `draft`, immutable in
+  substance thereafter* (§1). Amending a draft leaves it in `draft`, so it moves
+  along no arrow. This, not the `amend` event, is what governs
+  `PATCH /payment-instructions/{id}`.
+- ✅ `reversible-states` — a reversal may be raised only against a `settled`
+  instruction, per rule 4. The original is untouched, so this is not a
+  transition either.
+
+**Built so far:** `submit` and `cancel` have endpoints. `approve`, `reject`,
+`amend`, `release`, `settle`, `fail` and `return` are in the table, tested, and
+driven by nothing — a transition with no caller is still part of the model, and
+the increment that adds the endpoint gets to drive it, not to decide where it
+leads.
 
 ---
 
@@ -229,4 +264,4 @@ enforcement point is named — an invariant with no enforcement is a wish.
 | I7 | Every entry references the business object that caused it. | `NOT NULL` plus a constrained vocabulary ✅ |
 | I8 | An instruction's approver is never its maker. | Domain rule in `clofin.authz` 📋 |
 | I9 | A state change and its audit event commit together. | Same transaction 📋 |
-| I10 | A replayed idempotency key never performs work twice. | Unique constraint plus stored response 📋 |
+| I10 | A replayed idempotency key never performs work twice. | Primary key `(organisation_id, key)` plus the stored response, written in the same transaction as the effect ✅ |

@@ -131,20 +131,60 @@ asserts a rolled-back change leaves no audit event, and vice versa.
 
 ---
 
-### C-06 Duplicate payment prevention 📋
+### C-06 Duplicate payment prevention ✅
 
 **Statement.** A retry cannot cause a second payment.
 
-**Design.** Every mutating operation requires an `Idempotency-Key`. The key,
-caller and a hash of the request body are stored with the resulting response. A
-replay with the same body returns the stored response; a replay with a
-*different* body is `409 Conflict` rather than a silent second payment.
+**Design.** Every mutating operation requires an `Idempotency-Key`. The key, the
+organisation and a digest of the request are stored with the resulting response,
+**in the same transaction as the effect they protect** — a key stored separately
+from the effect leaves a window in which a crash makes a payment with no record
+that it was made. A replay of the same request returns the stored response and
+performs no new work; the same key carrying a *different* request is
+`409 Conflict` rather than a silent second payment; a request with no key at all
+is `400`.
 
-**Enforcement point.** Unique constraint on `(organisation_id, idempotency_key)`
-— replay protection is a database guarantee, not a read-then-write race.
-*(Increment 3.)*
+The digest is taken over a *canonical* serialisation of the request — its
+method, its path and its body
+([ADR-0013](ADR/0013-canonical-request-digest-for-idempotency.md)). Both halves
+of that scope are load-bearing:
 
-**Evidence.** The stored response and its first-seen timestamp.
+- **Canonical**, so a retry that differs only in whitespace or key order is
+  honoured rather than refused. A `409` on a genuine retry pushes the caller to
+  mint a new key, and a new key is a second payment.
+- **Method and path, not the body alone.** Two instructions' submissions carry
+  byte-identical bodies and differ only in their path; a body-only digest made
+  the second a replay of the first, so its instruction was never submitted while
+  the operator saw success. Amended by ruling (ADR-0013 §Amendment 1) after the
+  gap was found and disclosed during increment 3.
+
+**Enforcement points.**
+
+| | |
+|---|---|
+| Primary key `idempotency_key_pkey` on `(organisation_id, key)` | `resources/migrations/0003-payment-instructions.sql`. Two concurrent retries contend on this key: the second blocks until the first commits, fails on it, and returns what the first stored. Replay protection is a database guarantee, **not** a read-then-write in application code — that is a race, and under concurrent retries a race here pays twice. |
+| `clofin.idempotency.repository/execute-once!` | Runs the effect inside the transaction that writes the key, and translates the unique violation into a replay. |
+| `clofin.idempotency/canonical` and `/digest` | Decide whether a replay is the same request. |
+| `SELECT … FOR UPDATE` in `clofin.payments.repository/transition!` | The lifecycle's own defence, for two concurrent state changes carrying *different* keys — where idempotency does not apply and the row lock is what stops both succeeding. |
+
+**Evidence.** The `idempotency_key` row: the digest, the stored response status
+and body, and `created_at` as the first-seen timestamp.
+
+**Tests.** `clofin.api.payments-api-test` covers the externally visible
+contract, including a genuine concurrency test — two threads, a latch, one key —
+asserting that exactly one instruction row exists afterwards and both callers
+receive byte-identical responses. It also asserts that one key cannot replay
+across two instructions' submissions, or across a submission and a cancellation:
+reverting the digest to body-only makes those fail, which is what makes them
+regression tests rather than documentation. `clofin.idempotency-test` covers the
+canonical form the digest is taken over.
+
+**Scope of this control.** It prevents a *retry* from acting twice. It does not
+prevent a caller from deliberately submitting two distinct instructions for the
+same underlying invoice — that is a duplicate-payment detection problem, needs
+matching on payment attributes rather than on a key, and is not designed here.
+Stated because a control described without its boundary is a control nobody can
+rely on.
 
 ---
 

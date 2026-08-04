@@ -113,7 +113,8 @@ supplied by the caller. Two consequences that matter in a regulated context:
 
 **The persistence seam is named, not implied.** One namespace per context may
 require `clofin.db.*`, and it is the one called `repository` —
-`clofin.ledger.repository`, `clofin.organisations.repository`. Every other
+`clofin.ledger.repository`, `clofin.organisations.repository`,
+`clofin.payments.repository`, `clofin.idempotency.repository`. Every other
 domain namespace beside it stays pure. The rule is checked by
 `test/clofin/ledger/purity_test.clj`, which reads the `ns` forms rather than
 trusting review to remember
@@ -150,25 +151,56 @@ that references the original. See
 ### 5.3 Payment lifecycle
 
 ```
-  draft ──▶ submitted ──▶ pending_approval ──▶ approved ──▶ released ──▶ settled
-    │            │               │                 │            │
-    │            ▼               ▼                 ▼            ▼
-    └────────▶ rejected      rejected          cancelled     returned/failed
+                 ┌──────────── amend ────────────┐
+                 ▼                               │
+  draft ──submit──▶ pending-approval ──approve──▶ approved ──release──▶ released
+    │                     │                          │                     │
+    │ cancel              │ reject                   │ cancel              ├─settle──▶ settled
+    ▼                     ▼                          ▼                     ├─fail────▶ failed
+ cancelled             rejected                  cancelled                 └─return──▶ returned
 ```
 
-Transitions are data (`clofin.payments.state`), not scattered conditionals, so
-the permitted state machine can be rendered into documentation and tested as a
-table. Terminal states are terminal: a settled payment is never mutated; it is
-followed by a *reversal* payment.
+Transitions are data (`clofin.payments.state/transitions`), not scattered
+conditionals, so the permitted state machine can be rendered into documentation
+and tested by enumerating every (state, event) pair rather than by sampling the
+ones someone thought of. Terminal states are terminal: a settled payment is
+never mutated; it is followed by a *reversal* instruction.
+
+Two rules about status are **not** transitions — amending a draft in place, and
+raising a reversal against a settled instruction — because neither changes the
+status. They are held as named sets beside the table rather than as conditionals
+in a handler, so that "what does status control?" has one answer and one file
+([ADR-0014](docs/ADR/0014-payment-lifecycle-as-data.md)).
+
+Built so far: `submit` and `cancel` have endpoints. The rest are in the table,
+tested, and driven by nothing until approval (TASK-003) and settlement
+(increment 5) arrive.
 
 ### 5.4 Idempotency
 
 Every mutating payment endpoint requires an `Idempotency-Key`. The key, the
-caller, and a hash of the request body are stored with the resulting response.
-A replay with the same key and the same body returns the stored response; a
-replay with the same key and a *different* body is a `409 Conflict`. This is the
-behaviour corporate clients and payment schemes expect, and it is specified as
-acceptance criteria rather than left to implementation.
+organisation and a digest of the request are stored with the resulting response,
+**in the same transaction as the effect they protect**. Replaying the same
+request returns the stored response; reusing the key for a different request is
+a `409 Conflict`.
+
+Two design points carry the weight, and both are decisions rather than details:
+
+**The guarantee is the primary key**, `(organisation_id, key)`, not a check in
+application code. A read-then-write is a race, and the window between the read
+and the write is exactly long enough for two concurrent retries to both execute.
+The second inserter blocks on the key, fails on it, and returns what the first
+stored.
+
+**The digest is over a canonical form of the request** — its method, its path
+and its body, with sorted keys and no insignificant whitespace. Canonical, so a
+retry that differs only in representation is honoured: a `409` on a genuine
+retry would push the caller to mint a new key, and a new key is a second
+payment. Method and path rather than the body alone, because two instructions'
+submissions carry byte-identical bodies — a body-only digest made the second a
+replay of the first, so its instruction was never submitted while the operator
+saw success
+([ADR-0013](docs/ADR/0013-canonical-request-digest-for-idempotency.md)).
 
 ### 5.5 Audit trail
 

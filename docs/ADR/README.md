@@ -23,6 +23,8 @@ is a justification, not a decision.
 | [0010](0010-thin-ring-compatible-http-adapter.md) | Thin Ring-compatible HTTP adapter | Accepted |
 | [0011](0011-statement-periods-ordering-and-row-caps.md) | Statement periods, movement ordering and the row cap | Accepted |
 | [0012](0012-repository-seam-and-posting-time-validation.md) | Repository namespaces as the persistence seam, and where posting-time validation lives | Accepted |
+| [0013](0013-canonical-request-digest-for-idempotency.md) | Canonical request digest for idempotency keys | Accepted |
+| [0014](0014-payment-lifecycle-as-data.md) | The payment instruction lifecycle is data, and rules that are not transitions say so | Accepted |
 
 ## Conventions
 

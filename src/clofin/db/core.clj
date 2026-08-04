@@ -12,7 +12,7 @@
             [clojure.string :as str])
   (:import [com.zaxxer.hikari HikariConfig HikariDataSource]
            [java.sql Connection PreparedStatement ResultSet Statement Timestamp Types]
-           [java.time Instant]
+           [java.time Instant LocalDate]
            [javax.sql DataSource]
            [org.postgresql.util PSQLException ServerErrorMessage]))
 
@@ -113,6 +113,20 @@
     (instance? Timestamp value)   (.toInstant ^Timestamp value)
     (instance? java.util.Date value) (.toInstant ^java.util.Date value)
     :else (err/invalid! (str "Not a timestamp column value: " (class value)) {:value value})))
+
+(defn ->local-date
+  "Coerce a `date` column value to a `java.time.LocalDate`.
+
+  A `date` is a calendar date, not an instant, and the driver hands one back as
+  a `java.sql.Date` — which is a `java.util.Date` and therefore carries a time
+  and a zone it has no business carrying. Converting here is what stops a value
+  date shifting by a day when the JVM's default zone is not UTC."
+  ^LocalDate [value]
+  (cond
+    (nil? value)                   nil
+    (instance? LocalDate value)    value
+    (instance? java.sql.Date value) (.toLocalDate ^java.sql.Date value)
+    :else (err/invalid! (str "Not a date column value: " (class value)) {:value value})))
 
 ;; ---------------------------------------------------------------------------
 ;; Query and execute
@@ -241,6 +255,19 @@
           (execute! tx [...]))"
   [[binding source opts] & body]
   `(with-transaction* ~source ~(or opts {}) (fn [~binding] ~@body)))
+
+(defn transactionally
+  "Run `(f conn)` in a transaction, joining the caller's if there is one.
+
+  When `source` is already a connection the caller owns a transaction and this
+  work simply joins it — atomicity is then the caller's to guarantee. That is
+  what lets a repository function stand alone *and* compose into a larger unit
+  of work, such as a payment instruction whose state change and idempotency key
+  must commit together, without either caller knowing which it is."
+  [source f]
+  (if (instance? Connection source)
+    (f source)
+    (with-transaction* source f)))
 
 ;; ---------------------------------------------------------------------------
 ;; Constraint violations

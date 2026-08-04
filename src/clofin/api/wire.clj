@@ -20,8 +20,9 @@
   (:require [clofin.error :as err]
             [clofin.ledger.account :as account]
             [clofin.money :as money]
+            [clofin.payments.state :as payment-state]
             [clojure.string :as str])
-  (:import [java.time Instant]
+  (:import [java.time Instant LocalDate]
            [java.time.format DateTimeParseException]))
 
 ;; ---------------------------------------------------------------------------
@@ -82,6 +83,25 @@
 (defn read-instant-field
   [obj field]
   (read-instant (get obj field) field))
+
+(defn read-local-date
+  "Parse an ISO 8601 calendar date, `YYYY-MM-DD`.
+
+  A date, not an instant: a value date is the same day in every zone that
+  quotes it, so attaching a time and an offset to one would introduce a
+  distinction the business does not make — and a day of drift at the
+  boundaries, which is where value dates matter."
+  [value field]
+  (when-not (string? value) (missing! field))
+  (try
+    (LocalDate/parse value)
+    (catch DateTimeParseException _
+      (err/invalid! (str "Field '" field "' must be a date in YYYY-MM-DD form")
+                    {:field field :value value}))))
+
+(defn read-local-date-field
+  [obj field]
+  (read-local-date (get obj field) field))
 
 (defn read-enum
   "Parse a string into one of `allowed`, a set of keywords."
@@ -174,6 +194,31 @@
     ;; Present when the entry was read back from the journal; absent on the
     ;; value returned straight from a post, which has not been re-read.
     (:recorded-at entry) (assoc "recordedAt" (str (:recorded-at entry)))))
+
+(defn instruction->wire
+  [pi]
+  (cond-> {"id"               (str (:id pi))
+           "organisationId"   (str (:organisation-id pi))
+           "debtorAccountId"  (str (:debtor-account-id pi))
+           "creditorName"     (:creditor-name pi)
+           "creditorAccount"  (:creditor-account pi)
+           "amount"           (money/->wire (:amount pi))
+           ;; A calendar date, rendered as one. `LocalDate/toString` is
+           ;; ISO 8601 `YYYY-MM-DD` and carries no time and no offset, which is
+           ;; the whole point of the column's type.
+           "valueDate"        (str (:value-date pi))
+           "purposeCode"      (:purpose-code pi)
+           "status"           (name (:status pi))
+           "createdBy"        (str (:created-by pi))
+           ;; Derived from the lifecycle table, so the API cannot advertise an
+           ;; operation the state machine would refuse. A caller reading this
+           ;; does not have to hold a copy of the state machine to know what it
+           ;; may do next (ADR-0014).
+           "permittedTransitions" (mapv name (payment-state/permitted-events (:status pi)))}
+    (:created-at pi)  (assoc "createdAt" (str (:created-at pi)))
+    ;; Present only on a reversal, where it names the settled instruction this
+    ;; one was raised against.
+    (:reverses-id pi) (assoc "reversesId" (str (:reverses-id pi)))))
 
 (defn- movement->wire
   [movement]

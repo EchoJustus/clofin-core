@@ -10,7 +10,8 @@
   (:require [clofin.api.accounts :as accounts]
             [clofin.api.entries :as entries]
             [clofin.api.health :as health]
-            [clofin.api.organisations :as organisations]))
+            [clofin.api.organisations :as organisations]
+            [clofin.api.payments :as payments]))
 
 (defn routes
   "Build the route table for a running system."
@@ -69,4 +70,40 @@
 
    {:method :get :path "/journal-entries/:id" :operation-id "getJournalEntry"
     :handler (entries/show pool)
-    :summary "Retrieve a posted journal entry"}])
+    :summary "Retrieve a posted journal entry"}
+
+   ;; -------------------------------------------------------------------------
+   ;; Payment instructions
+   ;;
+   ;; A lifecycle event is a sub-resource (`/submission`, `/cancellation`)
+   ;; rather than a `status` field a caller writes. Naming the event leaves
+   ;; `clofin.payments.state/transitions` the only thing that decides where an
+   ;; instruction goes next; naming the state would put a second copy of the
+   ;; state machine in every client. See ADR-0014.
+   ;; -------------------------------------------------------------------------
+
+   {:method :post :path "/payment-instructions" :operation-id "createPaymentInstruction"
+    :handler (payments/create pool)
+    :summary "Capture a payment instruction"}
+
+   {:method :get :path "/payment-instructions" :operation-id "listPaymentInstructions"
+    :handler (payments/index pool)
+    :summary "List an organisation's payment instructions"}
+
+   {:method :get :path "/payment-instructions/:id" :operation-id "getPaymentInstruction"
+    :handler (payments/show pool)
+    :summary "Retrieve a payment instruction"}
+
+   {:method :patch :path "/payment-instructions/:id" :operation-id "amendPaymentInstruction"
+    :handler (payments/amend pool)
+    :summary "Amend a draft payment instruction"}
+
+   {:method :post :path "/payment-instructions/:id/submission"
+    :operation-id "submitPaymentInstruction"
+    :handler (payments/submit pool)
+    :summary "Submit a payment instruction for approval"}
+
+   {:method :post :path "/payment-instructions/:id/cancellation"
+    :operation-id "cancelPaymentInstruction"
+    :handler (payments/cancel pool)
+    :summary "Cancel a payment instruction"}])

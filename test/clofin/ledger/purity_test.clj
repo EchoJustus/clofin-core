@@ -22,7 +22,15 @@
   {'clofin.money                          "src/clofin/money.clj"
    'clofin.ledger.account                 "src/clofin/ledger/account.clj"
    'clofin.ledger.entry                   "src/clofin/ledger/entry.clj"
-   'clofin.organisations.organisation     "src/clofin/organisations/organisation.clj"})
+   'clofin.organisations.organisation     "src/clofin/organisations/organisation.clj"
+   'clofin.payments.state                 "src/clofin/payments/state.clj"
+   'clofin.payments.instruction           "src/clofin/payments/instruction.clj"
+   'clofin.payments.posting               "src/clofin/payments/posting.clj"
+   ;; The canonicaliser and the replay decision. Storage lives in
+   ;; `clofin.idempotency.repository`, which is the seam ADR-0012 names —
+   ;; splitting them is what lets the digest stay a pure function of one
+   ;; argument, testable without a database.
+   'clofin.idempotency                    "src/clofin/idempotency.clj"})
 
 (def forbidden-prefixes
   ["clofin.db." "clofin.http." "clofin.api."])
@@ -60,7 +68,9 @@
 (deftest the-persistence-seam-is-where-it-says-it-is
   (testing "the repository namespaces are the ones that touch the database"
     (doseq [path ["src/clofin/ledger/repository.clj"
-                  "src/clofin/organisations/repository.clj"]]
+                  "src/clofin/organisations/repository.clj"
+                  "src/clofin/payments/repository.clj"
+                  "src/clofin/idempotency/repository.clj"]]
       (is (some #(str/starts-with? % "clofin.db.")
                 (required-namespaces (ns-form path)))
           (str path " is named `repository` but requires no persistence — "
