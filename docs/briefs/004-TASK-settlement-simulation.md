@@ -3,9 +3,9 @@
 | Field | Value |
 |---|---|
 | **Increment** | 5 |
-| **Status** | `READY` |
+| **Status** | `IN PROGRESS` — dispatched 2026-08-04 |
 | **Depends on** | TASK-003 — settlement drives the `release` arrow the authorisation increment left in the table |
-| **Base branch** | `main` — TASK-003 merged 2026-08-04 (`5ff00eb`), so this is an ordinary branch off `main` with the PR against `main`. Verify TASK-005's landing state before you start: if its PR is unmerged, stack on **its** branch instead per AGENT_HANDOFF §1b (you share the `clofin.audit/actions` literal) |
+| **Base branch** | `main` at `2ba977e` — TASK-003 **and TASK-005 are both merged**, so this is an ordinary branch off `main` with the PR against `main`. The `clofin.audit/actions` coordination this brief anticipated is resolved: TASK-005 landed first; you extend the literal (and its OpenAPI enum twin — see In-scope item 9) in place |
 | **Blocks** | Increment 6 (reconciliation) |
 | **Requirements** | PRD §5.3 (settlement); NFR-003 |
 | **Controls touched** | C-03, C-04 exercised; **no control moves 📋 → ✅ here** — C-07 (screening before release) stays 📋 and is increment 7's |
@@ -85,17 +85,24 @@ the difference.
    verbatim; the replay key makes a duplicate detectable and idempotent — same
    answer, no second posting, no second audit event.
 8. **Migration** — *next available number against the tree you build on;
-   verify before you write it (L-1) — the FEEDBACK-M1 remediation is expected
-   to consume `0007` on the base branch, which would make yours `0008`*. The
-   DDL below is **validated against a live PostgreSQL 16 with migrations
-   0001–0006 applied** (L-3): every documented row shape inserts; every guard
-   refuses.
+   verify before you write it (L-1) — the FEEDBACK-M1 remediation consumed
+   `0007` and `0008` on `main`, so at dispatch that is `0009`*. The DDL below
+   is **validated against a live PostgreSQL 16 with migrations 0001–0006
+   applied** (L-3): every documented row shape inserts; every guard refuses.
+   Migrations 0007/0008 add TRUNCATE guards and the entry-completeness trigger
+   to tables you touch — nothing in this DDL conflicts with either, but your
+   finality postings must satisfy the entry-level completeness check like any
+   other posting.
 9. **Audit vocabulary**: add `payment.released`, `payment.settled`,
    `payment.failed`, `payment.returned`, `settlement-batch.created`,
    `settlement-batch.submitted`, `settlement-batch.completed`,
    `settlement-batch.timeout-swept` to `clofin.audit/actions`, and
-   `settlement-batch` to `subject-types`. *(TASK-005 adds terms to the same
-   sorted-set literal — whichever lands second rebases; a one-line conflict.)*
+   `settlement-batch` to `subject-types`. **TASK-005 landed first and added an
+   enforcement point you inherit:** `clofin.contract-test` asserts the OpenAPI
+   `AuditAction` and `subjectType` enums equal the service vocabulary, so every
+   term you add to the literals must also be added to `api/openapi.yaml`'s
+   enums in the same commit — the build fails otherwise, by design (ruling O-1
+   on TASK-005).
    **Lesson L-8/L-7 discipline applies:** an action named after a transition
    (`payment.settled`, `settlement-batch.completed`) is emitted **only** in the
    transaction where that transition commits — a scheme response *recorded* is

@@ -5,7 +5,8 @@
   documentation. This test asserts the two agree in both directions: every
   declared operation is routable, and every route is declared. A route added
   without a contract change fails here, which is the point."
-  (:require [clofin.routes :as routes]
+  (:require [clofin.audit :as audit]
+            [clofin.routes :as routes]
             [clojure.java.io :as io]
             [clojure.set :as set]
             [clojure.string :as str]
@@ -74,6 +75,19 @@
       (is (str/includes? lowered "synthetic"))
       (is (str/includes? lowered "central bank"))
       (is (str/includes? lowered "regulatory")))))
+
+(deftest the-audit-vocabulary-in-the-contract-is-the-one-the-service-enforces
+  (testing "`clofin.audit/actions` is a closed vocabulary and the contract publishes it —
+            two copies of one list, so the copies are asserted equal rather than trusted"
+    (let [spec (load-spec)]
+      (is (= (set audit/actions)
+             (set (get-in spec ["components" "schemas" "AuditAction" "enum"])))
+          "an action the service can write and the contract does not declare is an event a
+           caller cannot filter for; one the contract declares and the service refuses is a
+           400 the caller was invited to make")
+      (is (= (set audit/subject-types)
+             (set (get-in spec ["components" "schemas" "AuditEvent"
+                                "properties" "subjectType" "enum"])))))))
 
 (deftest money-is-specified-as-integer-minor-units
   (let [money (get-in (load-spec) ["components" "schemas" "Money"])]

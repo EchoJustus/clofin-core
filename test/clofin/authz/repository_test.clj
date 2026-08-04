@@ -374,15 +374,35 @@
       (is (nil? (audit-store/evidence-pack tdb/*pool* org (random-uuid)))))))
 
 (deftest an-evidence-pack-does-not-cross-organisations
-  (let [{:keys [org] :as f} (setup)
+  (let [{:keys [org maker] :as f} (setup)
         other (tdb/insert-organisation! tdb/*pool* {:id (random-uuid) :short-name "other-org"})
         instruction (insert-instruction! tdb/*pool* f)]
     (db/with-transaction [tx tdb/*pool*]
-      (audit-store/record! tx {:organisation-id org :actor-id nil :action "payment.created"
+      (audit-store/record! tx {:organisation-id org :actor-id maker :action "payment.created"
                                :subject-type "payment-instruction" :subject-id instruction
                                :before nil :after {} :correlation-id nil}))
     (is (nil? (audit-store/evidence-pack tdb/*pool* other instruction))
         "an unscoped evidence query is how one tenant reads another's payment history")))
+
+(deftest a-payment-event-with-no-actor-is-refused
+  (testing "standing lesson L-6: `actor_id is null means the bootstrap` is enforced on the way
+            in, not merely commented on the column"
+    (let [{:keys [org] :as f} (setup)
+          instruction (insert-instruction! tdb/*pool* f)
+          before (audit-count)]
+      ;; Through `record!`, not only through `clofin.audit/event` — the guard is
+      ;; useless if the storage path can reach the table around it. Migration
+      ;; `0005` calls a null actor on a payment action a defect; since TASK-005
+      ;; it is an unwritable one.
+      (is (thrown-with-msg?
+           Exception #"must name the actor"
+           (db/with-transaction [tx tdb/*pool*]
+             (audit-store/record! tx {:organisation-id org :actor-id nil
+                                      :action "payment.created"
+                                      :subject-type "payment-instruction"
+                                      :subject-id instruction
+                                      :before nil :after {} :correlation-id nil}))))
+      (is (= before (audit-count)) "and nothing reached the table on the way to being refused"))))
 
 ;; ---------------------------------------------------------------------------
 ;; Listing and filtering
@@ -455,11 +475,16 @@
 
 (deftest a-digest-written-here-matches-one-computed-purely
   (testing "so an auditor can verify a stored digest against a value they hold"
-    (let [{:keys [org] :as f} (setup)
+    (let [{:keys [org approver-a] :as f} (setup)
           instruction (insert-instruction! tdb/*pool* f)
           value {:id instruction :status :approved :amount (money/of "SGD" 125000)}]
       (db/with-transaction [tx tdb/*pool*]
-        (audit-store/record! tx {:organisation-id org :actor-id nil :action "payment.approved"
+        ;; The actor is named rather than nil. Since TASK-005 only the bootstrap
+        ;; may record an event with no actor — `clofin.audit/bootstrap-actions`
+        ;; — so a payment event with a null actor is refused at the door rather
+        ;; than reaching the table. See `a-payment-event-with-no-actor-is-refused`.
+        (audit-store/record! tx {:organisation-id org :actor-id approver-a
+                                 :action "payment.approved"
                                  :subject-type "payment-instruction" :subject-id instruction
                                  :before nil :after value :correlation-id nil}))
       (is (= (audit/digest value)

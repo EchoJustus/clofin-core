@@ -12,10 +12,12 @@
   the chart of accounts cannot raise a payment against one."
   (:require [clofin.api.principal :as principal]
             [clofin.api.wire :as wire]
+            [clofin.db.core :as db]
             [clofin.error :as err]
             [clofin.http.response :as resp]
             [clofin.ledger.account :as account]
-            [clofin.ledger.repository :as ledger]))
+            [clofin.ledger.repository :as ledger]
+            [clofin.ledger.service :as ledger-service]))
 
 (defn- find-account!
   "The account, or a 404. Shared by every handler that addresses one."
@@ -28,21 +30,30 @@
 
   Accounts are created `active`. There is no way to open one frozen or closed:
   an account nobody can post to is not something a caller means to ask for, and
-  a status transition is a separate operation with its own audit requirements."
+  a status transition is a separate operation with its own audit requirements.
+
+  The transaction is opened here because something must open it and a service
+  may not (`ARCHITECTURE.md` §4): the account row and its `account.created`
+  audit event commit together or not at all (C-05, invariant I9). The request
+  is parsed and the principal resolved *before* the transaction, so a `400`,
+  `401` or `403` never opens one."
   [pool]
   (fn [request]
     (let [body (wire/read-object request)
-          [_ organisation-id] (principal/for-request pool request :account/create body)
-          acct (ledger/create-account!
-                pool
-                {:id              (random-uuid)
-                 :organisation-id organisation-id
-                 :code            (wire/read-string-field body "code")
-                 :name            (wire/read-string-field body "name")
-                 :type            (wire/read-enum (get body "type") "type"
-                                                  (set (keys account/account-types)))
-                 :currency        (wire/read-string-field body "currency")
-                 :status          :active})]
+          [actor organisation-id] (principal/for-request pool request :account/create body)
+          candidate {:id              (random-uuid)
+                     :organisation-id organisation-id
+                     :code            (wire/read-string-field body "code")
+                     :name            (wire/read-string-field body "name")
+                     :type            (wire/read-enum (get body "type") "type"
+                                                      (set (keys account/account-types)))
+                     :currency        (wire/read-string-field body "currency")
+                     :status          :active}
+          acct (db/with-transaction [tx pool]
+                 (ledger-service/create-account!
+                  tx {:account        candidate
+                      :actor-id       (:id actor)
+                      :correlation-id (:correlation-id request)}))]
       (resp/created (str "/accounts/" (:id acct) "?organisationId=" (:organisation-id acct))
                     (wire/account->wire acct)))))
 

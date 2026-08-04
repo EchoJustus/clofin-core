@@ -84,9 +84,18 @@ failure modes without adding product insight at this stage
 | **Compliance** | `clofin.compliance` | Screening, fraud rules, cases |
 | **Audit** | `clofin.audit` | Append-only event capture and evidence extraction |
 
-Dependency rule: **the ledger depends on nothing.** Payments depends on ledger
-and authz. Settlement and reconciliation depend on ledger. Nothing depends on
-HTTP. This is what makes the domain testable without a server or a database.
+Dependency rule: **the ledger's domain depends on nothing.** Payments depends on
+ledger and authz. Settlement and reconciliation depend on ledger. Nothing depends
+on HTTP. This is what makes the domain testable without a server or a database.
+
+**Audit is the one context every writing context depends on, and it depends on
+none of them.** An audit event has to be written by the transaction that carries
+the change (§5.5, C-05), so the namespace composing a change with its event
+necessarily sees both — payments already did, and since TASK-005 the ledger and
+organisations contexts do too. That direction is safe because `clofin.audit`
+knows nothing about payments, accounts or entries: it holds a vocabulary and a
+digest, and each context supplies its own projection of the subject. The arrow
+never points back, so no cycle is possible.
 
 ---
 
@@ -121,12 +130,20 @@ namespace beside it stays pure. The rule is checked by
 trusting review to remember
 ([ADR-0012](docs/ADR/0012-repository-seam-and-posting-time-validation.md)).
 
-**A `service` namespace owns no connection either.** `clofin.payments.approval-service`
-sequences repositories inside a transaction the *caller* owns, and requires no
-`clofin.db.*` namespace at all. That is not tidiness: a service able to open its
-own transaction is a service able to write an audit event outside the change it
-describes, which is the one failure C-05 exists to prevent. The same purity test
-enforces it.
+**A `service` namespace owns no connection either.** `clofin.payments.approval-service`,
+`clofin.ledger.service` and `clofin.organisations.service` sequence repositories
+inside a transaction the *caller* owns, and require no `clofin.db.*` namespace at
+all. That is not tidiness: a service able to open its own transaction is a
+service able to write an audit event outside the change it describes, which is
+the one failure C-05 exists to prevent. The same purity test enforces it.
+
+Something has to open that transaction, and it is the **handler** — a transport
+concern, and the layer that already knows the pool. What the handler does *not*
+do is decide what gets written into it: an audit event emitted by
+`clofin.api.accounts` would be a control that exists only for callers arriving
+through `clofin.api.accounts`, which is the shape audit finding **F-001** found
+segregation of duties in. The handler parses, opens the transaction and renders;
+the service decides.
 
 A repository is also where rules that **cannot** be checked purely belong —
 those that are properties of stored state rather than of a value, such as
@@ -258,8 +275,17 @@ append-only table holding counterparty names is a second copy of the data C-09
 minimises, and one that can never be cleaned. What that costs an auditor — a
 digest cannot be read back — is stated in the ADR rather than discovered.
 
-Ledger and organisation writes do not yet emit audit events; the gap is named in
-[COMPLIANCE §4](docs/COMPLIANCE.md).
+**Every write the API can perform leaves an event.** Organisation creation
+(`organisation.created`), account opening (`account.created`) and journal posting
+(`journal-entry.posted`) were silent until TASK-005 and are not any more, so C-05
+is claimed without a scope qualification.
+
+One of them has no actor to record and cannot have one: `POST /organisations` is
+the bootstrap, and no actor can exist before the organisation that holds one. Its
+event stores a **null** `actor_id`, and the meaning of that null is enforced
+rather than described — `clofin.audit/event` refuses a null actor for every
+action outside `clofin.audit/bootstrap-actions`, which contains exactly one term
+([ADR-0017](docs/ADR/0017-bootstrap-identity-for-organisation-creation.md)).
 
 ### 5.6 Multi-tenancy and access
 

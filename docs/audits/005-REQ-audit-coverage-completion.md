@@ -11,13 +11,6 @@
 | **Migrations** | **None.** `audit_event` is generic over subjects and needed no change |
 | **Status** | Implemented. Three items raised for arbitration in §4 — none resolved unilaterally |
 
-> **Meta copy.** Ingested 2026-08-04 from the submission branch
-> `claude/audit-coverage-completion-6iuffy` (PR #6, base `main` `5ff00eb`). All
-> three objections ruled the same day in the Worker's favour — rulings in the
-> brief's changelog
-> ([TASK-005](../briefs/005-TASK-audit-coverage-completion.md)). ADR-0017 and the
-> new service namespaces resolve on the submission branch until PR #6 merges.
-
 ---
 
 ## 1. What was built
