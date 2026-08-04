@@ -27,6 +27,7 @@ is a justification, not a decision.
 | [0014](0014-payment-lifecycle-as-data.md) | The payment instruction lifecycle is data, and rules that are not transitions say so | Accepted (amended 1) |
 | [0015](0015-approval-thresholds-are-per-currency.md) | Approval thresholds and approver limits are per currency, never normalised | Accepted |
 | [0016](0016-audit-events-store-digests-not-payloads.md) | The audit trail stores digests, not payloads | Accepted |
+| [0017](0017-bootstrap-identity-for-organisation-creation.md) | The bootstrap write records no actor, and the null is enforced | Accepted |
 
 ## Conventions
 
