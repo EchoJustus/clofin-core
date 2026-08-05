@@ -190,7 +190,10 @@
   `timed-out` is resolved in the sense that matters for deriving a batch status:
   CloFin has stopped waiting for it. It is emphatically *not* resolved in the
   sense that matters for the instruction, whose true fate is still unknown and
-  which therefore stays un-re-batchable until a late response says otherwise."
+  which therefore stays un-re-batchable. A late `timeout-resolution` says what
+  really happened; it does not free the instruction, because since migration
+  `0010` no outcome does — a settlement membership is permanent, and a payment
+  that came back is retried as a new instruction (F-007)."
   [item]
   (some? (:outcome item)))
 

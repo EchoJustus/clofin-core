@@ -166,7 +166,8 @@
 
 (deftest a-batch-whose-items-all-timed-out-derives-to-failed
   (testing "a statement about what CloFin knows, not about what the scheme did — the items
-            keep the distinction, and settlement_item_live_key keeps them un-re-batchable"
+            keep the distinction, and settlement_item_instruction_key keeps them
+            un-re-batchable"
     (is (= "failed" (batch/derive-status {:submitted? true :items (items "timed-out" "timed-out")})))
     (is (= "partially-settled"
            (batch/derive-status {:submitted? true :items (items "settled" "timed-out")})))))

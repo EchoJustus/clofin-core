@@ -230,20 +230,20 @@
           {:keys [status json]} (create-batch! f [a b])]
       (is (= 422 status)
           "the eligibility check reaches it first and answers with a reason an operator
-           can act on; the live-membership index behind it is asserted with raw SQL in
+           can act on; the membership index behind it is asserted with raw SQL in
            clofin.settlement.repository-test")
       (is (= "not-approved" (get-in json ["errors" "refused" 0 "reason"])))
       (is (= [a] (mapv #(get % "instruction-id") (get-in json ["errors" "refused"])))))))
 
 (deftest an-instruction-in-an-open-batch-cannot-be-put-in-a-second-one
   (testing "still approved, so eligibility passes — this is the path where the schema's
-            live-membership index is what refuses, translated into a named 409"
+            membership index is what refuses, translated into a named 409"
     (let [f (setup)
           a (raise! f)]
       (is (= 201 (:status (create-batch! f [a]))))
       (let [{:keys [status json]} (create-batch! f [a] :scheme "SIM-ACH")]
         (is (= 409 status))
-        (is (str/includes? (str (get json "detail")) "already in a settlement batch"))))))
+        (is (str/includes? (str (get json "detail")) "has already been in a settlement batch"))))))
 
 (deftest ac-2-a-batch-is-one-scheme-one-currency-one-value-date
   (let [f (setup)
@@ -390,6 +390,51 @@
     (is (= "failed" (get (:json (return! f batch b "SIM-RTN-B")) "status")))))
 
 ;; ---------------------------------------------------------------------------
+;; F-007 — a returned payment is terminal, and the retry is a new instruction
+;; ---------------------------------------------------------------------------
+;;
+;; Standing lesson **L-10**: a schema path is not a product path. The audit
+;; found the two disagreeing — migration 0009's index freed a returned
+;; instruction while the lifecycle and batch eligibility both refused it — and
+;; the ruling settled the disagreement in the lifecycle's favour. These assert
+;; the settled position **from the public command**, which is what AC-7 always
+;; needed and never had.
+
+(deftest f-007-a-returned-instruction-is-refused-a-second-batch-by-name
+  (testing "and the reason names the terminal state and the route that does work,
+            because a refusal an operator cannot act on becomes a request to
+            disable the check"
+    (let [f (setup)
+          a (raise! f :creditor-account "SG-SYNTH-88012348")   ; the scheme returns it
+          batch (get (:json (create-batch! f [a])) "id")]
+      (submit-batch! f batch)
+      (return! f batch a "SIM-RTN-1")
+      (is (= "returned" (status-of f a)))
+
+      (let [{:keys [status json]} (create-batch! f [a] :scheme "SIM-ACH")]
+        (is (= 422 status)
+            "eligibility answers first: a returned instruction is not approved")
+        (is (= "not-approved" (get-in json ["errors" "refused" 0 "reason"]))))
+
+      (testing "and the schema refuses it too, whoever is writing — the audit's own
+                raw insert, which committed before migration 0010 (F-007)"
+        (is (thrown-with-msg?
+             Exception #"settlement_item_instruction_key"
+             (db/execute! tdb/*pool*
+                          ["insert into settlement_batch_item (batch_id, instruction_id)
+                            values (?, ?)"
+                           (random-uuid) (uuid a)]))))
+
+      (testing "the retry is a new instruction, and it settles normally"
+        (let [retry (raise! f :creditor-account "SG-SYNTH-88012340")
+              retry-batch (get (:json (create-batch! f [retry] :scheme "SIM-ACH")) "id")]
+          (is (= 200 (:status (submit-batch! f retry-batch))))
+          (is (= 200 (:status (settle! f retry-batch retry "SIM-STL-RETRY"))))
+          (is (= "settled" (status-of f retry)))
+          (is (= "returned" (status-of f a))
+              "and the original stays returned — a retry does not rewrite history"))))))
+
+;; ---------------------------------------------------------------------------
 ;; AC-5 — a duplicate response does no work. **Must not be compromised.**
 ;; ---------------------------------------------------------------------------
 
@@ -406,13 +451,28 @@
       (is (true? (get json "replayed")))
       (is (= (get first-answer "status") (get json "status")) "the same answer")
 
+      (testing "F-009: the replayed body reproduces the ORIGINAL answer, outcome included"
+        ;; The audit observed `outcome: "settled"` on the first delivery and
+        ;; `outcome: null` on its duplicate. A replay that does not carry the
+        ;; answer it is replaying is not a replay; it is an acknowledgement
+        ;; dressed as one.
+        (is (= "settled" (get first-answer "outcome")))
+        (is (= "settled" (get json "outcome")))
+        (is (= (dissoc first-answer "schemeResponses" "replayed")
+               (dissoc json "schemeResponses" "replayed"))
+            "and the two bodies are otherwise identical. The audit's C-03 probe
+             compared them with `replayed` excluded — that flag is the one
+             intentional difference — and they still differed. They no longer do"))
+
       (testing "no second posting"
         (is (= entries-after-first (entry-count))))
       (testing "no second audit event"
         (is (= audits-after-first (audit-count)))
         (is (= 1 (count (filter #(= "payment.settled" %) (actions-for (:org f) (uuid a)))))))
       (testing "and the duplicate is not stored twice — the first row is the evidence"
-        (is (= 2 (count (get json "schemeResponses"))) "the ack, and one settled response")))))
+        (is (= 2 (count (get json "schemeResponses"))) "the ack, and one settled response")
+        (is (= #{"acknowledged" "applied"}
+               (set (map #(get % "disposition") (get json "schemeResponses")))))))))
 
 (deftest ac-5-an-out-of-order-response-is-a-conflict-not-a-silent-overwrite
   (let [f (setup)
@@ -420,11 +480,185 @@
         batch (get (:json (create-batch! f [a])) "id")]
     (submit-batch! f batch)
     (settle! f batch a "SIM-STL-1")
-    (let [{:keys [status]} (return! f batch a "SIM-RTN-LATE")]
+    (let [{:keys [status json]} (return! f batch a "SIM-RTN-LATE")]
       (is (= 409 status)
-          "a genuinely new response for an item that already has an outcome is out of order"))
+          "a genuinely new response for an item that already has an outcome is out of order")
+      (is (= "item-already-resolved" (get-in json ["errors" "dispositionReason"]))))
     (is (= "settled" (status-of f a)) "and the settled outcome stands")
     (is (= 2 (entry-count)) "release and settlement — no third entry")))
+
+;; ---------------------------------------------------------------------------
+;; F-008 — the receipt survives its own refusal
+;; ---------------------------------------------------------------------------
+;;
+;; Standing lesson **L-11**. Both tests the ruling names are here: a premature
+;; timeout-resolution, and a late contradiction. Each asserts the row survives
+;; and remains effect-free, and each then re-delivers the identical message to
+;; prove the stored answer is *reproduced* rather than re-evaluated against
+;; state that has arrived since.
+
+(defn- receipts-for
+  "Every receipt on a batch, read straight from the table rather than through
+  the API — the audit's own probe, which found zero rows where the design
+  claimed one."
+  [batch]
+  (db/query tdb/*pool*
+            ["select kind, reference, disposition, disposition_reason, outcome
+                from scheme_response where batch_id = ? order by received_at, id"
+             (uuid batch)]))
+
+(deftest f-008-a-premature-timeout-resolution-is-kept-and-does-no-work
+  (testing "the audit's C-02 reproduction: 409 with zero stored rows, and then the
+            identical reference performing work after a sweep. Both halves are now false"
+    (let [f (setup)
+          a (raise! f :creditor-account "SG-SYNTH-88012349")   ; the scheme never answers
+          batch (get (:json (create-batch! f [a])) "id")]
+      (submit-batch! f batch)
+      (let [entries (entry-count)
+            audits  (audit-count)
+            {:keys [status json]} (respond! f batch {"kind" "timeout-resolution"
+                                                     "instructionId" a
+                                                     "reference" "SIM-TMO-1"
+                                                     "outcome" "settled"})]
+        (is (= 409 status) "the item is not timed out; there is nothing to resolve")
+        (is (= "item-not-timed-out" (get-in json ["errors" "dispositionReason"])))
+        (is (false? (get-in json ["errors" "replayed"])) "this is its first arrival")
+
+        (testing "and the receipt committed anyway — the row the audit found missing"
+          (let [rows (receipts-for batch)
+                receipt (first (filter #(= "SIM-TMO-1" (:reference %)) rows))]
+            (is (some? receipt) "a rejected response must not be erased by its own rejection")
+            (is (= "refused" (:disposition receipt)))
+            (is (= "item-not-timed-out" (:disposition-reason receipt)))
+            (is (nil? (:outcome receipt))
+                "it resolved nothing, so it claims nothing")))
+
+        (testing "effect-free"
+          (is (= entries (entry-count)))
+          (is (= audits (audit-count)))
+          (is (= "released" (status-of f a)))))
+
+      (testing "after the sweep, the SAME reference reproduces its original no-work answer"
+        ;; This is the half that mattered: previously the identical message was
+        ;; accepted, settled the payment, wrote `payment.settled` and posted
+        ;; finality — because the first arrival had left no trace to replay.
+        (ok! (str "/settlement-batches/" batch "/timeout-sweep")
+             :actor (:controller f) :body {"organisationId" (str (:org f)) "timeoutSeconds" 0})
+        (let [entries (entry-count)
+              audits  (audit-count)
+              {:keys [status json]} (respond! f batch {"kind" "timeout-resolution"
+                                                       "instructionId" a
+                                                       "reference" "SIM-TMO-1"
+                                                       "outcome" "settled"})]
+          (is (= 409 status) "the stored disposition is reproduced, not re-evaluated")
+          (is (= "item-not-timed-out" (get-in json ["errors" "dispositionReason"])))
+          (is (true? (get-in json ["errors" "replayed"]))
+              "and it is honestly reported as the same message arriving again")
+          (is (= entries (entry-count)) "no finality posting")
+          (is (= audits (audit-count)) "no audit event")
+          (is (= "released" (status-of f a)) "and the payment did not settle")
+          (is (= 1 (count (filter #(= "SIM-TMO-1" (:reference %)) (receipts-for batch))))
+              "one receipt, not two — the replay key still admits exactly one row"))
+
+        (testing "a NEW reference still resolves it, so the item is not stranded"
+          (let [{:keys [status json]} (respond! f batch {"kind" "timeout-resolution"
+                                                         "instructionId" a
+                                                         "reference" "SIM-TMO-2"
+                                                         "outcome" "settled"})]
+            (is (= 200 status))
+            (is (= "settled" (get json "outcome")))
+            (is (= "settled" (status-of f a)))))))))
+
+(deftest f-008-a-refused-receipt-is-visible-on-the-batch-as-evidence
+  (testing "an append-only evidence table nobody can read completely is a table
+            that answers an auditor's question with `probably`"
+    (let [f (setup)
+          a (raise! f)
+          batch (get (:json (create-batch! f [a])) "id")]
+      (submit-batch! f batch)
+      (settle! f batch a "SIM-STL-1")
+      (is (= 409 (:status (return! f batch a "SIM-RTN-LATE"))))
+      (let [json (:json (call :get (str "/settlement-batches/" batch)
+                              :actor (:controller f)
+                              :query (str "organisationId=" (:org f))))
+            responses (get json "schemeResponses")]
+        (is (= 3 (count responses)) "the ack, the settlement, and the refused late return")
+        (let [refused (first (filter #(= "refused" (get % "disposition")) responses))]
+          (is (some? refused))
+          (is (= "SIM-RTN-LATE" (get refused "reference")))
+          (is (= "item-already-resolved" (get refused "dispositionReason")))
+          (is (nil? (get refused "outcome"))))))))
+
+;; ---------------------------------------------------------------------------
+;; F-009 — replay identity covers every effect-bearing field
+;; ---------------------------------------------------------------------------
+
+(deftest f-009-a-contradiction-under-one-reference-is-a-conflict-not-a-replay
+  (testing "the audit's C-03 reproduction: timeout-resolution(settled) then the same
+            reference carrying timeout-resolution(returned) was answered
+            `200 replayed=true` — a claim that CloFin had seen a request nobody sent"
+    (let [f (setup)
+          a (raise! f :creditor-account "SG-SYNTH-88012349")
+          batch (get (:json (create-batch! f [a])) "id")]
+      (submit-batch! f batch)
+      (ok! (str "/settlement-batches/" batch "/timeout-sweep")
+           :actor (:controller f) :body {"organisationId" (str (:org f)) "timeoutSeconds" 0})
+      (is (= 200 (:status (respond! f batch {"kind" "timeout-resolution" "instructionId" a
+                                             "reference" "SIM-TMO-1" "outcome" "settled"}))))
+      (is (= "settled" (status-of f a)))
+
+      (let [entries (entry-count)
+            audits  (audit-count)
+            {:keys [status json]} (respond! f batch {"kind" "timeout-resolution"
+                                                     "instructionId" a
+                                                     "reference" "SIM-TMO-1"
+                                                     "outcome" "returned"
+                                                     "reason" "changed my mind"})]
+        (is (= 409 status) "outcome and reason are inside the identity now")
+        (is (= "replay-key-conflict" (get-in json ["errors" "dispositionReason"])))
+        (is (false? (get-in json ["errors" "replayed"]))
+            "and it is emphatically NOT described as an exact replay")
+        (is (= entries (entry-count)) "effect-free")
+        (is (= audits (audit-count)))
+        (is (= "settled" (status-of f a)) "the payment keeps the answer it was given"))
+
+      (testing "the first receipt stands alone, carrying what was actually claimed"
+        (let [rows (filter #(= "SIM-TMO-1" (:reference %)) (receipts-for batch))]
+          (is (= 1 (count rows)))
+          (is (= "settled" (:outcome (first rows))))
+          (is (= "applied" (:disposition (first rows)))))))))
+
+(deftest f-009-a-return-reason-is-part-of-the-message
+  (testing "the reason is written to the item and gates a schema constraint, so two
+            returns under one reference saying different things are two messages"
+    (let [f (setup)
+          a (raise! f) b (raise! f)
+          batch (get (:json (create-batch! f [a b])) "id")]
+      (submit-batch! f batch)
+      (is (= 200 (:status (return! f batch a "SIM-RTN-1"))))
+      (is (= 409 (:status (respond! f batch {"kind" "returned" "instructionId" a
+                                             "reference" "SIM-RTN-1"
+                                             "reason" "a different reason entirely"})))
+          "same reference, different reason — not a replay")
+      (testing "while the identical message replays, blank and absent being one claim"
+        (let [{:keys [status json]} (return! f batch a "SIM-RTN-1")]
+          (is (= 200 status))
+          (is (true? (get json "replayed")))
+          (is (= "returned" (get json "outcome"))))))))
+
+(deftest f-009-an-ack-replays-as-an-ack
+  (testing "a resubmission produces the same deterministic ack reference; the receipt
+            written by `submit-batch!` and one injected by hand are the same shape"
+    (let [f (setup)
+          a (raise! f)
+          batch (get (:json (create-batch! f [a])) "id")
+          ack-ref (str "SIM-ACK-" batch)]
+      (submit-batch! f batch)
+      (let [{:keys [status json]} (respond! f batch {"kind" "ack" "reference" ack-ref})]
+        (is (= 200 status))
+        (is (true? (get json "replayed")) "the submission already recorded this ack")
+        (is (nil? (get json "outcome")) "an ack resolves nothing"))
+      (is (= 1 (count (filter #(= ack-ref (:reference %)) (receipts-for batch))))))))
 
 ;; ---------------------------------------------------------------------------
 ;; AC-6 — timeouts mean unknown
@@ -478,10 +712,15 @@
     (is (= 2 (entry-count)) "the finality posting happens on resolution, not at the sweep")
 
     (testing "a second resolution attempt is refused"
-      (let [{:keys [status]} (respond! f batch {"kind" "timeout-resolution" "instructionId" a
-                                                "reference" "SIM-TMO-2" "outcome" "returned"
-                                                "reason" "later still"})]
-        (is (= 409 status)))
+      (let [{:keys [status json]} (respond! f batch {"kind" "timeout-resolution" "instructionId" a
+                                                     "reference" "SIM-TMO-2" "outcome" "returned"
+                                                     "reason" "later still"})]
+        (is (= 409 status))
+        (is (= "item-not-timed-out" (get-in json ["errors" "dispositionReason"]))
+            "the item is resolved, so there is no longer a timeout to resolve")
+        (is (= "refused" (:disposition (first (filter #(= "SIM-TMO-2" (:reference %))
+                                                      (receipts-for batch)))))
+            "and the refused attempt is kept as evidence that it was made (F-008)"))
       (is (= "settled" (status-of f a)))
       (is (= 2 (entry-count)))
       (is (= 1 (count (filter #{"payment.settled"} (actions-for (:org f) (uuid a)))))))))
@@ -511,7 +750,7 @@
         (is (= "not-approved" (get-in json ["errors" "refused" 0 "reason"]))))
       (testing "and the schema refuses it too, whoever is writing"
         (is (thrown-with-msg?
-             Exception #"settlement_item_live_key"
+             Exception #"settlement_item_instruction_key"
              (db/execute! tdb/*pool*
                           ["insert into settlement_batch_item (batch_id, instruction_id)
                             values (?, ?)"

@@ -43,8 +43,14 @@
   Returns the organisation as stored. A refused registration — a duplicate
   short name, a short name the value type rejects — throws before the audit
   write is reached and takes the whole transaction with it, so a `409` leaves
-  no event behind."
+  no event behind.
+
+  The transaction precondition is checked before the first write rather than
+  documented (audit finding **F-011**, standing lesson **L-13**): given a pool,
+  the insert would commit on its own connection and a later audit failure would
+  leave an organisation with no `organisation.created` event."
   [tx {:keys [organisation correlation-id]}]
+  (audit-store/assert-unit-of-work! tx)
   (let [org (organisations/create-organisation! tx organisation)]
     ;; Same transaction as the insert above (C-05, PR-075, invariant I9). The
     ;; event's `organisation_id` is the organisation it just created: the row

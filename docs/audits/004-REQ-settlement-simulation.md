@@ -12,6 +12,12 @@
 | **Controls** | C-03, C-04 exercised. **C-07 untouched and still 📋**; `TODO(increment-7)` left exactly where it was |
 | **Status** | Implemented. **Three objections** in §4, one of them a process finding about the previous increment. Seven observations in §5 |
 
+> **Reopened 2026-08-05.** The Milestone 2 external audit returned
+> REMEDIATION-REQUIRED against this increment. §1–§7 below are the original
+> submission and are **left as written** — a report edited after its findings
+> landed is not a record. The remediation is **[§8](#8-remediation-addendum--feedback-m2-findings-f-007--f-011)**,
+> which carries its own provenance, verification and declarations.
+
 ---
 
 ## 1. What was built
@@ -371,3 +377,312 @@ else. `clofin.contract-test` will fail the build for the first two.
 and UAT-006 — because a simulation whose behaviour is only discoverable from
 source is one nobody can review. If you change the rule, change all three; there
 is no test asserting they agree, which is itself a small piece of debt.
+
+---
+
+# 8. Remediation addendum — FEEDBACK-M2 findings F-007 … F-011
+
+| Field | Value |
+|---|---|
+| **Provenance** | `claude-opus-5`, reasoning effort **high**, session date **2026-08-05** (per the provenance rule adopted 2026-08-04 in `docs/audits/README.md`) |
+| **Occasion** | Milestone 2 external audit returned **REMEDIATION-REQUIRED**; brief 004 reopened `IN PROGRESS`. Rulings in TASK-004's FEEDBACK-M2 changelog on `origin/meta` |
+| **Base** | `main` at `cba31c5`. **A fresh branch**, per the ruling — PR #7 is merged history and is never reused |
+| **Branch** | `claude/task-004-settlement-remediation-oi8ke4` — **substituted for the brief's `feat/settlement-remediation`**; the execution environment designates the push branch and this session cannot create another. Noted per instruction; no other divergence |
+| **Migration** | `0010-settlement-remediation.sql` — next available **verified against the live tree** at dispatch time, not assumed (L-1) |
+| **ADR** | `0019-a-returned-payment-is-terminal-and-retries-as-a-new-instruction.md` — next available, verified |
+| **Scope** | Five findings in one batch, plus the two doc-sweep items the ruling folded in |
+| **Objections** | **None.** All five rulings are implemented as ruled. Two implementation choices that go slightly beyond the letter of a ruling are declared in §8.7 for arbitration rather than left to be discovered |
+| **Status** | Implemented. `make verify` and `make test-it` green — counts in §8.8 |
+
+## 8.1 F-007 (blocking) — a returned instruction is terminal
+
+**Ruled:** `returned` is terminal; a retry is a new instruction. The index
+tightens to full uniqueness over `instruction_id`; the audit's raw insert becomes
+a refusal test; a public batch attempt naming a returned instruction is refused
+with a reason naming the terminal state and the new-instruction path; DOMAIN_MODEL,
+the index rationale and UAT-006 align. **No linked retry operation** — that is
+increment 6's.
+
+**Done.** Migration `0010` drops `settlement_item_live_key` and creates
+`settlement_item_instruction_key` — full uniqueness, no `where` clause. Every
+outcome now blocks a second membership.
+
+- **The audit's own reproduction is now a refusal test.** Verification log C-01
+  inserted a second membership for a returned instruction and it committed,
+  leaving count `2`.
+  `clofin.settlement.repository-test/ac-7-the-database-itself-refuses-a-second-membership-whatever-the-outcome`
+  runs that exact insert for all four outcomes — pending, settled, timed-out and
+  **returned** — and asserts the refusal and that count stays `1`.
+- **And from the public command, which is what L-10 asks for.**
+  `clofin.api.settlement-api-test/f-007-a-returned-instruction-is-refused-a-second-batch-by-name`
+  drives an instruction through release and return via the API, asserts the
+  retry is `422 not-approved`, asserts the raw insert is *also* refused — the
+  two layers now agreeing rather than contradicting — and then raises a **new**
+  instruction, approves it, batches it and settles it, proving the deferral has
+  a working alternative rather than being a dead end.
+- **The refusal names the correction.** `add-items!` translates the violation
+  into a `409` saying the payment is terminal and that the retry is a new
+  instruction, with `:retry "raise-a-new-instruction"` in the error data. A
+  refusal an operator cannot act on becomes a request to disable the check.
+- **Aligned:** `DOMAIN_MODEL.md` §2.3 and §3 rule 5 (which was still `📋
+  (Increment 5)`), `ARCHITECTURE.md` §5.6, the index comment in `0010`, the
+  OpenAPI descriptions for the Settlement tag, `createSettlementBatch`,
+  `sweepSettlementTimeouts` and `SettlementBatchItem.outcome`, and UAT-006
+  steps 8b and 8c.
+- **ADR-0019** records the decision, the two designs, why (b) won — the deciding
+  argument being that a second attempt is a second *payment decision* and
+  therefore deserves a second maker–checker cycle — and what it costs.
+- **No linked retry was built**, per the ruling.
+
+## 8.2 F-008 — receipt and disposition are separate facts (L-11)
+
+**Ruled:** every scheme response commits an immutable receipt plus a
+machine-readable disposition; a processing conflict renders its `409` **after**
+the receipt commits; replaying a rejected receipt reproduces its original no-work
+answer, never a re-evaluation against later state. Tests: premature
+timeout-resolution and late contradiction, both asserting the row survives,
+effect-free.
+
+**Done.** `scheme_response` gains `disposition` (`applied` | `acknowledged` |
+`refused`) and `disposition_reason`, with a check constraint making the two agree
+in both directions. `record-scheme-response!` **returns** a refusal instead of
+throwing one; `clofin.api.settlement/record-response` renders the `409` after
+`with-transaction` has returned, so the receipt is durable before the error
+exists.
+
+- The service's ordering changed to make this possible: it now reads the
+  existing receipt **before** attempting work, rather than discovering a
+  duplicate by colliding with it. That is also what makes replay *reproduce* an
+  answer rather than re-derive one.
+- `f-008-a-premature-timeout-resolution-is-kept-and-does-no-work` is C-02's
+  reproduction: the premature response is `409`, the row is present with
+  `disposition = refused`, `disposition_reason = item-not-timed-out`, no
+  outcome, and nothing posted or audited. Then a sweep runs, and **the identical
+  reference is delivered again** — the exact step that previously settled the
+  payment. It is `409` again, with `replayed: true`, no posting, no event, and
+  the payment still `released`. A *new* reference still resolves the item, so
+  the item is not stranded.
+- `f-009-a-contradiction-under-one-reference-is-a-conflict-not-a-replay` is the
+  late-contradiction half; it asserts effect-freeness the same way.
+- `f-008-a-refused-receipt-is-visible-on-the-batch-as-evidence` asserts the
+  refused arrival is readable through `GET /settlement-batches/{id}` — an
+  evidence table nobody can read completely answers an auditor with "probably".
+
+**Where the line was drawn, and why.** A request too malformed to *be* a scheme
+response — a `settled` naming no instruction, a `timeout-resolution` naming no
+outcome — still throws, and earns no receipt. It is `400`, and the receipt table
+stays a record of deliveries rather than of typos. The ruling's language is
+"a **processing** conflict", and that is exactly the case that now commits.
+`clofin.settlement.response/assert-shape!` holds the distinction and states it.
+
+## 8.3 F-009 — replay identity covers every effect-bearing field (L-12)
+
+**Ruled:** canonical digest over the complete semantic request (kind, reference,
+outcome, reason), stored with the original response; exact duplicates return the
+original body, `outcome` included; same reference with a different digest is
+`409` and is never called a replay. Reuse the idempotency canonicalisation
+posture (L-2 / ADR-0013), and mind the digest-version coupling note in 003-REQ §7.
+
+**Done.** `scheme_response` gains `request_digest`, `outcome` and `reason`. The
+new pure namespace `clofin.settlement.response` holds the semantic request, its
+digest and the replay decision — the same split `clofin.idempotency` has beside
+`clofin.idempotency.repository`, and it is registered in
+`clofin.ledger.purity-test/pure-namespaces`.
+
+- **The canonicaliser is reused, not reimplemented.** `response/digest` calls
+  `clofin.audit/digest`, which normalises domain values and then calls
+  `clofin.idempotency/canonical`. One canonical form, one place where "the same
+  request" is defined, and the digest carries
+  `clofin.audit/canonicalisation-version`.
+- **On the digest-version coupling (003-REQ §7):** `clofin.idempotency/canonical`
+  is **unchanged by this batch**, so `canonicalisation-version` is deliberately
+  **not** bumped — bumping it would make every existing `audit_event` digest
+  incomparable to every later one for no reason. The coupling now binds a third
+  consumer, and that is stated in `response`'s docstring so the next person to
+  change `canonical` finds it.
+- **The digest covers the resource, not only the body.** It includes `batch-id`
+  and `instruction-id` alongside kind, reference, outcome and reason. The ruling
+  named the four fields that were missing; L-2's rule is that a canonical digest
+  covers the resource too, and including them costs nothing since a shared replay
+  key already implies a shared address. Declared in §8.7 rather than assumed.
+- **`outcome: nil` on a replay is gone.** The duplicate now returns the original
+  body; the test asserts the two bodies are byte-equal after excluding
+  `schemeResponses` and the intentional `replayed` flag — the same comparison the
+  auditor made when they found them differing.
+- **A contradiction is `409` and is not called a replay.** `replayed` is `false`
+  in that response's error data, and `dispositionReason` is
+  `replay-key-conflict`.
+- **Blank and absent reasons are one claim.** `normalise-reason` trims to nil, so
+  `""` and `null` digest alike — otherwise a caller would get a `409` it could
+  not act on.
+
+## 8.4 F-010 — `scheme_response` joins the L-5 matrix
+
+**Ruled:** full table × verb raw-SQL coverage with a committed row; run a
+one-time negative control proving that removing either trigger fails the suite,
+and say so in this REQ.
+
+**Done.** `scheme_response` is in `guarded-tables` in
+`clofin.db.audit-constraints-test` with `[:update :delete :truncate]`,
+`seeded-row!` commits a real receipt for the row-level triggers to fire on, and
+the armed-guard drift assertion now expects **12** triggers over five tables
+rather than 10 over four.
+
+**Negative control, run once, in disposable migrated databases:**
+
+| Removed | Result |
+|---|---|
+| `scheme_response_append_only` | `clofin.db.audit-constraints-test` + `clofin.settlement.repository-test`: **3 failures, 4 errors** (was 33 tests / 120 assertions **green** for the auditor) |
+| `scheme_response_no_truncate` | The fixture's own drift guard throws before any test runs: *"TRUNCATE guards have drifted from `append-only-tables`"* |
+| `scheme_response_no_truncate`, with the fixture drift guard deliberately silenced | The matrix alone fails: **4 failures, 6 errors**, on `scheme_response must refuse truncate` |
+
+The third row is there because the second is the *fixture* catching it, not the
+matrix. The auditor's point was that the matrix should catch it, so the matrix
+was tested in isolation. It does.
+
+**One thing found while doing this, fixed in passing.** `refuses` was a **set**,
+so verb order was unspecified. On a healthy schema that is invisible — every verb
+is refused and the row survives all three. On the broken schema of the negative
+control, `TRUNCATE` ran first, succeeded, emptied the table, and `UPDATE` and
+`DELETE` then matched nothing: the suite would have reported one broken guard
+where three were. It is now an ordered vector with `truncate` last.
+
+## 8.5 F-011 — the transaction precondition fails closed (L-13)
+
+**Ruled:** every audit-composing service asserts a non-autocommit transaction
+before its first write; direct-pool and autocommit negative tests for each; the
+no-`clofin.db.*` purity rule stays.
+
+**Done.** `clofin.db.core/assert-transaction!` is the one runtime check;
+`clofin.audit.repository/assert-unit-of-work!` re-exports it for services.
+
+- **It lives in the audit repository** because a service may not require
+  `clofin.db.*` (ADR-0012) and every audit-composing service already requires
+  that namespace — so the check reaches all of them without any of them
+  acquiring a connection. The purity rule is untouched and still passes.
+- **Called at entry, before the first write**, in all nine entry points across
+  `clofin.organisations.service`, `clofin.ledger.service`,
+  `clofin.payments.approval-service` and `clofin.settlement.service`. Entry
+  rather than repository is the whole point: `create-account!` reached its
+  repository only *after* the row was durable, and a precondition that fires
+  after the first write is not a precondition.
+- `clofin.db.core/transactionally` now calls the same function, so the F-004
+  guard and this one cannot drift. Its error class and message are unchanged, so
+  `clofin.ledger.repository-test`'s existing assertion still holds.
+- **`clofin.audit.unit-of-work-test` is a matrix, not two tests.** Every entry
+  point × {pool, autocommit connection}, each asserting **both** the refusal and
+  that **nothing was written** — the second is what distinguishes a precondition
+  from an error message, and it is the audit's `account 1 / event 0` reproduction
+  turned into an assertion. A positive case asserts the guard admits a real
+  transaction, and a fourth test asserts the two failure messages differ, because
+  a pool and an autocommit connection are different mistakes.
+- **The set is compared against `clofin.ledger.purity-test/service-namespaces`**,
+  so a service added to one and not the other fails the build. That is L-6's
+  rule applied to this guard rather than trusted.
+
+**Negative control on this one too:** removing the assertion from
+`ledger.service/create-account!` produces 4 failures, including *"create-account!
+wrote something before refusing"* — the auditor's exact finding, now detected.
+
+**`clofin.payments.approval-service` was included** although the ruling's prose
+names "organisations, ledger, settlement". The finding says *every*
+audit-composing service, and the approval service is one. Declared in §8.7.
+
+## 8.6 The doc sweep the ruling folded in
+
+- **`payment.failed`** — the `AuditAction` enum description in
+  `api/openapi.yaml` now states that it is **reserved and has no producer**, why
+  (a scheme failure that returns funds *is* a return; an unknown outcome is a
+  timeout), and why it is published rather than omitted. Stated explicitly so an
+  API-only consumer can distinguish "no payments have failed" from "this action
+  has no producer", which are very different answers to give an auditor.
+- **COMPLIANCE C-05** gains *"The boundary of 'every state change'"*: a late
+  `timeout-resolution` moves an already-terminal batch's derived status and
+  writes no batch-subject event, because `settlement-batch.completed` names the
+  transition *into* completeness and that happened earlier. Every item resolution
+  that moved it has its own event, so the change is auditable through the items;
+  what is absent is an event whose subject is the batch. Recorded debt, now
+  visible where the control is read, with the fix (a distinct vocabulary term)
+  named and placed in increment 6.
+- C-05 also records the F-011 enforcement point and the `scheme_response`
+  triggers; C-06 gains `scheme_response_replay_key` + `request_digest` and
+  `settlement_item_instruction_key` as enforcement points, with their tests.
+
+## 8.7 Declared beyond the letter of a ruling — for arbitration
+
+No objection to any ruling. Two choices go slightly further than the ruling's
+words, and are declared rather than left to be found:
+
+1. **The index was renamed, not only redefined** —
+   `settlement_item_live_key` → `settlement_item_instruction_key`. The ruling
+   said "replaces … with full uniqueness over `instruction_id`". "Live" named a
+   live/dead distinction that no longer exists, and the name appears in the error
+   an operator reads and in every raw-SQL test. A constraint whose name asserts a
+   rule it does not implement is the shape of defect this batch exists to remove.
+   Reverting to the old name is a one-line change to `0010` if Master Control
+   prefers minimal churn.
+2. **The digest covers `batch_id` and `instruction_id`** as well as the four
+   fields the ruling named. This is L-2's "canonical digests include method and
+   path" applied to a resource address. It is strictly stronger and functionally
+   inert — two deliveries sharing a replay key necessarily share both — so it
+   changes no behaviour, only what the digest proves in isolation.
+
+Also declared, as scope rather than divergence: `clofin.payments.approval-service`
+received the F-011 assertion (§8.5), and the verb-order fix in the L-5 matrix
+(§8.4) was not asked for.
+
+## 8.8 Verification
+
+Run against a local PostgreSQL 16 with migrations `0001`–`0010` applied, per the
+environment note in 003-REQ.
+
+| Suite | Baseline at `cba31c5` | After |
+|---|---|---|
+| `make verify` (unit, property, contract) | 272 tests / 1,502 assertions | **272 tests / 1,504 assertions**, 0 failures, 0 errors |
+| `make test-it` (with integration) | 567 tests / 3,429 assertions | **584 tests / 3,638–3,659 assertions**, 0 failures, 0 errors |
+| `make docs-check` | — | 46 markdown files, all links resolve |
+
+The generated settlement property varies its assertion count with vector length,
+as recorded in §5, so the integration assertion count is a **range across runs**
+rather than a number: 3,638 and 3,659 were both observed after this batch, both
+green. The same effect explains why the baseline this session measured on
+unmodified `cba31c5` (567 tests / 3,429 assertions) differs from the audit's
+(567 / 3,459) — same tests, same result, different generated vector lengths. The
+**test count** is the stable figure: 567 → 584, the seventeen new tests being
+F-011's five, F-007's two, F-008/F-009's six, and four new receipt-schema tests.
+
+**Migration `0010` was validated against a live PostgreSQL 16 before it was
+written to disk (L-3)**, applied from an **empty** schema through `0001`–`0010`
+in a disposable database. Every documented row shape inserts: an `applied`
+receipt with an outcome, a `refused` receipt with a reason, an `acknowledged`
+ack, and a `timeout-resolution` carrying outcome and reason. Every guard refuses:
+a refusal with no reason, a non-refusal carrying one, an unknown disposition, an
+unknown response outcome, the replay key under `nulls not distinct`, all three
+destructive verbs, and a second membership for each of the four item outcomes.
+
+**Nothing is in flight (L-9).** Both suites were run to completion after the last
+edit; the negative controls in §8.4 and §8.5 were run and their databases
+destroyed; no verification is outstanding, and no fix is expected to follow this
+report.
+
+## 8.9 Notes for whoever picks this up
+
+- **`clofin.settlement.response` is where a response's identity lives.** If you
+  add a field that can change what a response *does*, add it to
+  `semantic-request` in the same commit, or two different messages will share one
+  digest — which is F-009 again with a new field.
+- **`assert-unit-of-work!` goes first in a new audit-composing service**, and the
+  service goes into **both** `clofin.ledger.purity-test/service-namespaces` and
+  `clofin.audit.unit-of-work-test/audit-composing-calls`. The two are compared,
+  so adding it to one alone fails the build rather than passing quietly.
+- **A new append-only table goes into three places**: its triggers in the
+  migration, `guarded-tables` in `clofin.db.audit-constraints-test`, and
+  `append-only-tables` in `clofin.test-db`. F-010 was the second of those being
+  missed.
+- **Increment 6 inherits linked-retry provenance** as scoped work: a returned
+  payment's retry is a new instruction with nothing in the record relating the
+  two. ADR-0019 says why the gap exists and what closing it needs.
+- **The late-status boundary in C-05 is still open debt.** The fix is a
+  vocabulary term for "a completed batch's derived status changed", which is
+  audit-vocabulary design and belongs with reconciliation rather than being
+  invented in a remediation batch.

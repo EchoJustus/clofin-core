@@ -17,8 +17,16 @@
   `clofin.db.*` requirement, so the persistence seam ADR-0012 names stays where
   it says it is. Everything reaches the database through a `repository`.
 
+  **The precondition is checked, not described** (audit finding **F-011**,
+  standing lesson **L-13**). Every function here opens with
+  `clofin.audit.repository/assert-unit-of-work!`, which refuses a pool or an
+  autocommit connection before the first write. A parameter named `tx` and a
+  docstring make misuse visible in review; only the runtime check makes it fail
+  closed for a REPL task, a script or a new adapter.
+
   The order of operations matters and is stated once, here:
 
+  0. **Assert the unit of work**, before anything is written.
   1. **Lock the instruction.** An approval decided against a status that
      changed underneath it is an approval given to a payment nobody submitted.
   2. **Ask the lifecycle** whether the event is permitted at all, before asking
@@ -128,6 +136,7 @@
   says that. The pure function returns values; this one performs effects, and
   the two failure vocabularies are deliberately different."
   [tx {:keys [organisation-id instruction-id actor decision reason correlation-id]}]
+  (audit-store/assert-unit-of-work! tx)
   (let [event       (if (= :rejected decision) :reject :approve)
         instruction (payments/lock-instruction! tx organisation-id instruction-id)
         ;; The lifecycle first. `transition` raises `:conflict` naming the
@@ -217,6 +226,7 @@
     refuses a `DELETE` at the database anyway. An approval that was given and
     then withdrawn is exactly the history an investigation needs."
   [tx {:keys [organisation-id instruction-id approval-id actor correlation-id]}]
+  (audit-store/assert-unit-of-work! tx)
   (let [instruction (payments/lock-instruction! tx organisation-id instruction-id)
         existing    (or (authz/find-approval tx approval-id)
                         (err/not-found! "No such approval on this payment instruction"

@@ -45,7 +45,13 @@
    ;; say, and a simulator that could reach a socket is one nobody can prove
    ;; never did.
    'clofin.settlement.batch               "src/clofin/settlement/batch.clj"
-   'clofin.settlement.scheme              "src/clofin/settlement/scheme.clj"})
+   'clofin.settlement.scheme              "src/clofin/settlement/scheme.clj"
+   ;; A scheme response's semantic identity, its digest and its disposition
+   ;; vocabulary. The same split as `clofin.idempotency` beside
+   ;; `clofin.idempotency.repository`, and for the same reason: the digest that
+   ;; decides whether two deliveries are one message stays a pure function of
+   ;; one argument, testable without a database (F-009, lesson L-12).
+   'clofin.settlement.response            "src/clofin/settlement/response.clj"})
 
 (def forbidden-prefixes
   ["clofin.db." "clofin.http." "clofin.api."])

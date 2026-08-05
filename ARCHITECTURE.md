@@ -333,10 +333,14 @@ The failure modes are the increment, not its edge cases:
 - **Out-of-order responses.** A genuinely new response for an item that already
   has an outcome is a conflict, not a silent overwrite.
 - **Timeouts.** An unanswered item is swept to `timed-out`, which means
-  **unknown, not failed**: the instruction stays `released`, and a partial unique
-  index makes it un-re-batchable until a late `timeout-resolution` says what
-  really happened. Treating unknown as failed and re-batching is how a payment
-  gets made twice, which is the single failure this context exists to prevent.
+  **unknown, not failed**: the instruction stays `released`, and a unique index
+  makes it un-re-batchable. A late `timeout-resolution` says what really
+  happened. Treating unknown as failed and re-batching is how a payment gets
+  made twice, which is the single failure this context exists to prevent.
+- **A membership is permanent.** No outcome frees an instruction for a second
+  batch — returned included, since audit finding F-007. A returned payment is
+  terminal, exactly as a settled one is, and the retry is a **new payment
+  instruction** approved on its own merits.
 
 The sweep is an explicit operator call rather than a daemon — a timeout that
 fires itself is one nobody can point at afterwards.

@@ -154,23 +154,58 @@ SettlementBatch 1───* SettlementBatchItem *───1 PaymentInstruction
 | `outcome-reason` | ✅ Required on a `returned` item: an exception queue whose entries do not say why is one nobody can work. |
 | `resolved-at` | ✅ Set exactly once. |
 
-**An instruction is in at most one *live* membership** — pending, settled or
-timed out. Only a `returned` item frees it for re-batching, and that is a partial
-unique index rather than a check in application code, so it binds a fix-up
-script and a defect too. **`timed-out` blocks precisely because the outcome is
-unknown:** treating unknown as failed and re-batching is how a payment is made
-twice, which is the single failure this context exists to prevent.
+**A settlement membership is permanent.** ✅ An instruction is in **at most one**
+membership, ever — pending, settled, timed out and returned all block a second
+one — and that is a unique index rather than a check in application code, so it
+binds a fix-up script and a defect too. **`timed-out` blocks precisely because
+the outcome is unknown:** treating unknown as failed and re-batching is how a
+payment is made twice, which is the single failure this context exists to
+prevent.
 
-**SchemeResponse** ✅ — what a simulated scheme said, stored **verbatim**, kept
-whether or not it caused work. The replay key
-`(batch, instruction, kind, reference)` — `nulls not distinct`, so two identical
-batch-level acks collide rather than coexisting — makes a duplicate delivery
-detectable and idempotent. Append-only against all three destructive verbs.
+`returned` used to be the exception, and audit finding **F-007** removed it. The
+schema freed a returned instruction for re-batching while the payment lifecycle
+held `returned` terminal and batch eligibility was `approved`-only — so the
+permission the index advertised was unreachable from any public command, and the
+acceptance criterion promising it was false end to end (standing lesson
+**L-10**: a schema path is not a product path). **Ruled: `returned` is terminal;
+a retry is a NEW instruction** — the doctrine `settled` already follows in §3
+rule 4, where a correction is a new reversing instruction rather than a mutation
+of the old one. Migration `0010` tightened the index accordingly. Linked-retry
+provenance — a reference relating the retry to the payment it replaces, and the
+exception workflow around it — is increment 6's, where return-exception handling
+natively lives.
+
+**SchemeResponse** ✅ — what a simulated scheme said, stored **verbatim** as a
+**receipt**, kept whether or not it caused work.
+
+| Field | Notes |
+|---|---|
+| `kind`, `reference` | ✅ With batch and instruction, the **replay key** — `nulls not distinct`, so two identical batch-level acks collide rather than coexisting. It names a delivery's *identity*. |
+| `request-digest` | ✅ Version-tagged canonical digest of the **complete semantic request** — batch, instruction, kind, reference, outcome and reason. It says whether two deliveries under one identity are the same *message*. Same canonicaliser and same posture as `idempotency_key` ([ADR-0013](ADR/0013-canonical-request-digest-for-idempotency.md)). |
+| `disposition` | ✅ `applied`, `acknowledged` or `refused` — what CloFin did about the arrival, machine-readable. |
+| `disposition-reason` | ✅ Required on a refusal, absent otherwise: `item-already-resolved`, `item-not-timed-out`, `item-not-in-batch`. |
+| `outcome`, `reason` | ✅ What this response **claimed**. Distinct from `SettlementBatchItem.outcome`, which is what CloFin **recorded** — the two differ in exactly the case that matters, a message kept as evidence that did no work. |
+
+Append-only against all three destructive verbs, and — since audit finding
+**F-008** — genuinely kept whether or not it caused work. It was not before: a
+response CloFin could not act on was rolled back *by the conflict that rejected
+it*, so the first delivery was unprovable and the identical reference could
+perform work later against changed state. Receipt and disposition are separate
+facts (standing lesson **L-11**): the receipt commits with a machine-readable
+statement of what was done, and the `409` is rendered afterwards.
 
 Responses arriving **late, twice, or out of order** is the normal case in the
-world this simulates, not an edge case; so is **partial batch failure**. A
-duplicate does no work and says so; a genuinely new response for an item that
-already has an outcome is a conflict.
+world this simulates, not an edge case; so is **partial batch failure**.
+
+- An **exact duplicate** — same identity, same digest — does no work and
+  reproduces the original answer, `outcome` included.
+- The **same reference saying something different** is a conflict and is never
+  called a replay. Audit finding **F-009** (standing lesson **L-12**, extending
+  L-2) found two contradictory timeout resolutions sharing one identity, the
+  second answered `200 replayed=true`; replay identity now covers every
+  effect-bearing field.
+- A genuinely **new response for an item that already has an outcome** is a
+  conflict — and its receipt is kept.
 
 ### 2.4 Reconciliation context 📋
 
@@ -310,8 +345,14 @@ Rules that the diagram alone does not carry:
    the amended instruction again.
 4. ✅ `settled` is terminal. A settled payment is never mutated; it is followed
    by a *new* reversal instruction.
-5. 📋 `returned` posts a reversing entry automatically and opens an exception
-   case. *(Increment 5.)*
+5. ✅ `returned` posts the exact mirror of the release entry and appears as an
+   exception case with its reason (increment 5). It is **terminal, exactly as
+   `settled` is** — rule 4's doctrine, applied to the other terminal outcome:
+   the instruction is finished, its settlement membership is permanent, and a
+   retry is a *new* instruction approved on its own merits. Audit finding
+   **F-007** settled this; the schema had advertised a re-batching permission
+   the lifecycle forbade. A structured exception workflow — relating a retry
+   back to the payment it replaces — is increment 6's. 📋
 
 Transitions are held as data in `clofin.payments.state`, so the table above can
 be generated from the code and tested exhaustively rather than sampled — every

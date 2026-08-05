@@ -11,6 +11,21 @@
   `clofin.ledger.purity-test` fails the build if this namespace acquires a
   connection.
 
+  **That precondition is now checked rather than documented.** Every function
+  here opens with `clofin.audit.repository/assert-unit-of-work!`, before its
+  first write, and a pool or an autocommit connection is refused there. Audit
+  finding **F-011** (standing lesson **L-13**) showed why the parameter name and
+  the purity test were not enough: they make misuse visible in review, and a
+  REPL task, a script or a new adapter can still call the function exactly as
+  Clojure permits and commit an aggregate write whose audit event then fails —
+  producing the unaudited state change C-05 calls unrepresentable.
+
+  ## Errors, and the one that is a value
+
+  `record-scheme-response!` returns a refusal rather than throwing one. Every
+  arrival commits its receipt, and the caller renders the `409` afterwards
+  (audit finding **F-008**, standing lesson **L-11**). See that function.
+
   **This namespace decides nothing about where a payment may go.** That is
   `clofin.payments.state`, whose table already carries `release`, `settle`,
   `fail` and `return`; this code drives those arrows and never redraws them
@@ -47,6 +62,7 @@
             [clofin.payments.repository :as payments]
             [clofin.settlement.batch :as batch]
             [clofin.settlement.repository :as settlement]
+            [clofin.settlement.response :as response]
             [clofin.settlement.scheme :as scheme]))
 
 (def default-timeout-seconds
@@ -116,11 +132,16 @@
   3. **Write** the batch, its memberships, then the audit event — all on `tx`.
 
   The membership insert is where the no-double-settlement guard bites: an
-  instruction already in a pending, settled or timed-out membership is refused
-  by `settlement_item_live_key`, a schema constraint rather than a check in this
-  function, so it binds a fix-up script too (AC-7)."
+  instruction that has **ever** been in a settlement membership is refused by
+  `settlement_item_instruction_key`, a schema constraint rather than a check in
+  this function, so it binds a fix-up script too (AC-7). Migration `0010`
+  tightened that index to cover `returned` as well, on the F-007 ruling that a
+  returned payment is terminal and a retry is a new instruction — so the
+  eligibility rules below and the index now agree instead of contradicting each
+  other."
   [tx {:keys [batch-id organisation-id scheme currency value-date
               instruction-ids actor correlation-id]}]
+  (audit-store/assert-unit-of-work! tx)
   (batch/assert-scheme! scheme)
   (batch/assert-non-empty! instruction-ids)
   (let [instructions (settlement/lock-instructions! tx organisation-id instruction-ids)
@@ -168,6 +189,7 @@
   second waits, re-reads `submitted`, and is refused by the lifecycle rather
   than by luck."
   [tx {:keys [organisation-id batch-id actor correlation-id entry-ids occurred-at]}]
+  (audit-store/assert-unit-of-work! tx)
   (let [batch-row (settlement/lock-batch! tx organisation-id batch-id)]
     (when-not (= "open" (:status batch-row))
       (err/conflict! (str "Cannot submit a settlement batch that is " (:status batch-row))
@@ -231,24 +253,26 @@
       ;; The scheme's acknowledgement, recorded like any other response so that
       ;; a resubmission is visible as a duplicate rather than as a new event.
       ;; Deterministic reference (see `clofin.settlement.scheme`), so it is.
-      (settlement/record-response!
-       tx {:id             (random-uuid)
-           :batch-id       batch-id
-           :instruction-id nil
-           :kind           "ack"
-           :reference      (scheme/submit-reference (scheme/simulated (:scheme batch-row))
-                                                    batch-row)})
+      ;;
+      ;; It carries the same receipt fields an injected response does — the
+      ;; disposition it self-evidently has, and a digest over its own semantic
+      ;; content — because a receipt written by one path and not the other is a
+      ;; table whose columns mean "except for acks" (F-008, F-009).
+      (let [ack {:batch-id       batch-id
+                 :instruction-id nil
+                 :kind           "ack"
+                 :reference      (scheme/submit-reference
+                                  (scheme/simulated (:scheme batch-row)) batch-row)}]
+        (settlement/record-response!
+         tx (assoc ack :id             (random-uuid)
+                       :disposition    "acknowledged"
+                       :request-digest (response/digest ack))))
       {:batch        submitted
        :instructions (mapv :after released)})))
 
 ;; ---------------------------------------------------------------------------
 ;; Outcomes
 ;; ---------------------------------------------------------------------------
-
-(def response-outcome
-  "The item outcome each response kind resolves to. `ack` resolves nothing."
-  {"settled"  "settled"
-   "returned" "returned"})
 
 (defn- finality-entry
   "The entry an outcome posts, or nil for an outcome that posts nothing."
@@ -295,108 +319,218 @@
                                :correlation-id  correlation-id}))
     updated))
 
+(defn- replay
+  "The answer a stored receipt gives when its exact message arrives again.
+
+  Reproduced from the row, never re-derived. That is the whole of F-008's
+  second half and of F-009's: a receipt whose disposition was `refused` answers
+  `409` again however the world has moved on since — it is *not* re-evaluated
+  against state that arrived in the meantime — and a receipt whose disposition
+  was `applied` answers with the outcome it recorded, rather than with the
+  `nil` the audit found in its place."
+  [batch-row receipt]
+  {:batch              batch-row
+   :replayed?          true
+   :receipt            receipt
+   :disposition        (:disposition receipt)
+   :disposition-reason (:disposition-reason receipt)
+   :detail             (when (response/refused? (:disposition receipt))
+                         (response/refusal-detail (:disposition-reason receipt)))
+   :outcome            (:outcome receipt)})
+
+(defn- refusal-code
+  "Why this response could not be acted upon, as a stable code.
+
+  Read off the item as it stood before the attempt, which is the fact the
+  refusal is about: no membership at all, an item that has already answered,
+  or — for a late answer — an item nobody had given up on."
+  [kind item]
+  (cond
+    (nil? item)                   "item-not-in-batch"
+    (= "timeout-resolution" kind) "item-not-timed-out"
+    :else                         "item-already-resolved"))
+
 (defn record-scheme-response!
-  "Record what the simulated scheme said, and act on it exactly once.
+  "Record what the simulated scheme said, act on it at most once, and keep the
+  receipt whatever happened.
 
-  Returns `{:batch … :outcome … :replayed? bool}`.
+  Returns
+  `{:batch … :replayed? bool :disposition … :disposition-reason … :outcome … :receipt …}`.
 
-  **The duplicate path is the point of this function.** A scheme that answers
-  twice, late, or out of order is the normal case in the world this simulates,
-  so the first thing that happens is the verbatim insert: if the replay key
-  refuses it, this delivery is one CloFin has already seen, and the correct
-  behaviour is to do *no work at all* — no second posting, no second audit
-  event, no second transition — and report the same answer as the first time
-  (AC-5). The original row stays; the duplicate is discarded rather than stored,
-  because the evidence needed is that a duplicate arrived, and the first row
-  plus this refusal is that evidence.
+  **It does not throw for a processing conflict.** A refusal is a value, and the
+  caller renders the `409` *after* committing — which is what makes the receipt
+  survive it (audit finding **F-008**, standing lesson **L-11**). Before
+  migration `0010` this function threw, the outer transaction rolled back, and
+  the receipt went with the rejection: the first delivery was unprovable and the
+  identical reference could perform work later against changed state.
+
+  It still throws for a request that could not be *understood* —
+  `clofin.settlement.response/assert-shape!` explains why those two cases are
+  not the same and why only one of them earns a receipt.
+
+  ## The order, and why it is this order
+
+  1. **Lock the batch.** Lock order step 1, and what serialises two deliveries
+     about one batch so the steps below cannot interleave.
+  2. **Validate the shape**, before anything is written.
+  3. **Digest the complete semantic request** — kind, reference, outcome and
+     reason included (**F-009**, standing lesson **L-12**). The replay key names
+     a delivery's identity; the digest says whether two deliveries under that
+     identity are the same message.
+  4. **Look for an existing receipt under this replay key**, before doing any
+     work rather than after colliding with it.
+     - Digest matches: the same message again. Reproduce the stored answer and
+       do *no work at all* — no second posting, no second audit event, no second
+       transition (AC-5).
+     - Digest differs: two different messages claiming one identity. `409`, and
+       **not** a replay — answering `replayed: true` there would tell a caller
+       CloFin had already seen a request nobody had sent, which is exactly what
+       F-009 found.
+  5. **Otherwise attempt the work**, or discover that it cannot be done, and
+  6. **commit the receipt carrying the disposition that describes either
+     outcome.**
 
   Kinds:
 
-  - `ack` — the batch was acknowledged. Records the row and moves nothing.
+  - `ack` — the batch was acknowledged. Receipt `acknowledged`; moves nothing.
   - `settled` / `returned` — resolves one item, transitions its instruction,
     posts finality, and emits one audit event named after the transition.
   - `timeout-resolution` — the late answer for an item the sweep already gave
     up on. Resolves it to the outcome the request names, exactly once."
   [tx {:keys [organisation-id batch-id instruction-id kind reference reason outcome
               actor correlation-id entry-id occurred-at]}]
-  (let [batch-row     (settlement/lock-batch! tx organisation-id batch-id)
-        items-before  (settlement/items-for tx batch-id)
-        was-complete? (batch/complete? items-before)
-        stored        (settlement/record-response!
-                       tx {:id             (random-uuid)
-                           :batch-id       batch-id
-                           :instruction-id instruction-id
-                           :kind           kind
-                           :reference      reference})]
-    (if (nil? stored)
-      ;; Already seen. No work, and the answer the first delivery produced.
-      {:batch     batch-row
-       :replayed? true
-       :original  (settlement/find-response tx {:batch-id batch-id
+  (audit-store/assert-unit-of-work! tx)
+  (let [batch-row      (settlement/lock-batch! tx organisation-id batch-id)
+        request        (response/assert-shape! {:batch-id       batch-id
                                                 :instruction-id instruction-id
-                                                :kind kind :reference reference})}
+                                                :kind           kind
+                                                :reference      reference
+                                                :outcome        outcome
+                                                :reason         reason})
+        request-digest (response/digest request)
+        existing       (settlement/find-response
+                        tx (select-keys request [:batch-id :instruction-id :kind :reference]))]
+    (cond
+      (and existing (response/same-message? (:request-digest existing) request-digest))
+      (replay batch-row existing)
 
-      (if (= "ack" kind)
-        {:batch batch-row :replayed? false :outcome nil}
+      ;; A different message under a taken identity. No work, and no second row:
+      ;; the first receipt already stands as the evidence of what arrived, and
+      ;; the replay key exists precisely to stop a second one.
+      existing
+      {:batch              batch-row
+       :replayed?          false
+       :receipt            existing
+       :disposition        "refused"
+       :disposition-reason "replay-key-conflict"
+       :outcome            nil
+       :detail             (str "This batch, instruction, kind and reference already name a "
+                                "different scheme response. A reference identifies one message; "
+                                "two messages that say different things cannot share it")}
 
-        (let [resolved-outcome (if (= "timeout-resolution" kind)
-                                 (or outcome
-                                     (err/invalid!
-                                      "A timeout resolution must name the outcome it resolves to"
-                                      {:known ["settled" "returned"]}))
-                                 (response-outcome kind))
-              _ (when-not instruction-id
-                  (err/invalid! (str "A '" kind "' scheme response must name the instruction it is about")
-                                {:kind kind}))
-              ;; Lock order step 2. The instruction is read under the same
-              ;; transaction that will transition it.
-              instruction (first (settlement/lock-instructions! tx organisation-id
-                                                                [instruction-id]))
-              item (if (= "timeout-resolution" kind)
-                     (settlement/resolve-timed-out-item! tx batch-id instruction-id
-                                                         resolved-outcome reason)
-                     (settlement/resolve-item! tx batch-id instruction-id
-                                               resolved-outcome reason))]
-          (when-not item
-            ;; Out of order rather than duplicate: this response is new — its
-            ;; replay key was free — but the item it is about is not in a state
-            ;; this kind can resolve. The verbatim row stays, because the fact
-            ;; that the scheme said this is worth keeping whether or not CloFin
-            ;; could act on it.
-            (err/conflict!
-             (if (= "timeout-resolution" kind)
-               "This settlement item is not timed out, so there is nothing for a timeout resolution to resolve"
-               "This settlement item already has an outcome; a late answer for a timed-out item must arrive as a timeout-resolution")
-             {:batch-id       (str batch-id)
-              :instruction-id (str instruction-id)
-              :kind           kind}))
+      :else
+      (let [items-before  (settlement/items-for tx batch-id)
+            was-complete? (batch/complete? items-before)
+            resolved      (:outcome request)
+            reason        (:reason request)
+            receipt!      (fn [disposition disposition-reason]
+                            (or
+                             (settlement/record-response!
+                              tx {:id                 (random-uuid)
+                                  :batch-id           batch-id
+                                  :instruction-id     instruction-id
+                                  :kind               kind
+                                  :reference          reference
+                                  :disposition        disposition
+                                  :disposition-reason disposition-reason
+                                  :request-digest     request-digest
+                                  ;; What the scheme CLAIMED, on the arrival
+                                  ;; that acted on it. A refused arrival
+                                  ;; resolved nothing, and recording an outcome
+                                  ;; against it would put a claim CloFin
+                                  ;; rejected in the column an investigation
+                                  ;; reads as fact.
+                                  :outcome            (when (= "applied" disposition) resolved)
+                                  :reason             reason})
+                             ;; Unreachable while the batch lock is held: this
+                             ;; branch only runs when `find-response` found
+                             ;; nothing *under that lock*, so nothing can have
+                             ;; claimed the replay key since. If it ever does,
+                             ;; the work above has happened and its receipt has
+                             ;; not — which is the state F-008 exists to make
+                             ;; impossible. Fail closed and take the whole
+                             ;; transaction down rather than commit an effect
+                             ;; with no evidence of what caused it.
+                             (err/fail!
+                              :conflict
+                              (str "This scheme response was processed and its receipt could not "
+                                   "be recorded; the work has been rolled back")
+                              {:batch-id  (str batch-id)
+                               :reference reference
+                               :hint      (str "The batch lock makes this unreachable — reaching "
+                                               "it means a caller wrote outside the documented "
+                                               "lock order.")})))]
+        (if (= "ack" kind)
+          {:batch batch-row :replayed? false :outcome nil
+           :disposition "acknowledged" :receipt (receipt! "acknowledged" nil)}
 
-          (let [moved (payments/transition! tx organisation-id instruction-id
-                                            (lifecycle-event resolved-outcome))
-                entry (finality-entry resolved-outcome instruction
-                                      {:accounts    (resolve-accounts
-                                                     (ledger/list-accounts tx organisation-id)
-                                                     (:currency batch-row))
-                                       :entry-id    entry-id
-                                       :occurred-at occurred-at})]
-            (ledger/post-entry! tx entry)
-            (audit-store/record! tx {:organisation-id organisation-id
-                                     :actor-id        (:id actor)
-                                     :action          (audit-action resolved-outcome)
-                                     :subject-type    "payment-instruction"
-                                     :subject-id      instruction-id
-                                     :before          (audit/instruction-subject (:before moved))
-                                     :after           (audit/instruction-subject (:after moved))
-                                     :correlation-id  correlation-id})
-            {:batch     (complete-batch! tx {:organisation-id organisation-id
-                                             :batch-id        batch-id
-                                             :batch-row       batch-row
-                                             :was-complete?   was-complete?
-                                             :actor           actor
-                                             :correlation-id  correlation-id})
-             :item      item
-             :outcome   resolved-outcome
-             :replayed? false}))))))
+          (let [;; Lock order step 2. The instruction is read under the same
+                ;; transaction that will transition it.
+                instruction (first (settlement/lock-instructions! tx organisation-id
+                                                                  [instruction-id]))
+                item (if (= "timeout-resolution" kind)
+                       (settlement/resolve-timed-out-item! tx batch-id instruction-id
+                                                           resolved reason)
+                       (settlement/resolve-item! tx batch-id instruction-id
+                                                 resolved reason))]
+            (if-not item
+              ;; Out of order rather than duplicate: this message is new — its
+              ;; replay key was free — and the item it is about is not in a
+              ;; state this kind can resolve. The failed resolution wrote
+              ;; nothing (`where outcome is null` matched no row), so the
+              ;; receipt is the only thing this transaction commits — and it
+              ;; commits, because what the scheme said is worth keeping whether
+              ;; or not CloFin could act on it.
+              (let [code (refusal-code kind
+                                       (first (filter #(= instruction-id (:instruction-id %))
+                                                      items-before)))]
+                {:batch              batch-row
+                 :replayed?          false
+                 :receipt            (receipt! "refused" code)
+                 :disposition        "refused"
+                 :disposition-reason code
+                 :outcome            nil
+                 :detail             (response/refusal-detail code)})
+
+              (let [moved (payments/transition! tx organisation-id instruction-id
+                                                (lifecycle-event resolved))
+                    entry (finality-entry resolved instruction
+                                          {:accounts    (resolve-accounts
+                                                         (ledger/list-accounts tx organisation-id)
+                                                         (:currency batch-row))
+                                           :entry-id    entry-id
+                                           :occurred-at occurred-at})]
+                (ledger/post-entry! tx entry)
+                (audit-store/record! tx {:organisation-id organisation-id
+                                         :actor-id        (:id actor)
+                                         :action          (audit-action resolved)
+                                         :subject-type    "payment-instruction"
+                                         :subject-id      instruction-id
+                                         :before          (audit/instruction-subject (:before moved))
+                                         :after           (audit/instruction-subject (:after moved))
+                                         :correlation-id  correlation-id})
+                (let [receipt (receipt! "applied" nil)]
+                  {:batch       (complete-batch! tx {:organisation-id organisation-id
+                                                     :batch-id        batch-id
+                                                     :batch-row       batch-row
+                                                     :was-complete?   was-complete?
+                                                     :actor           actor
+                                                     :correlation-id  correlation-id})
+                   :item        item
+                   :outcome     resolved
+                   :replayed?   false
+                   :disposition "applied"
+                   :receipt     receipt})))))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Timeouts
@@ -410,8 +544,9 @@
   **Timing out is not failing, and this function is where that distinction is
   kept.** Every item it marks is one whose true outcome CloFin does not know;
   the instruction therefore stays `released` — no lifecycle event is driven —
-  and the item stays un-re-batchable, because `settlement_item_live_key` counts
-  `timed-out` as live. The temptation is to drive `:fail` here and be done;
+  and the item stays un-re-batchable, because `settlement_item_instruction_key`
+  admits no second membership at all. The temptation is to drive `:fail` here
+  and be done;
   doing so would say the payment did not happen, which is a claim nobody can
   support, and would free the instruction to be batched again. That is the
   single failure mode this module exists to prevent.
@@ -420,6 +555,7 @@
   is deliberately no per-instruction audit event: no instruction changed state.
   Emitting `payment.failed` here would be F-005's mistake with a new name."
   [tx {:keys [organisation-id batch-id actor correlation-id horizon-seconds]}]
+  (audit-store/assert-unit-of-work! tx)
   (let [batch-row     (settlement/lock-batch! tx organisation-id batch-id)
         items-before  (settlement/items-for tx batch-id)
         was-complete? (batch/complete? items-before)]
