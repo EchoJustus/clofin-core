@@ -50,8 +50,12 @@ is gated by a whole-repo release audit
 under the resource-interruption fallback). 19 findings, 2 blocking, all
 triaged; the tag is gated on the remediation batch merging.
 
-**`ref-1` is tagged** at `5c7b4ba` — the remediation descendant of the RC,
-as the release rules permit. Its audit was **partial**: charter items 1–4 of 8
+**`ref-1` is cut at `5c7b4ba`** — the remediation descendant of the RC, as the
+release rules permit. *(The annotated tag is created but **not yet pushed**:
+this environment's git proxy refuses tag refs and its GitHub tooling can only
+read them, so the operator pushes it. Until `git ls-remote --tags origin` shows
+`refs/tags/ref-1`, the tag exists locally only — recorded here rather than
+claimed, per L-14.)* Its audit was **partial**: charter items 1–4 of 8
 were performed, 5–7 were not, and the tag annotation says so. All 19 findings
 were remediated before the tag. **Uncovered audit scope (items 5–7) carries
 forward as mandatory-first scope for `ref-2`.**
