@@ -50,12 +50,13 @@ is gated by a whole-repo release audit
 under the resource-interruption fallback). 19 findings, 2 blocking, all
 triaged; the tag is gated on the remediation batch merging.
 
-**`ref-1` is cut at `5c7b4ba`** — the remediation descendant of the RC, as the
-release rules permit. *(The annotated tag is created but **not yet pushed**:
-this environment's git proxy refuses tag refs and its GitHub tooling can only
-read them, so the operator pushes it. Until `git ls-remote --tags origin` shows
-`refs/tags/ref-1`, the tag exists locally only — recorded here rather than
-claimed, per L-14.)* Its audit was **partial**: charter items 1–4 of 8
+**[`ref-1` is released](https://github.com/EchoJustus/clofin-core/releases/tag/ref-1)**
+— tagged 2026-08-05 at `5c7b4ba`, the remediation descendant of the RC, as the
+release rules permit. Verified on the remote: `refs/tags/ref-1` →
+`5c7b4badced5e807e1022fce44cbcad38c6d2095`. Published as a **GitHub
+pre-release**, which is the accurate machine-readable signal for a reference
+implementation whose release audit was partial — and is now the convention for
+every `ref-<n>` (see the audits register). Its audit was **partial**: charter items 1–4 of 8
 were performed, 5–7 were not, and the tag annotation says so. All 19 findings
 were remediated before the tag. **Uncovered audit scope (items 5–7) carries
 forward as mandatory-first scope for `ref-2`.**

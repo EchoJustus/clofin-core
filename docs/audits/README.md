@@ -80,6 +80,13 @@ authorisation, settlement or financial-crime domains, or every third release,
 whichever comes first. Scope chosen upfront is recorded in the charter
 invocation and in the register row.
 
+*Tag form.* A `ref-<n>` tag is published as an annotated tag **and as a GitHub
+pre-release**. The pre-release flag is not modesty — it is the accurate
+machine-readable statement for a synthetic-data reference implementation, and it
+denies any reading of the tag as a production-ready or attested artifact before
+a human reads a word of the notes. Adopted at `ref-1`, 2026-08-05. The tag
+annotation always carries the release-audit coverage statement.
+
 *What does not change.* Severity taxonomy, gating rule, remediation routing
 (A2), provenance recording, and Master Control's independent reproduction
 duties are untouched. A partial audit still gates on its **blocking** findings.
