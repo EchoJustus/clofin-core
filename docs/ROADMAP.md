@@ -22,7 +22,9 @@ and this table is stale.
 | 4 | Authorisation, maker–checker, audit | [TASK-003](briefs/003-TASK-authorisation-and-audit-trail.md) | ✅ `CLOSED` — merged to `main` in PR #5 (`5ff00eb`); FEEDBACK-M1 fully remediated & verified (migrations `0007`/`0008`) | green, 2515 assertions |
 | 4c | Audit coverage completion (C-05 unqualified) | [TASK-005](briefs/005-TASK-audit-coverage-completion.md) | ✅ `CLOSED` — merged to `main` in PR #6 (`2ba977e`) | green, 2747 assertions |
 | 5 | Settlement simulation | [TASK-004](briefs/004-TASK-settlement-simulation.md) | ✅ `CLOSED` — PR #7 (`cba31c5`) + FEEDBACK-M2 remediation PR #8 (`5d21334`; migration `0010`, ADR-0019) | green, 584 tests / 3638 assertions |
-| 6–9 | Reconciliation onwards | not yet briefed | 💭 later | — |
+| 5v.1 | Visual layer — generated diagrams | [TASK-006](briefs/006-TASK-generated-diagrams.md) | 📋 `READY` — dispatched after ADR-0020 lands (A1) | — |
+| 5v.2 | Visual layer — `clofin-trace` replay walkthrough | [TASK-007](briefs/007-TASK-clofin-trace.md) | 📋 `READY`, **dispatch gated** on the TASK-006 decision point (A3) | — |
+| 6–9 | Reconciliation onwards | not yet briefed | 💭 later — starts ~3–4 weeks later than it otherwise would; see below | — |
 
 **Controls now enforced on `main`.** As of 2026-08-04 the increment-3/4 stack is
 merged (PR #4 `31306dd`, PR #5 `5ff00eb`): C-06 (idempotency), C-01 (segregation
@@ -45,21 +47,35 @@ never a production deployment or an external attestation. It follows a
 milestone once that milestone's audit findings are remediated and closed, and
 is gated by a whole-repo release audit
 ([AGENT_HANDOFF §1c](AGENT_HANDOFF.md); mechanics and charter in
-[audits/](audits/README.md)). **`ref-1` release candidate: `main` at `5d21334`** — its release audit ran
-**partial** (charter items 1–4 of 8; halted by external-model quota, closed
-under the resource-interruption fallback). 19 findings, 2 blocking, all
-triaged; the tag is gated on the remediation batch merging.
+[audits/](audits/README.md)).
 
 **[`ref-1` is released](https://github.com/EchoJustus/clofin-core/releases/tag/ref-1)**
-— tagged 2026-08-05 at `5c7b4ba`, the remediation descendant of the RC, as the
-release rules permit. Verified on the remote: `refs/tags/ref-1` →
-`5c7b4badced5e807e1022fce44cbcad38c6d2095`. Published as a **GitHub
-pre-release**, which is the accurate machine-readable signal for a reference
-implementation whose release audit was partial — and is now the convention for
-every `ref-<n>` (see the audits register). Its audit was **partial**: charter items 1–4 of 8
-were performed, 5–7 were not, and the tag annotation says so. All 19 findings
-were remediated before the tag. **Uncovered audit scope (items 5–7) carries
-forward as mandatory-first scope for `ref-2`.**
+— tagged 2026-08-05 at `5c7b4ba`, the remediation descendant of the RC
+(`5d21334`), as the release rules permit. Verified on the remote:
+`refs/tags/ref-1` → `5c7b4badced5e807e1022fce44cbcad38c6d2095`. Published as a
+**GitHub pre-release** — the accurate machine-readable signal for a
+synthetic-data reference implementation, and now the convention for every
+`ref-<n>`. **Its release audit was partial**: charter items 1–4 of 8 were
+performed, 5–7 were not, and the tag annotation says so. All 19 findings were
+remediated before the tag. **Uncovered audit scope (items 5–7) carries forward
+as mandatory-first scope for `ref-2`.**
+
+**Visual layer — and what it displaces.** `ADR-0020` *(lands on `main` first, per amendment A1; resolves here after the next sync)*
+adds generated diagrams ([TASK-006](briefs/006-TASK-generated-diagrams.md), in
+`clofin-core`) and **`clofin-trace`**, a published replay walkthrough
+([TASK-007](briefs/007-TASK-clofin-trace.md), a second repository). Driver D5 —
+"the system must be inspectable by non-engineers" — has been satisfied by
+versioned documents alone; documents make the system auditable, not visible.
+
+**Cost, stated rather than absorbed: ~3–4 weeks that do not go to increment 6.**
+Reconciliation is unchanged in content and position; it starts later by that
+amount. A delay discovered afterwards is worse than one stated in advance.
+
+**Increment 8 (operator console) does not move**, in `clofin-core`, for the
+reason this roadmap already gives. When it arrives it brings an npm toolchain
+into a repository with a stated minimal-dependency doctrine — that needs its own
+ADR at increment 8, qualifying ADR-0004 and NFR-007. Recorded now so it is not
+discovered late.
 
 ---
 

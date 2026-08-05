@@ -43,6 +43,8 @@ table and a brief disagree, the brief on `origin/meta` wins.
 | [003 — Authorisation, maker–checker and audit trail](003-TASK-authorisation-and-audit-trail.md) | 4 | `CLOSED` — merged in PR #5 (`5ff00eb`); FEEDBACK-M1 fully remediated & verified | 002 ✅ | PR-010…015, PR-070…075 | Large |
 | [004 — Settlement simulation](004-TASK-settlement-simulation.md) | 5 | `CLOSED` — merged in PR #7 (`cba31c5`); FEEDBACK-M2 remediation merged in PR #8 (`5d21334`) | 003 ✅, 005 ✅ merged | PRD §5.3 | Large |
 | [005 — Audit coverage completion](005-TASK-audit-coverage-completion.md) | 4 (completion) | `CLOSED` — merged in PR #6 (`2ba977e`); three objections ruled for the Worker | 003 ✅ merged | PR-072, C-05 | Small |
+| [006 — Generated diagrams and CI doc guards](006-TASK-generated-diagrams.md) | 5v.1 | `READY` — dispatch **after ADR-0020 lands** (A1) | ADR-0020 | D5, L-4, L-15 | Medium |
+| [007 — `clofin-trace` replay walkthrough](007-TASK-clofin-trace.md) | 5v.2 | `READY` — dispatch **gated on the TASK-006 decision point** (A3) | 006, ADR-0020 | D5, PR-015 | Large |
 
 Sequencing follows **product relevance and regulatory risk**, not implementation
 convenience:

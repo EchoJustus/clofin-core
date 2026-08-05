@@ -91,6 +91,68 @@ annotation always carries the release-audit coverage statement.
 (A2), provenance recording, and Master Control's independent reproduction
 duties are untouched. A partial audit still gates on its **blocking** findings.
 
+**2026-08-05 (second decision of that date) — The visual layer, a second
+repository, and where the audit's subject ends.** Ruled by the operator;
+proposed and evaluated by Master Control, with amendments A1–A7 and objections
+O-1…O-4 all adopted. Product structure is recorded in **ADR-0020 on `main`**
+(product-architecture decisions live beside ADR-0007, and `main` is the branch
+outside readers actually see); assurance scope is recorded here; cost is
+recorded in the ROADMAP.
+
+*The two repositories.* `clofin-core` owns the system, its controls, and the
+**capture harness** that produces fixtures — all truth. `clofin-trace` owns a
+published replay walkthrough — presentation only. It drives nothing and
+computes nothing. Two repositories, and no more: each is a governance surface
+with its own README, disclaimer, CI and place to drift, and the three views
+share one fixture set rather than being three products.
+
+*Three rules govern anything visual, in either repository* (stated in full in
+ADR-0020): **generate, never draw**; **replay, never fake**; and — added by
+Master Control at ruling, closing a gap the original decision did not see —
+**quote, never paraphrase**: any statement about what a control *does* is a
+verbatim quotation from `COMPLIANCE.md` or `DOMAIN_MODEL.md`, attributed and
+linked at the captured commit. Rules 1 and 2 govern diagrams and figures;
+without Rule 3 the narrative prose — the text most likely to be screenshotted,
+and read by more people than `COMPLIANCE.md` ever will be — was ungoverned.
+
+*Ordering, and why it is not arbitrary (amendments A1, A2, A3).* ADR-0020
+lands **before** TASK-006 is dispatched, because ADR-0001's own rule is that an
+ADR written afterwards is a justification rather than a decision, and 0020
+governs both briefs. `scripts/check-doc-consistency.sh` does **not** enter
+`verify` until the `meta` → `main` sync has landed — added first, its opening
+run would fail on the very staleness it exists to catch. And TASK-006 ends at a
+**decision point, not a slide**: Master Control reports elapsed versus
+estimate and recommends whether TASK-007 proceeds, waits, or narrows to one
+scenario. A phase boundary without a decision at it is just a boundary.
+
+*The overdue `meta` → `main` sync, ruled the same day.* `main` — the branch
+outsiders and the strategist's tooling actually read — carried a live
+contradiction: its ROADMAP said four controls were "designed, not built" and
+listed increments 3–4 as `READY` and 5–9 as unbriefed, while `COMPLIANCE.md` on
+the same branch showed all four controls ✅ and four of those increments were
+merged, audited and `CLOSED`. The §1b milestone sync runs **now**, as its own
+change, not bundled with the visualisation work and not deferred to `ref-2`: the
+contradiction is public today. `scripts/check-doc-consistency.sh` becomes the
+mechanical guard (TASK-006), and release-audit scope item 3 is widened to name
+ROADMAP-vs-COMPLIANCE explicitly. The cadence was not the fix — **the cadence had
+already failed**, twice through milestone audits and once through a release
+audit.
+
+*Scope of the accuracy survey that produced L-15 (amendment A5).* Master Control
+checked **three documents on `main`** — the ROADMAP's status table, its
+controls paragraph, and the briefs backlog — and found material understatement
+in all three and **no overstatement in those three**. That is the claim, and it
+is the whole claim: it is **not** a clean bill of health over `main`. The rest of
+the branch was not surveyed for either direction. A guarantee stated over a
+partial set is the class this project hunts, and the survey that hunts it is
+subject to the same rule.
+
+*Numbering.* ADR **0020** and briefs **006**/**007** are next-free verified
+against `origin/meta`. The decision as first drafted assumed ADR-0019 was free
+because `main`'s index appeared to end at 0018 — 0019 had in fact been consumed
+by the TASK-004 remediation. The claim that raised the numbering question was
+itself falsified by it, which is L-1 in one move.
+
 CloFin is developed asynchronously: worker sessions implement briefs
 continuously on stacked feature branches, while architecture review happens
 **offline, at milestones, over batches of one to two PRs** — rather than
@@ -103,7 +165,12 @@ durable.
 report and audit request for `TASK-NNN`, including any objections to the brief
 itself). `FEEDBACK` files are `FEEDBACK-NNN-<subject>.md`, matching the brief
 they review, or a milestone name for a broader batch audit
-(`FEEDBACK-M1-foundation.md`).
+(`FEEDBACK-M1-foundation.md`). A REQ reporting on a **release remediation**
+rather than a brief is keyed by tag, not by task number:
+`REL-<tag>-REQ-<subject>.md` — the task-keyed series belongs to briefs, and a
+release remediation occupying `NNN` would take a number a future brief owns
+(recorded 2026-08-05; `REL-ref-1-REQ-remediation.md` was renamed from
+`006-REQ-…` under this rule).
 
 **Worker objections to a brief** travel in the `REQ`, never as edits to the
 brief. Master Control arbitrates: correct the brief on `meta`, or answer the
@@ -195,6 +262,31 @@ Sol** from the standing [release-audit charter](RELEASE-AUDIT-CHARTER.md) —
 the first release audit runs from the written charter, not from anyone's
 memory.
 
+**What a release audit's subject is.** The subject is the **`clofin-core`
+release candidate** — that repository, at that commit. This is a definition of
+the subject, not an exception carved out of it: a guarantee stated over a
+partial set is the F-001/F-002 class this charter exists to hunt, and the
+charter must not itself contain one.
+
+`clofin-trace` (ADR-0020) is a separate repository that owns no truth. It
+computes nothing, drives nothing, and every figure it shows is captured output
+of a `clofin-core` commit it names on screen. It is therefore not a release
+candidate and never enters release-audit scope. Its own assurance is exactly
+two automated checks in its own CI — fixture provenance present, and the scope
+disclaimer rendered **verbatim** against the captured `GET /` response, so that
+softened wording fails rather than passes.
+
+**What *is* in scope, and is the reason the boundary holds:** the **capture
+harness** in `clofin-core` — `make capture-trace`, the fixtures it emits, and
+the test asserting it **cannot emit an unstamped fixture**. If the harness is
+sound, the walkthrough's honesty is inherited from an audited artifact; if it
+were not, this boundary would be a hole. A release audit checks the harness
+like any other enforcement point.
+
+*This amends the Release-audits section and the charter written 2026-08-04 —
+the boundary did not exist when they were written, because the second
+repository did not.*
+
 **Mandatory scope.** A release audit is whole-repo and must cover, at minimum:
 
 1. **Migrations replayed from an empty schema** to head, in order, recorded.
@@ -202,7 +294,12 @@ memory.
 3. **Cross-document consistency:** `COMPLIANCE.md` enforcement-point claims
    against the code and constraints named; `DOMAIN_MODEL.md` invariants
    against the constraints and tests said to enforce them; `api/openapi.yaml`
-   against the handlers via the contract test.
+   against the handlers via the contract test; and — added 2026-08-05 —
+   **`ROADMAP.md` against `COMPLIANCE.md`**: the control statuses and the
+   "still unenforced" list must agree, and no increment the ROADMAP shows as
+   not-started may have a `CLOSED` brief. That pairing was outside every
+   earlier reading of this item, which is how a live contradiction survived two
+   milestone audits and a release audit on the public branch.
 4. **The partial-set sweep** — the F-001/F-002/L-6 class. Any guarantee stated
    over an enumerable set (SQL verbs, enum values, audit actions, roles,
    permissions) is checked across **every** instance, not the one its author
@@ -345,17 +442,18 @@ names the brief section that now guards against it, so the guard can be checked.
 | L-1 | A brief pre-assigns a sequence number owned by another artifact series without checking the live sequence (TASK-002's DoD named UAT-003, which TASK-001 had already consumed; TASK-003 renumbered its migration and *still* hard-coded UAT-004; TASK-005's DoD said the REQ takes the "next available" number, 004, which belongs to the in-flight TASK-004 — 005-REQ O-2). | Brief authoring: never hard-code a number from any sequentially-numbered series, and **name the series' numbering discipline explicitly, because it differs** — the **audits `REQ` series is task-keyed** (`NNN-REQ` reports on `TASK-NNN`), while migrations, UAT scripts and ADRs are **next-available** against the live tree (including unmerged branches in the stack). Saying "next available" for the task-keyed REQ series is itself the bug. |
 | L-2 | Specifying replay protection as a digest of "the request body" alone scopes the guarantee too narrowly: identical bodies on different endpoints or resources collide, and a replayed response silently substitutes for work never done. Canonical digests include method and path. | Brief 002's idempotency section, as amended by ruling O-3. Any future brief specifying idempotency copies that wording. |
 | L-3 | A brief ships DDL that its target engine cannot honour as written: TASK-003 declared a nullable column inside a primary key, which PostgreSQL silently forces `NOT NULL`, making the brief's own documented null-currency row uninsertable (003-REQ O-1; corrected by ruling — `unique nulls not distinct`, migration `0006`). | Brief authoring: **execute every specified migration against a live PostgreSQL of the target version before dispatch**, and insert one row of every documented shape — a comment describing data the schema cannot hold is a defect the Worker inherits. |
-| L-4 | A brief's acceptance criterion demands behaviour unreachable under an interface — or forbidden by a constraint — the same author specified elsewhere in the brief: TASK-003's AC-7 required amending an `approved` instruction the lifecycle table did not allow (003-REQ O-2); TASK-005's AC-1 required an OpenAPI description change its own DoD's "no OpenAPI changes" line forbade (005-REQ O-1); TASK-004's scope and vocabulary required a `failed` item outcome and `payment.failed` its own validated DDL had no column and no driver for (004-REQ O-1). | Brief authoring: cross-check every AC, scope item and vocabulary term against the state tables, diagrams, interfaces, **the migration DDL, and the brief's own Definition-of-Done checklist** — each is an interface a requirement can contradict. Do this before dispatch. A Worker who finds such a contradiction files it as an objection for arbitration; it is never resolved silently in either direction. |
+| L-4 | A brief's acceptance criterion demands behaviour unreachable under an interface — or forbidden by a constraint — the same author specified elsewhere in the brief: TASK-003's AC-7 required amending an `approved` instruction the lifecycle table did not allow (003-REQ O-2); TASK-005's AC-1 required an OpenAPI description change its own DoD's "no OpenAPI changes" line forbade (005-REQ O-1); TASK-004's scope and vocabulary required a `failed` item outcome and `payment.failed` its own validated DDL had no column and no driver for (004-REQ O-1). | Brief authoring: cross-check every AC, scope item and vocabulary term against the state tables, diagrams, interfaces, **the migration DDL, and the brief's own Definition-of-Done checklist** — each is an interface a requirement can contradict. Do this before dispatch. A Worker who finds such a contradiction files it as an objection for arbitration; it is never resolved silently in either direction. **Partially mechanised 2026-08-05:** TASK-006's generated diagrams close the **diagram-vs-table** half — a drawing produced from `clofin.payments.state/transitions` and checked in CI cannot contradict the table. The **prose-vs-table** half, which is what actually caused this lesson's incident (AC-7 against the lifecycle table), remains a human check. The lesson is narrowed, **not closed**; a lesson marked closed stops being checked. |
 | L-5 | Append-only enforcement was specified and tested against `UPDATE` and `DELETE` only; `TRUNCATE` — a distinct verb with its own trigger event and privilege — physically emptied the audit table past every guard (FEEDBACK-M1 F-002, reproduced empirically by Master Control). | Any brief claiming a table is append-only enumerates the engine's **full** destructive verb set — `UPDATE`, `DELETE`, `TRUNCATE` — with a trigger per verb and a raw-SQL test per verb; and states plainly that triggers do not bind a schema-owner adversary, so the runtime role split (app role ≠ owner, `TRUNCATE`/DDL revoked — foreshadowed in migration 0002's own comment) is named debt until built. |
 | L-6 | A control rested on an invariant enforced nowhere, **or enforced only in part**. Two instances: C-01's `evaluate` compared only `created-by`, justified by a docstring claim with nothing behind it (FEEDBACK-M1 F-001); and TASK-005's enum-drift guard — the one Master Control *praised* as the remedy for exactly this — asserted `AuditEvent.subjectType` while a second copy in `EvidencePack.subjectType` silently went stale, so the guard passed green while the contract was false (005 tail; fixed in PR #7 `b21d4c1`, verified by Master Control). | Every premise a control relies on is traced to its own enforcement point — code, constraint, or test — and **a partial enforcement point is a false one**: a guard over "the copy the author was looking at" is the defect it exists to catch. Enforce over *all* instances discovered, not a named one (the fixed guard now finds every `subjectType` enum in the spec rather than naming one). |
+| L-7 | An audit action named after a state transition was emitted for a decision that did not cause one: the first of two required approvals wrote `payment.approved` while the payment stayed `pending-approval`, so evidence filtered by action misstates when the state was reached (FEEDBACK-M1 F-005; F-006 is the mirror — a real approval state change, invalidation, emitted no approval-subject event at all). | Audit vocabulary design: an action named `<subject>.<transition>` is emitted **only** in the transaction where that transition commits; decisions, partial progress and side effects get their own terms. Applies immediately to TASK-004's settlement vocabulary (batch outcomes vs item outcomes) and every vocabulary extension after it. |
+| L-8 | A validation that gates a write read its facts without locking them: `assert-postable!` checked account status without `FOR UPDATE` under `READ COMMITTED`, so a freeze could commit between the check and the posting — validate-then-write is a race unless the validated rows are locked (FEEDBACK-M1 F-004). | Any brief specifying a precondition that database state must satisfy at write time also specifies the lock: referenced rows locked `FOR UPDATE` in a stable order inside the writing transaction, and a race test (latch-based, two sessions) asserting the serialisation outcome. |
 | L-9 | **Master Control's own conduct.** PR #6 (TASK-005) was merged while the authoring Worker's declared adversarial review was still running — the completion report said so in plain words and warned it might surface fixes. It did: a real false-contract defect, whose fix then could not land because the branch had already merged, leaving `main` wrong for a full increment and dumping the cleanup into the next task. | Master Control does not merge a PR while the authoring Worker has a **declared verification still in flight**. A completion report that says "a review is still running / I'll push a fix if it finds something" is a hold, not a footnote — wait for the Worker's explicit "review complete, clean," or merge only after confirming no such review was outstanding. Speed of merge is never worth shipping a defect the author was actively about to catch. |
 | L-10 | A schema path is not a product path: TASK-004's AC-7 was "proved" by a raw-SQL insert the database permitted, while no public workflow could reach it — the lifecycle held `:returned` terminal and batch eligibility was `approved`-only, so the acceptance criterion was false end to end (FEEDBACK-M2 F-007, verified by Master Control). | When a control or AC promises an operation, test it from the **public command** through lifecycle, persistence, posting and audit. A raw-SQL constraint test proves what the database permits, never what the application can reach. Brief authoring: an AC that names an outcome names the route to it. |
 | L-11 | A durable receipt was destroyed by its own processing failure: a rejected scheme response was rolled back with the conflict that rejected it, so the first delivery was unprovable and the same reference later performed work (FEEDBACK-M2 F-008). | Receipt and disposition are separate facts. If a table is evidence that something arrived, a processing conflict commits the receipt **with** a machine-readable disposition and renders its error after commit; replay reproduces the original disposition. An error thrown from the transaction that appended the receipt destroys the evidence the table exists to retain. |
 | L-12 | A replay key excluded fields that decide the state transition: two contradictory `timeout-resolution` outcomes shared one identity, and the duplicate answer carried no outcome at all (FEEDBACK-M2 F-009). Extends L-2. | Replay identity covers **every effect-bearing field**: canonicalise the complete semantic request, retain its digest and the original response, return that response for exact duplicates, and `409` a same-key/different-digest arrival. Any future brief specifying replay or idempotency copies this wording alongside L-2's. |
 | L-13 | A load-bearing precondition was documentation, not enforcement: services named their parameter `tx` and documented a caller-owned transaction, but accepted a pool — and a direct call committed an aggregate write with no audit event, the exact state C-05 calls unrepresentable (FEEDBACK-M2 F-011). Extends L-6. | A service whose control claim depends on joining an existing transaction **rejects a pool or autocommit connection before its first write** — an assertion at entry, plus direct-pool and autocommit negative tests for every audit-composing service. A parameter name, a docstring and a dependency-purity test make misuse visible in review; only the runtime check makes it fail closed. |
 | L-14 | A control statement used a universal quantifier its enforcement point did not cover. The `ref-1` audit found this as the dominant class — nine instances at once, including "every mutating operation requires an `Idempotency-Key`" (four handler families do not), "sensitive values never reach a log" (defect logging deliberately logs throwables in full, as C-11 states), "the schema of any environment is tamper-evident" (only the migration *history* is), and "every third-party component in the runtime path is known" (only direct dependencies are). Each was individually defensible prose and collectively a compliance document that overstated the system. | **Every "every", "never", "no" and "any" in a control statement names its set and its boundary.** When writing or reviewing COMPLIANCE, DOMAIN_MODEL or an ADR: identify the quantified set, find the enforcement point, and check the enforcement covers the whole set — if it does not, either narrow the sentence to what is enforced or name the exception in the same sentence. A statement whose scope is discovered by an auditor rather than declared by its author is the failure this project exists to avoid: its entire claim is that its statements are checkable. |
-| L-7 | An audit action named after a state transition was emitted for a decision that did not cause one: the first of two required approvals wrote `payment.approved` while the payment stayed `pending-approval`, so evidence filtered by action misstates when the state was reached (FEEDBACK-M1 F-005; F-006 is the mirror — a real approval state change, invalidation, emitted no approval-subject event at all). | Audit vocabulary design: an action named `<subject>.<transition>` is emitted **only** in the transaction where that transition commits; decisions, partial progress and side effects get their own terms. Applies immediately to TASK-004's settlement vocabulary (batch outcomes vs item outcomes) and every vocabulary extension after it. |
-| L-8 | A validation that gates a write read its facts without locking them: `assert-postable!` checked account status without `FOR UPDATE` under `READ COMMITTED`, so a freeze could commit between the check and the posting — validate-then-write is a race unless the validated rows are locked (FEEDBACK-M1 F-004). | Any brief specifying a precondition that database state must satisfy at write time also specifies the lock: referenced rows locked `FOR UPDATE` in a stable order inside the writing transaction, and a race test (latch-based, two sessions) asserting the serialisation outcome. |
+| L-15 | **Accuracy is bidirectional, and only one direction gets checked.** On 2026-08-05 `main` — the branch outsiders read — showed increments 3 and 4 as `READY`/blocked and 5–9 as "not yet briefed" while all four were merged, audited and `CLOSED`; its "controls still unenforced" paragraph named four controls that `COMPLIANCE.md` on the same branch showed ✅ enforced; and `README.md` pointed readers to that ROADMAP as the authority for what is built. Every guard, every review posture and every instinct in this project points at **over**statement. This was a material **under**statement — a reader concluded two increments existed where six did — and it survived two milestone audits and a release audit. | A stale document understating what exists is as false as one overstating it, and is *less* likely to be caught because nobody is looking. Guarded mechanically from 2026-08-05 by `scripts/check-doc-consistency.sh` in `verify` (COMPLIANCE control statuses vs the ROADMAP's unenforced list; no not-started increment with a `CLOSED` brief), and by release-audit scope item 3, widened to name ROADMAP-vs-COMPLIANCE explicitly. The cadence was not the fix: the cadence had already failed. |
 
 Until an audit populates this table, the standing constraints are the ones in
 [`../AGENT_HANDOFF.md`](../AGENT_HANDOFF.md) §3 — the rules that must not be

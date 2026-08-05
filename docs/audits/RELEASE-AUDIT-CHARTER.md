@@ -66,7 +66,13 @@ did not report — the false negatives. A findings spike is the design working.
 2. Audit target: the release candidate, `main` at **{{RC_SHA}}** — check out
    that SHA and verify it before reading anything else. Control-plane truth
    (briefs, audit register, standing lessons) is read from `origin/meta` at
-   **{{META_SHA}}** via `git show`.
+   **{{META_SHA}}** via `git show`. **The subject is the `clofin-core` release
+   candidate and nothing else.** `clofin-trace` is a separate repository that
+   owns no truth and is never in scope (ADR-0020). What *is* in scope, and is
+   the reason that boundary holds, is the **capture harness** in this
+   repository — `make capture-trace`, its fixtures, and the test asserting it
+   cannot emit an unstamped fixture. Audit it like any other enforcement
+   point.
 3. Synthetic data only. CloFin never handles real funds, never connects to any
    bank, payment scheme or central bank, holds no regulatory approval, and
    this audit is an internal quality gate — not an attestation. Preserve that
@@ -83,8 +89,12 @@ did not report — the false negatives. A findings spike is the design working.
 3. **Cross-document consistency.** COMPLIANCE.md enforcement-point claims vs
    the code and constraints they name; DOMAIN_MODEL.md invariants vs the
    constraints and tests said to enforce them; api/openapi.yaml vs the
-   handlers via the contract test. A claim without a live enforcement point is
-   a finding.
+   handlers via the contract test; **and ROADMAP.md vs COMPLIANCE.md** — the
+   control statuses and the "still unenforced" list must agree, and no
+   increment the ROADMAP shows as not-started may have a `CLOSED` brief. A
+   claim without a live enforcement point is a finding, **and so is a document
+   that understates what exists** (lesson L-15): accuracy is bidirectional and
+   only one direction is instinctively checked.
 4. **The partial-set sweep** (the F-001/F-002/L-6 class). Every guarantee
    stated over an enumerable set — SQL destructive verbs, enum values, audit
    actions, subject types, roles, permissions, refusal reasons — is checked
@@ -140,3 +150,7 @@ that date; amended 2026-08-05 with the multi-session protocol, the
 workpaper-is-memory discipline and upfront scope selection, after the `ref-1`
 audit was halted mid-flight ([`README.md`](README.md) → *Assurance-chain
 decisions*).
+
+*Amended again 2026-08-05 (second decision of that date): the audit's
+subject is defined as the `clofin-core` release candidate with the capture
+harness explicitly in scope, and item 3 now names ROADMAP-vs-COMPLIANCE.*

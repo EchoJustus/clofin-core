@@ -1,4 +1,14 @@
-# 006-REQ — `ref-1` release-audit remediation (A-001…A-019)
+# REL-ref-1-REQ — release-audit remediation (A-001…A-019)
+
+> **Renamed 2026-08-05** from `006-REQ-ref-1-remediation.md`. The REQ series is
+> **task-keyed** (`NNN-REQ` reports on `TASK-NNN`), and this file reports on a
+> *release remediation*, not `TASK-006` — so it was occupying a number a future
+> brief owns. Release-remediation REQs are keyed by tag: `REL-<tag>-REQ-…`.
+> **The published `ref-1` tag is immutable and contains this file under its
+> former name** — a reader of that tree will find `006-REQ-ref-1-remediation.md`
+> and should read it as this file. No artifact referenced the old name, so
+> nothing dangles.
+
 
 | Field | Value |
 |---|---|
