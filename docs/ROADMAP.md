@@ -1,6 +1,6 @@
 # CloFin — Roadmap
 
-**Status:** living document · **Last reviewed:** 2026-08-02
+**Status:** living document · **Last reviewed:** 2026-08-03
 
 Increments are sequenced by **product relevance and regulatory risk**, not by
 implementation convenience. Each increment leaves `main` runnable, migrated,
@@ -18,16 +18,64 @@ and this table is stale.
 |---|---|---|---|---|
 | 1 | Foundation and ledger core | — (predates the brief protocol) | ✅ done — merged to `main` at `3bde834` (PR #1; milestone audit waived, see audits register) | green, 303 assertions |
 | 2 | Ledger persistence and account API | [TASK-001](briefs/001-TASK-ledger-persistence-and-account-api.md) | ✅ `IMPLEMENTED` — merged to `main` in PR #2 (`f7018a1`); `FEEDBACK-001` outstanding | green, 757 assertions |
-| 3 | Payment lifecycle and idempotency | [TASK-002](briefs/002-TASK-payment-instruction-lifecycle.md) | 📋 `READY` — dependency merged; branch from `main` | — |
-| 4 | Authorisation, maker–checker, audit | [TASK-003](briefs/003-TASK-authorisation-and-audit-trail.md) | 📋 `READY`, blocked on 002 | — |
-| 5–9 | Settlement onwards | not yet briefed | 💭 later | — |
+| 3 | Payment lifecycle and idempotency | [TASK-002](briefs/002-TASK-payment-instruction-lifecycle.md) | ✅ `CLOSED` — merged to `main` in PR #4 (`31306dd`); audited in FEEDBACK-M1, no new findings | green, 1547+ assertions |
+| 4 | Authorisation, maker–checker, audit | [TASK-003](briefs/003-TASK-authorisation-and-audit-trail.md) | ✅ `CLOSED` — merged to `main` in PR #5 (`5ff00eb`); FEEDBACK-M1 fully remediated & verified (migrations `0007`/`0008`) | green, 2515 assertions |
+| 4c | Audit coverage completion (C-05 unqualified) | [TASK-005](briefs/005-TASK-audit-coverage-completion.md) | ✅ `CLOSED` — merged to `main` in PR #6 (`2ba977e`) | green, 2747 assertions |
+| 5 | Settlement simulation | [TASK-004](briefs/004-TASK-settlement-simulation.md) | ✅ `CLOSED` — PR #7 (`cba31c5`) + FEEDBACK-M2 remediation PR #8 (`5d21334`; migration `0010`, ADR-0019) | green, 584 tests / 3638 assertions |
+| 5v.1 | Visual layer — generated diagrams | [TASK-006](briefs/006-TASK-generated-diagrams.md) | 📋 `READY` — dispatched after ADR-0020 lands (A1) | — |
+| 5v.2 | Visual layer — `clofin-trace` replay walkthrough | [TASK-007](briefs/007-TASK-clofin-trace.md) | 📋 `READY`, **dispatch gated** on the TASK-006 decision point (A3) | — |
+| 6–9 | Reconciliation onwards | not yet briefed | 💭 later — starts ~3–4 weeks later than it otherwise would; see below | — |
 
-**Controls still unenforced.** Four entries in
-[`COMPLIANCE.md`](COMPLIANCE.md) are 📋 *designed, not built* — C-01, C-02,
-C-05 and C-06. TASK-002 delivers C-06; TASK-003 delivers the other three. Until
-then, the honest statement is that CloFin **specifies** maker–checker and
-idempotency and **does not yet implement them**. Do not describe them otherwise
-in a README, a PR description or a conversation.
+**Controls now enforced on `main`.** As of 2026-08-04 the increment-3/4 stack is
+merged (PR #4 `31306dd`, PR #5 `5ff00eb`): C-06 (idempotency), C-01 (segregation
+of duties), C-02 (dual authorisation), C-05 (attributable audit trail) and C-08
+(least privilege) are enforced on `main`, and the Milestone 1 audit's two
+blocking and four should-fix findings are all remediated and verified there.
+**C-05 is unqualified on `main`** as of PR #6 (`2ba977e`): every API write —
+payments, approvals, organisations, accounts, journal entries — leaves exactly
+one audit event in the transaction carrying the change, with the bootstrap
+identity enforced per ADR-0017. **One honesty caveat stands:** the append-only
+guarantee binds the application but **not** a schema-owner adversary — the
+runtime role split is named debt in COMPLIANCE §4, earmarked for the
+operational-hardening brief alongside tools.build. C-07 (screening) remains 📋.
+Do not describe any of this more generously in a
+README, a PR description or a conversation.
+
+**Releases.** A release is a tagged, whole-repo-audited snapshot (`ref-<n>`) —
+an internal quality milestone on a synthetic-data reference implementation,
+never a production deployment or an external attestation. It follows a
+milestone once that milestone's audit findings are remediated and closed, and
+is gated by a whole-repo release audit
+([AGENT_HANDOFF §1c](AGENT_HANDOFF.md); mechanics and charter in
+[audits/](audits/README.md)).
+
+**[`ref-1` is released](https://github.com/EchoJustus/clofin-core/releases/tag/ref-1)**
+— tagged 2026-08-05 at `5c7b4ba`, the remediation descendant of the RC
+(`5d21334`), as the release rules permit. Verified on the remote:
+`refs/tags/ref-1` → `5c7b4badced5e807e1022fce44cbcad38c6d2095`. Published as a
+**GitHub pre-release** — the accurate machine-readable signal for a
+synthetic-data reference implementation, and now the convention for every
+`ref-<n>`. **Its release audit was partial**: charter items 1–4 of 8 were
+performed, 5–7 were not, and the tag annotation says so. All 19 findings were
+remediated before the tag. **Uncovered audit scope (items 5–7) carries forward
+as mandatory-first scope for `ref-2`.**
+
+**Visual layer — and what it displaces.** `ADR-0020` *(lands on `main` first, per amendment A1; resolves here after the next sync)*
+adds generated diagrams ([TASK-006](briefs/006-TASK-generated-diagrams.md), in
+`clofin-core`) and **`clofin-trace`**, a published replay walkthrough
+([TASK-007](briefs/007-TASK-clofin-trace.md), a second repository). Driver D5 —
+"the system must be inspectable by non-engineers" — has been satisfied by
+versioned documents alone; documents make the system auditable, not visible.
+
+**Cost, stated rather than absorbed: ~3–4 weeks that do not go to increment 6.**
+Reconciliation is unchanged in content and position; it starts later by that
+amount. A delay discovered afterwards is worse than one stated in advance.
+
+**Increment 8 (operator console) does not move**, in `clofin-core`, for the
+reason this roadmap already gives. When it arrives it brings an npm toolchain
+into a repository with a stated minimal-dependency doctrine — that needs its own
+ADR at increment 8, qualifying ADR-0004 and NFR-007. Recorded now so it is not
+discovered late.
 
 ---
 
@@ -83,7 +131,17 @@ to rediscover them:
 
 ## Increment 3 — Payment instruction lifecycle 📋
 
-**Brief:** [TASK-002](briefs/002-TASK-payment-instruction-lifecycle.md) · **Status:** `READY` — stack on `claude/ledger-persistence-account-api-p5oi05` (PR #2)
+**Brief:** [TASK-002](briefs/002-TASK-payment-instruction-lifecycle.md) · **Status:** `IMPLEMENTED` — PR #4 open and green; O-3 digest-scope fix applied (`f529663`, migration `0004`)
+
+**Carried forward, deliberately** (from [002-REQ](audits/002-REQ-payment-instruction-lifecycle.md) §6):
+
+- **PR-005 batch submission** is deferred — single-instruction submission only (O-6).
+- **PR-044 partial-reversal accumulation** is not implemented; an instruction can
+  be reversed more than once, unlike a journal entry (I4 has no instruction-level
+  counterpart yet).
+- **No indexes on `payment_instruction`** — the measure-before-optimising posture,
+  but a real gap at volume.
+- `transactionally` exists in two namespaces; a two-line delegation closes it.
 
 *Why next: the lifecycle is the spine every control attaches to.*
 
@@ -94,25 +152,46 @@ to rediscover them:
 - **Risk addressed:** duplicate payments from retries — the failure with the
   most direct financial consequence.
 
-## Increment 4 — Authorisation, maker–checker and audit 📋
+## Increment 4 — Authorisation, maker–checker and audit 🔨
 
-**Brief:** [TASK-003](briefs/003-TASK-authorisation-and-audit-trail.md) · **Status:** `READY`, blocked on TASK-002
+**Brief:** [TASK-003](briefs/003-TASK-authorisation-and-audit-trail.md) · **Status:** `IMPLEMENTED` — PR #5 open and green at `6f58857`, stacked on PR #4; four objections ruled and actioned, O-1 fixed by migration `0006`
 
 *Why next: this is the control an auditor asks about first.*
 
-- Roles, permissions, and per-organisation approval threshold tables
-- Segregation of duties as a domain rule: maker ≠ checker, enforced in code
-- Approval invalidation on amendment
-- Append-only audit trail, written in the same transaction as the change
-- Evidence extraction for a nominated payment
+- ✅ Roles, permissions, and per-organisation approval threshold tables — default
+  deny, no superuser, both build-enforced
+- ✅ Segregation of duties as a pure domain rule (`clofin.authz.approval/evaluate`),
+  tested with no HTTP anywhere in the file
+- ✅ Approval invalidation on amendment; approvals invalidated, never deleted
+- ✅ Append-only audit trail written in the same transaction as the change —
+  `record!` takes a transaction and cannot open one
+- ✅ Evidence extraction for a nominated payment; digests, not payloads (ADR-0016)
 - **Risk addressed:** unauthorised or unattributable movement of money.
 
-## Increment 5 — Settlement simulation 💭
+**Carried forward, deliberately** (from [003-REQ](audits/003-REQ-authorisation-and-audit-trail.md) §6):
+
+- **Ledger and organisation writes emit no audit events** — C-05's scope
+  paragraph names the gap; **briefed as
+  [TASK-005](briefs/005-TASK-audit-coverage-completion.md)**, dispatched 2026-08-04.
+- **The approver's limit at decision time is not retained** (O-4): two capture
+  columns on `approval` belong in a future brief.
+- **Authentication does not resist an adversary** — `X-Actor-Id` names a seeded
+  actor; the authorisation model is real, the authentication in front of it is
+  scaffolding, and every relevant doc says so.
+- **No actor administration API** — deliberate; self-granted roles would make
+  C-01 unenforceable.
+
+## Increment 5 — Settlement simulation 📋
+
+**Brief:** [TASK-004](briefs/004-TASK-settlement-simulation.md) · **Status:** `READY` — stacks on TASK-003's branch; migration DDL pre-validated against a live PostgreSQL 16 (lesson L-3)
 
 - Batch construction by scheme, currency and value date
 - Simulated scheme adapter behind a protocol, with partial-failure outcomes
 - Settlement finality posting; returns raising exception cases
 - Timeout, duplicate and out-of-order response handling
+- **Risk addressed:** money moving twice — duplicate scheme responses,
+  re-batched unknowns, and out-of-order deliveries are the increment's core,
+  not its edge cases.
 
 ## Increment 6 — Reconciliation 💭
 
@@ -148,6 +227,8 @@ to rediscover them:
 | Event bus / service extraction | No driver. See [ADR-0007](ADR/0007-modular-monolith-over-microservices.md). |
 | Authentication provider integration | The permission model is the interesting part; OIDC wiring is not. |
 | Multi-region and DR | Meaningless without real institutional connectivity. |
+| Linked-retry provenance for returned payments | FEEDBACK-M2 F-007 ruling: a returned instruction is terminal and a retry is a **new** instruction — already possible via capture today. The linkage (`retries_id`-style provenance and the exception workflow around it) belongs to increment 6 (reconciliation), where return-exception handling natively lives. |
+| Audit logging of *refused* control attempts | FEEDBACK-M1 surfaced that a refused submission/approval leaves no audit event (audit writes sit inside the successful effect). C-05 scopes the trail to state *changes*, so this is new scope — a distinct security-event control with its own volume and retention, briefed separately when prioritised. Distinct from TASK-005, which covers *successful* writes that currently go unaudited. |
 
 ## How to pick up the next task
 

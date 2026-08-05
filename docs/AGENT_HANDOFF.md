@@ -49,15 +49,16 @@ CloFin runs **asynchronously**. Three roles, none of which blocks the others:
 |---|---|
 | **Master Control** (orchestrator) | Owns the **control plane**: writes briefs in batches ahead of execution on the `meta` branch, maintains `ROADMAP.md` and brief status there, ingests audit feedback, arbitrates disputes about a brief. |
 | **Worker session** | Owns one unit of the **data plane**: executes one brief end to end — code, tests, contract, code-adjacent docs — on its own `feat/` branch. Never writes to `meta`. |
-| **Principal Architect** (offline) | Audits batches of PRs at milestones and produces `FEEDBACK` files, which land on `meta`. Reviews do **not** gate execution. |
+| **Principal Architect** (offline, external) | Audits batches of PRs at milestones and produces `FEEDBACK` files. The auditor is an **external agent with read-only access to the repository** — it never commits, pushes, or opens PRs; `FEEDBACK` lands on `meta` only through Master Control's ingestion. Reviews do **not** gate execution. Two delivery paths coexist: **(a) the CodeSpace path** — the audit runs in a GitHub Codespace against a read-only clone, and the operator manually ferries the deliverable into the shared Dropbox bridge at `clofin-core/audit/inbox/` and notifies Master Control in-session (no polling: Codespace artefacts do not auto-sync, so the notification *is* the trigger); **(b) the local path** — the audit runs on the operator's machine per the prompts in `clofin-core/prompts/`, writing the deliverable to the same inbox. Either way the full audit chat transcript is archived under `clofin-core/audit/chats/` (named `YYYYMMDD-NN-<subject>`) for traceability, and the storage rules in the bridge's `storage_governance.md` apply — official artefacts live in git, the bridge is transit and workpapers only. **Resourcing (2026-08-04).** Continuous PR-batch reviews are performed by GPT-5.6 Terra at maximum reasoning effort; a whole-repo **release audit** by GPT-5.6 Sol gates each release tag (§1c and [`audits/README.md`](audits/README.md) → *Release audits*). Standards, taxonomy and formats are identical across tiers — only the resource differs, and every artifact records which one produced it. |
 
 Two consequences worth stating explicitly:
 
 1. **Planning never waits on execution.** Briefs are written ahead, in batches
    of one to five, including for work that is blocked on a dependency. A
    blocked brief names what it is blocked on and is otherwise complete.
-2. **Execution never waits on review.** PRs are batched for asynchronous audit
-   — one to five may be open and unmerged at once. A worker session takes a
+2. **Execution never waits on review.** PRs are batched for asynchronous
+   audit — review batches are **one to two PRs** (assurance-chain decision of
+   2026-08-04), and several may be open and unmerged at once. A worker session takes a
    `READY` brief whose dependencies are met and proceeds, stacking on the
    dependency's branch where necessary (§1b). Audit findings arrive later and
    are ingested per [`audits/README.md`](audits/README.md); an `IMPLEMENTED`
@@ -74,6 +75,19 @@ opened, `REQ` filed), and Master Control moves the brief to `IMPLEMENTED` on
 `meta`. If the brief on `origin/meta` and this table disagree about anything,
 `origin/meta` wins.
 
+**Merge precondition — no merge while a Worker's verification is in flight
+(lesson L-9, mandatory).** Master Control never merges a PR while its authoring
+Worker has a **declared verification still running** — a self-review, an
+adversarial pass, a long test run, anything the completion report says may yet
+surface a fix. Such a statement is a **hold**, not a footnote: the PR waits for
+the Worker's explicit "verification complete, clean" (or a pushed fix followed
+by that signal), and a completion report that is silent on the matter is
+confirmed before merging, not assumed clean. The rule exists because it was
+broken once: PR #6 was merged ten minutes before its Worker's declared review
+surfaced a real false-contract defect, whose fix then could not land and had to
+be carried by the next increment. `IMPLEMENTED` status is unaffected — only the
+merge waits.
+
 ---
 
 ## 1b. Branch topology: control plane and data plane
@@ -84,7 +98,7 @@ Three kinds of branch, with different rules:
 |---|---|---|---|
 | `meta` | Control | **Master Control only** | Briefs, audits (`REQ`/`FEEDBACK` after ingestion), `ROADMAP.md`, this document |
 | `feat/*` | Data | One Worker each | Code, tests, migrations, code-adjacent docs (ADRs, OpenAPI) for one brief |
-| `main` | Release | Merges only | Whatever has survived review. Always runnable, migrated, green. |
+| `main` | Release | Merges only | Whatever has survived review. Always runnable, migrated, green. A release tag (`ref-<n>`) marks a `main` SHA that has passed a whole-repo release audit — see §1c. |
 
 `meta` never carries code and is never a base for a `feat/` branch. It is
 periodically merged to `main` at milestones so `main`'s copy of the governance
@@ -150,6 +164,35 @@ Master Control arbitrates:
 The Worker never waits silently on a disputed brief, and never resolves the
 dispute unilaterally by diverging from it. Diverging from a brief without a
 ruling is a failed handover even when the divergence was right.
+
+---
+
+## 1c. The release audit gate
+
+PR-batch reviews do not gate execution (§1a). **A release audit does** — it is
+the one exception, and the only place in this project where work waits on
+assurance.
+
+A **release** is a tagged (`ref-<n>`), whole-repo-audited snapshot of a
+reference implementation running synthetic data: a citable state, never a
+production deployment or an attestation. It follows a milestone once that
+milestone's findings are remediated and closed.
+
+The mechanics — release candidate, mandatory audit scope, blocking/should-fix
+gating, remediation routing, first-run expectations — live in
+[`audits/README.md`](audits/README.md) → *Release audits*, and the audit runs
+from the standing [release-audit charter](audits/RELEASE-AUDIT-CHARTER.md).
+Two rules matter enough to restate here:
+
+1. **Blocking findings clear before the tag.** Code findings are remediated
+   and re-verified on the normal data-plane path — brief, Worker, PR,
+   reproduction, the L-9 merge precondition intact; there is no
+   direct-to-`main` fix to make a gate. Doc-only findings on meta-owned
+   documents are corrected on `meta` by Master Control with a recorded
+   disposition, per the existing ingestion rule (amendment A2).
+2. **The gate does not soften anything upstream.** Master Control's
+   independent reproduction and triage are unchanged. A net downstream is not
+   a reason to review less carefully upstream.
 
 ---
 
