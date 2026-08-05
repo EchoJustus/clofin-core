@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | **Increment** | 5 |
-| **Status** | `IN PROGRESS` — **reopened 2026-08-04 by [FEEDBACK-M2](../audits/FEEDBACK-M2-settlement-and-audit-coverage.md)** (verdict REMEDIATION-REQUIRED: F-007 blocking, F-008/F-009/F-010 should-fix). Was `CLOSED` — merged in PR #7 (`cba31c5`). Remediation runs on a fresh branch off `main`, migration `0010`; rulings in the FEEDBACK-M2 changelog below |
+| **Status** | `IMPLEMENTED` — FEEDBACK-M2 remediation batch complete and **verified by Master Control** (`fa31eb7`, PR #8 open and green, migration `0010`, ADR-0019); nothing in flight per L-9. Pending merge, then `CLOSED`. Was reopened 2026-08-04 by FEEDBACK-M2 from `CLOSED` (PR #7 `cba31c5`) |
 | **Depends on** | TASK-003 — settlement drives the `release` arrow the authorisation increment left in the table |
 | **Base branch** | `main` at `2ba977e` — TASK-003 **and TASK-005 are both merged**, so this is an ordinary branch off `main` with the PR against `main`. The `clofin.audit/actions` coordination this brief anticipated is resolved: TASK-005 landed first; you extend the literal (and its OpenAPI enum twin — see In-scope item 9) in place |
 | **Blocks** | Increment 6 (reconciliation) |
@@ -334,3 +334,22 @@ never re-used), migration `0010`.
 | **F-010** — loss of the scheme-response UPDATE/DELETE guard is not test-detectable | **Confirmed — actioned (L-5/L-6 reinforcement, no new lesson).** `scheme_response` joins the raw-SQL table × verb matrix with a committed row; a one-time negative control proves removing either trigger fails the suite. |
 | *(from TASK-005's verdict)* **F-011** — audited services accept a pool; the transaction precondition is documentation, not enforcement | **Confirmed — actioned here (new lesson L-13, extending L-6)** because the fix spans every audit-composing service, settlement included: a fail-closed assertion at service entry accepting only a non-autocommit transaction, plus direct-pool and autocommit negative tests, keeping the no-`clofin.db.*` purity rule. Brief 005 stays `CLOSED` with this as its recorded condition. |
 | *(cross-cutting, folded in)* | `payment.failed`'s OpenAPI enum description states it is **reserved with no producer**, so an API-only consumer can distinguish "none happened" from "cannot happen yet"; COMPLIANCE C-05's text gains the late-status boundary the auditor noted, so the central record is not broader than its accepted edge. The refuted concurrency candidate (C-06) is recorded as positive evidence — the five forced-schedule tests are preserved, per the auditor's observation. |
+
+**Remediation ingestion (2026-08-05).** Batch `fa31eb7` (PR #8) remediates all
+five findings; Master Control re-verified empirically (empty-schema 0001–0010
+replay; second membership refused for every outcome state including
+`returned`; disposition/digest columns present; the L-5 matrix covers
+`scheme_response`; `assert-unit-of-work!` guards every audit-composing entry
+point). **Four declared divergences, all ruled accepted:** (1) the index was
+*renamed* `settlement_item_instruction_key` as well as redefined — keeping the
+old name `live_key` would describe carve-out semantics that no longer exist;
+the ruling's intent wins over its letter, and the Worker declaring rather than
+assuming is exactly the protocol. (2) The digest covers `batch_id` and
+`instruction_id` beyond the four named fields — L-2's resource rule, correctly
+generalised, functionally inert. (3) `approval-service` received the F-011
+assertion — within the ruling's words ("every audit-composing service").
+(4) The `:refuses` set→vector fix — a set could let one succeeding verb mask
+two broken guards; this strengthens F-010's own remediation. ADR-0019 records
+the F-007 retry decision with the deciding argument (a second attempt is a
+second payment decision deserving a second maker–checker cycle) — accepted as
+the correct articulation of the ruling.

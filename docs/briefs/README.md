@@ -41,7 +41,7 @@ table and a brief disagree, the brief on `origin/meta` wins.
 | [001 — Ledger persistence and account API](001-TASK-ledger-persistence-and-account-api.md) | 2 | `CLOSED` — merged in PR #2; **audited** (FEEDBACK-M1: F-002/F-003/F-004, actioned via the increment-4 stack) | — | PR-020…024 | Medium |
 | [002 — Payment instruction lifecycle and idempotency](002-TASK-payment-instruction-lifecycle.md) | 3 | `CLOSED` — merged in PR #4 (`31306dd`); **audited** (FEEDBACK-M1: no new findings) | 001 ✅ | PR-001…005, PR-040…044 | Large |
 | [003 — Authorisation, maker–checker and audit trail](003-TASK-authorisation-and-audit-trail.md) | 4 | `CLOSED` — merged in PR #5 (`5ff00eb`); FEEDBACK-M1 fully remediated & verified | 002 ✅ | PR-010…015, PR-070…075 | Large |
-| [004 — Settlement simulation](004-TASK-settlement-simulation.md) | 5 | `IN PROGRESS` — reopened by FEEDBACK-M2 (F-007 blocking); remediation batch dispatched, migration `0010` | 003 ✅, 005 ✅ merged | PRD §5.3 | Large |
+| [004 — Settlement simulation](004-TASK-settlement-simulation.md) | 5 | `IMPLEMENTED` — FEEDBACK-M2 remediation verified (`fa31eb7`, PR #8 green); pending merge | 003 ✅, 005 ✅ merged | PRD §5.3 | Large |
 | [005 — Audit coverage completion](005-TASK-audit-coverage-completion.md) | 4 (completion) | `CLOSED` — merged in PR #6 (`2ba977e`); three objections ruled for the Worker | 003 ✅ merged | PR-072, C-05 | Small |
 
 Sequencing follows **product relevance and regulatory risk**, not implementation
