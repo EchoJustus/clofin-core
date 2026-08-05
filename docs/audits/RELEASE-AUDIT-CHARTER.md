@@ -8,6 +8,41 @@
 > [`README.md`](README.md); if the two ever disagree, `README.md` governs and
 > this charter is corrected.
 
+## How a release audit is run (amended 2026-08-05, from the `ref-1` experience)
+
+The `ref-1` audit was commissioned as a single session covering all eight
+scope items. It exhausted its context during static analysis — re-reading the
+same files, searching in circles — and then exhausted the operator's external
+quota before producing its verdict. The design error was Master Control's: the
+milestone audit had already been split into three sessions for exactly this
+reason, and the larger whole-repo audit was then handed to one. Three rules
+follow, and they are part of the charter, not advice.
+
+1. **Multi-session by default.** A release audit runs as **three sessions**,
+   each starting fresh, each handing a file to the next: **(A)** pin the refs,
+   run the migration replay and the suites, capture the environment — charter
+   items 1–2; **(B)** cross-document consistency and the partial-set sweep —
+   items 3–4, the highest-value work; **(C)** standing-lessons compliance,
+   known-debt reconciliation, the neutrality sweep, citation re-verification
+   and the report — items 5–8. A later session never re-runs an earlier
+   session's work; it reads the file.
+2. **The workpaper is the memory, not the conversation.** Each session appends
+   its result to its workpaper file **after each check, before starting the
+   next**. A session that loses context loses nothing already written. Never
+   re-read a file already read — consult the notes; if you find yourself
+   re-reading, stop and write instead.
+3. **Scope is chosen before the audit starts, not discovered during it.**
+   Master Control states in the commissioning prompt whether the audit is
+   **full whole-repo** or **delta-scoped** to the changes since the previous
+   tag plus the fixed core, per the assurance-chain decision of 2026-08-05.
+
+**If a session is interrupted anyway** — quota, context, or environment — the
+resource-interruption fallback applies: the partial findings are triaged and
+remediated, the release is cut, the uncovered items are named in the artifact's
+coverage table and carried forward as mandatory-first scope for the next
+release audit. Salvage first: whatever the session holds is written to its
+workpaper before it is closed.
+
 **Placeholders filled by Master Control at commissioning:**
 `{{TAG}}` (e.g. `ref-1`) · `{{RC_SHA}}` (the captured `main` SHA) ·
 `{{META_SHA}}` (current `meta` tip) · `{{DATE}}` · `{{MODEL}}` /
@@ -101,4 +136,7 @@ not reproduce is disputed with evidence, not silently dropped.
 ---
 
 *Charter history:* created 2026-08-04 under the assurance-chain decision of
-the same date ([`README.md`](README.md) → *Assurance-chain decisions*).
+that date; amended 2026-08-05 with the multi-session protocol, the
+workpaper-is-memory discipline and upfront scope selection, after the `ref-1`
+audit was halted mid-flight ([`README.md`](README.md) → *Assurance-chain
+decisions*).

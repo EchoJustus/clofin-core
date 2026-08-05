@@ -45,7 +45,12 @@ never a production deployment or an external attestation. It follows a
 milestone once that milestone's audit findings are remediated and closed, and
 is gated by a whole-repo release audit
 ([AGENT_HANDOFF §1c](AGENT_HANDOFF.md); mechanics and charter in
-[audits/](audits/README.md)). **`ref-1` release candidate CAPTURED 2026-08-05: `main` at `5d21334`** (the
+[audits/](audits/README.md)). **`ref-1` release candidate: `main` at `5d21334`** — its release audit ran
+**partial** (charter items 1–4 of 8; halted by external-model quota, closed
+under the resource-interruption fallback). 19 findings, 2 blocking, all
+triaged; the tag is gated on the remediation batch merging.
+
+**Superseded note:** (the
 PR #8 merge commit — Milestone 2 fully remediated and `CLOSED`). The Sol
 release audit runs against that SHA per the charter; the tag lands on it, or
 on its remediation descendant, once the gate clears.
