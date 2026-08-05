@@ -37,6 +37,64 @@
                       :title "Request failed validation"
                       :problem-type :validation}})
 
+(def internal-key-namespace
+  "The `ex-data` key namespace that marks a field **internal**: logged, never
+  rendered to a caller.
+
+  `:clofin/error` and `:clofin/message` were always stripped by
+  `clofin.http.response/error->problem`, which then published *everything else*
+  — with no allowlist behind a docstring that claimed only \"explicitly-declared
+  public data\" reached the caller. Several repositories attach the PostgreSQL
+  constraint name that refused a statement, so `errors.constraint` published
+  schema identifiers like `settlement_item_instruction_key` to anyone who could
+  provoke a conflict, contradicting C-11 (audit finding **A-009**).
+
+  Generalising the existing two-key exception into a rule was preferred to
+  listing the public fields: an allowlist has to be extended every time a
+  handler adds an error field, and the extension is where the next
+  `:constraint` gets waved through. Under this rule the *default* is public —
+  which is correct, because most of what reaches `ex-data` is written for the
+  caller — and anything a repository attaches for diagnosis says so in the key
+  it chooses. `internal` is the whole vocabulary a call site needs to know."
+  "clofin")
+
+(defn internal
+  "Mark diagnostic data as internal. `(err/internal {:constraint \"x_key\"})`
+  becomes `{:clofin/constraint \"x_key\"}`.
+
+  Merge it into an error's data alongside the public fields; the two travel
+  together to the log and are separated at the boundary."
+  [data]
+  (into {} (map (fn [[k v]] [(keyword internal-key-namespace (name k)) v])) data))
+
+(defn- internal-key?
+  "True when `k` is marked internal.
+
+  Guarded on `keyword?` because `ex-data` keys are not always keywords: a
+  field-validation error is keyed by the **wire member name** a caller sent, as
+  a string, so that a rejection reads back in the caller's own vocabulary
+  (`clofin.api.payments`). A string key is caller-facing by construction — a
+  caller wrote it — so it is public, and asking `namespace` about one throws."
+  [k]
+  (and (keyword? k) (= internal-key-namespace (namespace k))))
+
+(defn public-data
+  "The subset of `ex-data` that may be rendered to a caller.
+
+  Everything whose key is not in the `clofin` namespace. Applied by
+  `clofin.http.response/error->problem`; kept here beside the rule it
+  implements so the two cannot drift."
+  [data]
+  (into {} (remove (comp internal-key? key)) data))
+
+(defn internal-data
+  "The subset of `ex-data` that is for the log and not for the caller, with the
+  marker namespace stripped so a log line reads as it was written."
+  [data]
+  (into {}
+        (keep (fn [[k v]] (when (internal-key? k) [(keyword (name k)) v])))
+        (dissoc data :clofin/error :clofin/message)))
+
 (defn error
   "Build a domain error. `type` must be a key of `error-types`."
   ([type message] (error type message {}))

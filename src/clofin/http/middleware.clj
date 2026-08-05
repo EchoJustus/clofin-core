@@ -189,8 +189,15 @@
       (catch Throwable t
         (let [correlation-id (:correlation-id request)]
           (if (err/domain-error? t)
-            (do (log/debugf "Domain error on %s: %s (correlation=%s)"
-                            (:uri request) (ex-message t) correlation-id)
+            (do (log/debugf "Domain error on %s: %s (correlation=%s)%s"
+                            (:uri request) (ex-message t) correlation-id
+                            ;; The half of the error data the caller does not
+                            ;; get — a constraint name, a SQLSTATE — logged here
+                            ;; so that A-009's fix removes it from the response
+                            ;; without removing it from the investigation. An
+                            ;; empty map contributes nothing to the line.
+                            (let [internal (err/internal-data (ex-data t))]
+                              (if (seq internal) (str " " (pr-str internal)) "")))
                 (resp/error->problem t {:correlation-id correlation-id}))
             (do (log/error t (format "Unhandled error on %s (correlation=%s)"
                                      (:uri request) correlation-id))

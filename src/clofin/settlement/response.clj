@@ -90,11 +90,20 @@
 
 (def refusal-reasons
   "Why a refused arrival was refused, as stable codes with the prose a caller
-  is told.
+  is told. **Every code a caller may receive is in here.**
 
   Codes rather than free text because the replay path reproduces the original
   answer from the stored row: a disposition reason that were prose would be
-  prose this code had to parse to answer a replay the same way twice."
+  prose this code had to parse to answer a replay the same way twice.
+
+  `replay-key-conflict` was emitted by
+  `clofin.settlement.service/record-scheme-response!` and reached callers under
+  `errors.dispositionReason` while being absent from this map, from the
+  migration comment that documented the vocabulary, and from every published
+  enum — the `ref-1` release audit's finding **A-016**. Its prose lived inline
+  at the one call site, so the set an integrator could enumerate was smaller
+  than the set the service could produce, which is the whole failure mode a
+  closed vocabulary exists to prevent."
   {"item-already-resolved"
    (str "This settlement item already has an outcome; a late answer for a "
         "timed-out item must arrive as a timeout-resolution")
@@ -102,7 +111,28 @@
    (str "This settlement item is not timed out, so there is nothing for a "
         "timeout resolution to resolve")
    "item-not-in-batch"
-   "This settlement batch has no membership for that payment instruction"})
+   "This settlement batch has no membership for that payment instruction"
+   "replay-key-conflict"
+   (str "This batch, instruction, kind and reference already name a different "
+        "scheme response. A reference identifies one message; two messages that "
+        "say different things cannot share it")})
+
+(def stored-refusal-reasons
+  "The subset of `refusal-reasons` that can reach
+  `scheme_response.disposition_reason`.
+
+  `replay-key-conflict` is deliberately outside it, and the asymmetry is the
+  fact rather than an omission: that refusal happens **because** a receipt for
+  that identity already exists, and writing a second row would defeat the
+  replay key that produced the refusal. The first receipt is the evidence; the
+  conflict is an answer to the caller and nothing else.
+
+  Published separately from `refusal-reasons` for the same reason
+  `response-outcomes` is narrower than `batch/item-outcomes`: two sets that
+  differ by a value that cannot occur are two sets, and collapsing them would
+  make one of the two published enums false. `clofin.contract-test` compares
+  each with its own enum in `api/openapi.yaml`."
+  (into (sorted-set) ["item-already-resolved" "item-not-timed-out" "item-not-in-batch"]))
 
 (defn refusal-detail
   "The prose for a refusal code, or a neutral fallback.
@@ -191,7 +221,26 @@
 
   This is not in tension with F-008. F-008 is about a **processing** conflict —
   the message was fine and the item was not in a state it could resolve — and
-  that case commits its receipt, always."
+  that case commits its receipt, always.
+
+  ## A returned response carries a reason (A-017)
+
+  Both routes to `returned` — the direct kind, and a `timeout-resolution` that
+  names it — require one, and the check is here rather than only in the schema.
+  Until the `ref-1` release audit it was *only* in the schema: a reasonless
+  return passed this function, the service wrote the item, and
+  `settlement_return_needs_reason` raised a raw constraint failure that the
+  error boundary rendered as a `500`. A modelled refusal became an internal
+  error, which is a different answer to the caller (retry vs. fix your request)
+  and a different entry in an incident review.
+
+  It is `422` rather than `400` for ADR-0012's reason: the request was
+  *understood* — the kind is known, the instruction is named, the outcome is
+  claimable — and one named field is rejected on its own merits. That is a
+  business outcome to show a human, not a bug in the caller's serialiser. The
+  database constraint stays exactly where it is: it guards the raw-SQL path
+  this function cannot see, which is the defence-in-depth posture F-003
+  established."
   [{:keys [kind instruction-id outcome] :as request}]
   (when-not (contains? kinds kind)
     (err/invalid! (str "Unknown scheme response kind: " kind)
@@ -211,4 +260,9 @@
     (when (and resolved (not (contains? response-outcomes resolved)))
       (err/invalid! (str "A scheme response cannot claim the outcome " resolved)
                     {:outcome (str resolved) :known (vec response-outcomes)}))
-    (assoc request :outcome resolved :reason (normalise-reason (:reason request)))))
+    (let [reason (normalise-reason (:reason request))]
+      (when (and (= "returned" resolved) (nil? reason))
+        (err/fail! :field-validation
+                   "A returned scheme response must carry the reason the payment came back"
+                   {:kind kind :outcome resolved :field "reason"}))
+      (assoc request :outcome resolved :reason reason))))

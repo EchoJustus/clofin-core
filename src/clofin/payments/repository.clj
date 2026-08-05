@@ -271,7 +271,7 @@
              (if (= sql-state (:foreign-key-violation db/sql-states))
                (err/fail! :unprocessable
                           "The instruction references a record that does not exist"
-                          {:constraint constraint})
+                          (err/internal {:constraint constraint}))
                (throw t)))))))))
 
 (defn- assert-creator!

@@ -50,10 +50,11 @@ is gated by a whole-repo release audit
 under the resource-interruption fallback). 19 findings, 2 blocking, all
 triaged; the tag is gated on the remediation batch merging.
 
-The RC is the PR #8 merge commit — Milestone 2 fully remediated and `CLOSED`.
-The tag will land on it, or on its remediation descendant once the `ref-1`
-findings are fixed. **Uncovered audit scope (charter items 5–7) carries forward
-as mandatory-first scope for `ref-2`.**
+**`ref-1` is tagged** at `5c7b4ba` — the remediation descendant of the RC,
+as the release rules permit. Its audit was **partial**: charter items 1–4 of 8
+were performed, 5–7 were not, and the tag annotation says so. All 19 findings
+were remediated before the tag. **Uncovered audit scope (items 5–7) carries
+forward as mandatory-first scope for `ref-2`.**
 
 ---
 

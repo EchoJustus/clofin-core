@@ -35,8 +35,17 @@
 (defn error->problem
   "Render a domain error as a problem response.
 
-  Only the error's own message and explicitly-declared public data reach the
-  caller. Anything else in `ex-data` stays in the logs."
+  Only the error's own message and its **public** `ex-data` reach the caller;
+  anything a call site marked internal with `clofin.error/internal` stays in the
+  logs, where `clofin.http.middleware/wrap-errors` writes it.
+
+  The distinction is `clofin.error/public-data`'s, not a list here. This
+  function published every `ex-data` key except two until the `ref-1` release
+  audit (finding **A-009**), so PostgreSQL constraint names attached by
+  repositories for diagnosis — `settlement_item_instruction_key`,
+  `journal_entry_reverses_key`, `ledger_account_code_key` — were rendered to
+  callers under `errors.constraint`, while C-11 said an error response revealed
+  nothing about the system's internals."
   [t {:keys [correlation-id]}]
   (let [data   (ex-data t)
         type   (:clofin/error data)
@@ -49,4 +58,4 @@
               :title title
               :detail (ex-message t)
               :instance correlation-id
-              :errors (dissoc data :clofin/error :clofin/message)})))
+              :errors (err/public-data data)})))

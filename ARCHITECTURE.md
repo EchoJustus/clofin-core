@@ -415,6 +415,24 @@ The API contract is versioned at [`api/openapi.yaml`](api/openapi.yaml) and is
 treated as the interface specification: it changes in the same commit as the
 handler it describes.
 
+**What the contract test proves, and what it does not.** `clofin.contract-test`
+compares method/path pairs and `operationId`s in both directions, so an
+undocumented route and an unimplemented operation both fail the build. It also
+compares the published enums — audit actions and subject types, purpose codes,
+currencies, scheme-response refusal reasons — against the code that owns them,
+and asserts that every actor-protected operation declares the `ActorId`
+parameter and its `401`/`403` responses.
+
+It does **not** invoke a handler, and it does not validate request bodies,
+required members, response schemas, media types or summaries against what a
+handler actually accepts and returns. Stale handler *semantics* therefore pass
+while the route name is stable, which is how the `ref-1` release audit found
+`CreatePaymentInstructionRequest` requiring a member the handler refuses
+(finding **A-012**) alongside a green contract test — a result the audit
+recorded separately as finding **A-011**, because "OpenAPI vs the handlers" is a
+broader claim than route identity. Deep request/response validation is named
+debt in [`docs/COMPLIANCE.md`](docs/COMPLIANCE.md) §4.
+
 ---
 
 ## 8. Testing strategy

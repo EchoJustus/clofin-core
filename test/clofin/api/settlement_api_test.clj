@@ -350,15 +350,49 @@
       (is (empty? (unbalanced-entries))))))
 
 (deftest ac-8-a-returned-response-must-carry-a-reason
+  ;; A-017. This test used to accept `#{400 422 500}`, and a 500 was what it got:
+  ;; `assert-shape!` did not look at `:reason`, the service wrote the item, and
+  ;; `settlement_return_needs_reason` raised a raw constraint failure. Accepting
+  ;; a 500 is not an assertion — it is the absence of one written in the shape of
+  ;; one, and it is why the gap survived two audits. The status is now exact.
   (let [f (setup)
         a (raise! f)
-        batch (get (:json (create-batch! f [a])) "id")]
+        b (raise! f)
+        batch (get (:json (create-batch! f [a b])) "id")]
     (submit-batch! f batch)
-    (let [{:keys [status]} (respond! f batch {"kind" "returned" "instructionId" a
-                                              "reference" "SIM-RTN-1"})]
-      (is (contains? #{400 422 500} status)
-          "the schema refuses a returned item with no reason; the API must not smuggle one past it")
-      (is (= "released" (status-of f a)) "and the instruction did not move"))))
+
+    (testing "a direct return with no reason is a modelled refusal, not an internal error"
+      (let [{:keys [status json]} (respond! f batch {"kind" "returned" "instructionId" a
+                                                     "reference" "SIM-RTN-1"})]
+        (is (= 422 status)
+            "the request was understood and one named field is rejected on its merits (ADR-0012)")
+        (is (= "https://clofin.dev/problems/validation" (get json "type")))
+        (is (= "reason" (get-in json ["errors" "field"])))
+        (is (= "released" (status-of f a)) "and the instruction did not move")))
+
+    (testing "a blank reason is the same claim as an absent one and is refused alike"
+      (is (= 422 (:status (respond! f batch {"kind" "returned" "instructionId" a
+                                             "reference" "SIM-RTN-2"
+                                             "reason" "   "})))))
+
+    (testing "and so is the second route to `returned` — a timeout resolution"
+      (ok! (str "/settlement-batches/" batch "/timeout-sweep")
+           :actor (:controller f)
+           :body {"organisationId" (str (:org f)) "timeoutSeconds" 0})
+      (let [{:keys [status json]} (respond! f batch {"kind" "timeout-resolution"
+                                                     "instructionId" b
+                                                     "outcome" "returned"
+                                                     "reference" "SIM-TRS-1"})]
+        (is (= 422 status))
+        (is (= "reason" (get-in json ["errors" "field"])))))
+
+    (testing "no receipt is written for a message that could not be understood"
+      (is (zero? (:count (db/query-one tdb/*pool*
+                                       ["select count(*) as count from scheme_response
+                                          where reference like 'SIM-RTN-%'
+                                             or reference = 'SIM-TRS-1'"])))
+          "assert-shape! runs before anything is written — only a well-formed
+           message earns a receipt (F-008 is about processing conflicts, which do)"))))
 
 (deftest a-fully-settled-batch-derives-to-settled-and-completes-once
   (let [f (setup)
