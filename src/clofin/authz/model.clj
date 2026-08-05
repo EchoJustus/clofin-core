@@ -40,7 +40,16 @@
   Sorted so that error detail and generated documentation are stable between
   runs."
   (into (sorted-set)
-        [:account/create
+        [;; Reading the organisation an actor belongs to. Added by the `ref-1`
+         ;; release audit (**A-006**): `GET /organisations/:id` was the one
+         ;; business route that neither authenticated nor authorised, so C-08's
+         ;; "on every operation" was false and anyone holding a tenant UUID
+         ;; could read its legal name. There is no `:organisation/create`
+         ;; beside it, because creation is the documented unauthenticated
+         ;; bootstrap — no actor exists to hold a permission before the
+         ;; organisation that holds actors.
+         :organisation/read
+         :account/create
          :account/read
          :entry/post
          :entry/read
@@ -65,6 +74,24 @@
          ;; is a maker-checker boundary with one person on both sides of the
          ;; last step (C-01, C-08).
          :settlement/execute]))
+
+(def actor-statuses
+  "Every status an actor row may carry.
+
+  Identical to the `actor_status_known` check constraint in migration `0005`,
+  and compared with the **live catalogue** — not with the migration text — by
+  `clofin.db.vocabulary-test`. Declared here because it was the one closed
+  vocabulary in this namespace with no owner at all: the schema constrained the
+  column, the code compared against `:active` in one place, and nothing related
+  the two (audit finding **A-014**).
+
+  `:active` is the only status that grants anything. That is not a property of
+  this set but of `granted`, which returns the empty set for every other value
+  — including a status the database allows and this list does not know about.
+  The vocabulary fails closed in the direction that matters, and
+  `clofin.authz.model-test` asserts it does so for every member here rather
+  than for the one member someone sampled."
+  (into (sorted-set) [:active :suspended]))
 
 (def roles
   "Every role an actor may hold.
@@ -98,16 +125,28 @@
   - **`:auditor` is read-only.** Every permission it holds is a read. An
     auditor who can change the thing being audited is not an auditor.
 
+  **`:organisation/read` is held by every role**, and that is a grant rather
+  than an oversight. The permission reads *the actor's own* organisation — the
+  handler takes the organisation from the principal and refuses any other with
+  `403` — so it discloses to an actor the tenant they already act for. A role
+  that could raise a payment but not read the name of the organisation it
+  belongs to would be a role no interface could render, and narrowing it
+  further would make least privilege a slogan rather than a boundary: the
+  boundary that matters here is the *tenant* one, and that is enforced on the
+  organisation acted on, not on the verb.
+
   No role holds every permission. See the namespace docstring."
   {:operator   #{:payment/create :payment/read :payment/amend :payment/cancel
-                 :payment/submit :account/read :entry/read}
+                 :payment/submit :account/read :entry/read :organisation/read}
    :approver   #{:payment/approve :payment/reject :payment/read
-                 :approval/read :account/read :entry/read}
+                 :approval/read :account/read :entry/read :organisation/read}
    :controller #{:account/create :account/read :entry/post :entry/read
                  :payment/read :payment/cancel :approval/read
-                 :settlement/execute}
-   :compliance #{:payment/read :account/read :entry/read :audit/read}
-   :auditor    #{:audit/read :payment/read :account/read :entry/read}})
+                 :settlement/execute :organisation/read}
+   :compliance #{:payment/read :account/read :entry/read :audit/read
+                 :organisation/read}
+   :auditor    #{:audit/read :payment/read :account/read :entry/read
+                 :organisation/read}})
 
 ;; ---------------------------------------------------------------------------
 ;; Actors

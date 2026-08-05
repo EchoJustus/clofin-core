@@ -133,6 +133,33 @@
       (is (= expected (:status (handler {:request-method :get :uri "/" :correlation-id "c"})))
           (str type " should map to " expected)))))
 
+(deftest a-009-a-domain-error-does-not-publish-schema-identifiers
+  (testing "C-11: repositories attach the constraint that refused a statement so a
+            defect can be diagnosed; `errors.constraint` published it to anyone who
+            could provoke a conflict, in every profile"
+    (let [handler (mw/wrap-errors
+                   (fn [_] (err/conflict! "An account with this code already exists"
+                                          (merge {:code "1100-CLIENT-FUNDS"}
+                                                 (err/internal
+                                                  {:constraint "ledger_account_code_key"
+                                                   :sql-state "23505"}))))
+                   ;; The development profile, deliberately: the exposure was not
+                   ;; profile-dependent, so neither is the fix.
+                   dev-config)
+          response (handler {:request-method :post :uri "/accounts" :correlation-id "c"})]
+      (is (= 409 (:status response)))
+      (is (= {:code "1100-CLIENT-FUNDS"} (get-in response [:body "errors"]))
+          "the public half reaches the caller and nothing else does")
+      (is (not (str/includes? (pr-str (:body response)) "ledger_account_code_key"))
+          "the constraint name must not appear anywhere in the rendered document")
+      (is (not (str/includes? (pr-str (:body response)) "23505"))))))
+
+(deftest a-009-internal-data-is-kept-for-the-log-not-discarded
+  (testing "removing it from the response must not remove it from the investigation"
+    (let [data (merge {:code "1100"} (err/internal {:constraint "x_key" :sql-state "23505"}))]
+      (is (= {:code "1100"} (err/public-data data)))
+      (is (= {:constraint "x_key" :sql-state "23505"} (err/internal-data data))))))
+
 (deftest defects-do-not-leak-internals
   (let [boom (fn [_] (throw (RuntimeException. "connection string: user=admin password=hunter2")))]
     (testing "in production the caller gets a correlation id and nothing else"

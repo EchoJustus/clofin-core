@@ -467,7 +467,15 @@
       "the same cap and the same reasoning as the ledger's — see ADR-0011"))
 
 (deftest every-lifecycle-state-can-be-stored
-  (testing "the check constraint and the state machine agree on the set of statuses"
+  ;; This proves the schema accepts every state the code knows. It does **not**
+  ;; prove the schema accepts nothing else — inserting nine known values says
+  ;; nothing about a tenth literal in the constraint — and it was described as
+  ;; the agreement guard until audit finding **A-014**. `payment_status_known`
+  ;; is compared with `state/states` for set equality, in both directions, from
+  ;; the live catalogue in `clofin.db.vocabulary-test`. Both facts are worth
+  ;; having: a value the constraint would refuse on insert is a `500` in
+  ;; production, and this is the test that would catch it in the act.
+  (testing "every status the state machine can reach is one the column accepts"
     (let [f (fixture)]
       (doseq [status state/states]
         (is (= 1 (db/execute! tdb/*pool*

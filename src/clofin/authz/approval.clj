@@ -36,6 +36,22 @@
             [clofin.money :as money]
             [clojure.string :as str]))
 
+(def decisions
+  "Every decision an actor may record on a payment instruction.
+
+  Identical to the `approval_decision_known` check constraint in migration
+  `0005`, and compared with the **live catalogue** by
+  `clofin.db.vocabulary-test`. Held as a value because it was inlined at the
+  one place that checked it — `#{:approved :rejected}` inside `evaluate` — so
+  the schema and the code stated the same vocabulary twice with nothing
+  relating them (audit finding **A-014**).
+
+  Not to be confused with `evaluate`'s own `:decision` key, which is
+  `:permitted` or `:refused`: that answers *may this actor decide*, while these
+  two are *what they decided*. Two questions, deliberately different words, and
+  only these reach the `approval.decision` column."
+  (into (sorted-set) [:approved :rejected]))
+
 (def refusal-reasons
   "Every reason `evaluate` may refuse for.
 
@@ -222,9 +238,9 @@
     (err/invalid! "An approval decision needs an actor" {}))
   (when-not (:amount instruction)
     (err/invalid! "An approval decision needs an instruction with an amount" {}))
-  (when-not (#{:approved :rejected} decision)
+  (when-not (contains? decisions decision)
     (err/invalid! (str "Unknown approval decision: " decision)
-                  {:decision (str decision) :known ["approved" "rejected"]}))
+                  {:decision (str decision) :known (mapv name decisions)}))
   (let [amount     (:amount instruction)
         currency   (:currency amount)
         rejecting? (= :rejected decision)

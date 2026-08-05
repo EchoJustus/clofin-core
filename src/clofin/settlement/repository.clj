@@ -302,9 +302,9 @@
                 "timed out and returned all block a second one. A returned payment is "
                 "terminal — retry it by raising a new payment instruction, approving that, "
                 "and batching it")
-           {:constraint constraint
-            :batch-id   (str batch-id)
-            :retry      "raise-a-new-instruction"})
+           {:clofin/constraint constraint
+            :batch-id          (str batch-id)
+            :retry             "raise-a-new-instruction"})
           (throw t))))))
 
 (defn set-batch-status!
@@ -470,7 +470,7 @@
               (= "scheme_response_replay_key" constraint))
        nil
        (err/fail! :conflict "This scheme response could not be recorded"
-                  {:constraint constraint :sql-state sql-state})))))
+                  (err/internal {:constraint constraint :sql-state sql-state}))))))
 
 (defn find-response
   "The stored receipt matching a replay key, or nil.

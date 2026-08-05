@@ -6,7 +6,10 @@
   declared operation is routable, and every route is declared. A route added
   without a contract change fails here, which is the point."
   (:require [clofin.audit :as audit]
+            [clofin.money :as money]
+            [clofin.payments.instruction :as instruction]
             [clofin.routes :as routes]
+            [clofin.settlement.response :as response]
             [clojure.java.io :as io]
             [clojure.set :as set]
             [clojure.string :as str]
@@ -123,3 +126,151 @@
       (is (= "integer" (get-in money ["properties" "minorUnits" "type"])))
       (is (= "int64" (get-in money ["properties" "minorUnits" "format"])))
       (is (= #{"currency" "minorUnits"} (set (get money "required")))))))
+
+;; ---------------------------------------------------------------------------
+;; A-019 — the supported currencies, not a three-letter shape
+;; ---------------------------------------------------------------------------
+
+(deftest a-019-the-contract-publishes-the-currencies-the-service-supports
+  (let [spec (load-spec)
+        declared (set (get-in spec ["components" "schemas" "CurrencyCode" "enum"]))]
+    (testing "`^[A-Z]{3}$` described a system more permissive than the one that answers:
+              `XYZ` was contract-valid and rejected by `money/of` or a currency foreign key"
+      (is (= (set (keys money/currencies)) declared)
+          (str "CurrencyCode declares " (pr-str (vec (sort declared)))
+               "; clofin.money supports " (pr-str (vec (sort (keys money/currencies)))))))
+
+    (testing "and no currency field is left describing a shape instead"
+      ;; Discovered, not listed — the `subjectType` lesson (L-6) applied to a
+      ;; second enum with several copies. A currency property added later that
+      ;; reintroduces the pattern fails here without anyone extending a list.
+      (doseq [[schema-name schema] (get-in spec ["components" "schemas"])
+              :let [currency (get-in schema ["properties" "currency"])]
+              :when (map? currency)]
+        (is (= "#/components/schemas/CurrencyCode" (get currency "$ref"))
+            (str "components.schemas." schema-name ".properties.currency is "
+                 (pr-str currency) " rather than a CurrencyCode reference"))))))
+
+;; ---------------------------------------------------------------------------
+;; A-018 — purpose codes, in all three places that state the set
+;; ---------------------------------------------------------------------------
+
+(deftest a-018-the-contract-publishes-the-purpose-codes-the-service-accepts
+  (let [declared (set (get-in (load-spec) ["components" "schemas" "PurposeCode" "enum"]))]
+    (is (= (set (keys instruction/purpose-codes)) declared)
+        "a code the contract offers and the domain refuses is a 422 the caller was
+         invited to make; one the domain accepts and the contract omits is
+         unreachable through any generated client")
+    (testing "the third statement of the set is the check constraint, compared with
+              the live catalogue in `clofin.db.vocabulary-test`"
+      (is (seq declared)))))
+
+;; ---------------------------------------------------------------------------
+;; A-016 — the refusal-reason vocabulary
+;; ---------------------------------------------------------------------------
+
+(deftest a-016-the-contract-publishes-every-scheme-response-refusal-reason
+  (let [spec (load-spec)
+        caller-facing (set (get-in spec ["components" "schemas"
+                                         "SchemeResponseRefusalReason" "enum"]))
+        stored        (set (get-in spec ["components" "schemas"
+                                         "StoredSchemeResponseRefusalReason" "enum"]))]
+    (is (= (set (keys response/refusal-reasons)) caller-facing)
+        "`replay-key-conflict` reached callers under errors.dispositionReason while
+         appearing in no published enum at all — a code an integrator could receive
+         and could not have known to handle")
+    (is (= (set response/stored-refusal-reasons) stored)
+        "and the narrower stored set is published as its own schema rather than
+         being conflated with the one above")
+    (is (= "#/components/schemas/StoredSchemeResponseRefusalReason"
+           (get-in spec ["components" "schemas" "SchemeResponseRecord"
+                         "properties" "dispositionReason" "$ref"]))
+        "SchemeResponseRecord.dispositionReason must reference the stored set rather
+         than repeating it — a second copy is the drift L-6 names")))
+
+;; ---------------------------------------------------------------------------
+;; A-012 — the actor boundary is declared where it is enforced
+;; ---------------------------------------------------------------------------
+
+(defn- actor-protected-operations
+  "Every route whose handler resolves a principal, discovered from the source
+  rather than listed.
+
+  A handler namespace that requires `clofin.api.principal` authenticates and
+  authorises; one that does not is a public route and must be one deliberately.
+  Reading the source is crude and is the point — it cannot be kept in step by
+  hand, so it cannot fall behind the way a list would. `GET /organisations/:id`
+  was outside every list of \"the authenticated routes\" for two audits."
+  []
+  (let [protected? (fn [handler-ns]
+                     (let [file (io/file (str "src/clofin/api/" handler-ns ".clj"))]
+                       (and (.exists file)
+                            (str/includes? (slurp file) "clofin.api.principal"))))]
+    (into #{}
+          (comp (remove #(contains? #{"getHealth" "getReadiness" "getServiceInfo"
+                                      ;; The documented unauthenticated bootstrap:
+                                      ;; no actor can exist before the organisation
+                                      ;; that holds one (ADR-0017).
+                                      "createOrganisation"}
+                                    (:operation-id %)))
+                (map :operation-id))
+          (filter (fn [{:keys [path]}]
+                    (protected? (cond
+                                  (str/starts-with? path "/organisations") "organisations"
+                                  (str/starts-with? path "/accounts")      "accounts"
+                                  (str/starts-with? path "/journal-entries") "entries"
+                                  (str/starts-with? path "/payment-instructions/")
+                                  (if (str/includes? path "approvals") "approvals" "payments")
+                                  (str/starts-with? path "/payment-instructions") "payments"
+                                  (str/starts-with? path "/approvals")     "approvals"
+                                  (str/starts-with? path "/settlement-batches") "settlement"
+                                  (str/starts-with? path "/audit")         "audit"
+                                  :else "health")))
+                  route-table))))
+
+(deftest a-012-every-actor-protected-operation-declares-the-actor-header
+  (testing "12 operations authenticated and authorised before doing any work, and
+            declared with no way for a client to supply a principal (A-012)"
+    (let [spec (load-spec)
+          protected (actor-protected-operations)
+          by-op (into {} (for [[path methods] (get spec "paths")
+                               [method operation] methods
+                               :when (contains? http-methods (str/lower-case method))]
+                           [(get operation "operationId") operation]))]
+      ;; Non-vacuity. A discovery that quietly found nothing would pass every
+      ;; assertion below and prove exactly nothing, which is the failure mode
+      ;; this whole file exists to guard against.
+      (is (= (- (count route-table) 4) (count protected))
+          (str "every route but the three health/info routes and the "
+               "unauthenticated organisation bootstrap should be actor-protected; "
+               "discovered " (pr-str (vec (sort protected)))))
+
+      (doseq [operation-id protected]
+        (let [operation (get by-op operation-id)
+              parameters (get operation "parameters")
+              responses  (set (keys (get operation "responses")))]
+          (is (some #(= "#/components/parameters/ActorId" (get % "$ref")) parameters)
+              (str operation-id " authenticates and does not declare ActorId"))
+          (is (contains? responses "401")
+              (str operation-id " can answer 401 and does not declare it"))
+          (is (contains? responses "403")
+              (str operation-id " can answer 403 and does not declare it")))))))
+
+(deftest a-012-a-conformant-create-payment-request-can-be-satisfied
+  (let [schema (get-in (load-spec) ["components" "schemas" "CreatePaymentInstructionRequest"])]
+    (testing "`createdBy` was required here and refused by the handler — no request
+              could satisfy both, which is a published contract with no valid instance"
+      (is (not (contains? (set (get schema "required")) "createdBy")))
+      (is (not (contains? (set (keys (get schema "properties"))) "createdBy"))
+          "and it is gone from the properties too: `additionalProperties: false`
+           plus a declared member reads as an invitation to send it"))))
+
+(deftest a-012-the-principal-supplies-the-organisation-where-the-handler-says-it-does
+  (testing "a member the handler derives from the actor must not be `required`"
+    (doseq [schema-name ["CreateAccountRequest" "PostJournalEntryRequest"
+                         "AmendPaymentInstructionRequest" "CreatePaymentInstructionRequest"]]
+      (let [schema (get-in (load-spec) ["components" "schemas" schema-name])]
+        (is (not (contains? (set (get schema "required")) "organisationId"))
+            (str schema-name " requires organisationId, which the principal supplies"))
+        (is (contains? (set (keys (get schema "properties"))) "organisationId")
+            (str schema-name " must still accept it — it is verified, not ignored"))))))

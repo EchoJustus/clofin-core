@@ -39,7 +39,8 @@
         (let [{:keys [sql-state constraint]} (db/violation t)]
           (if (= (:unique-violation db/sql-states) sql-state)
             (err/conflict! "An organisation with this short name already exists"
-                           {:short-name (:short-name org) :constraint constraint})
+                           (merge {:short-name (:short-name org)}
+                                  (err/internal {:constraint constraint})))
             (throw t)))))))
 
 (defn find-organisation

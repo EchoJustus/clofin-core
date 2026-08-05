@@ -93,7 +93,8 @@
           (condp = sql-state
             (:unique-violation db/sql-states)
             (err/conflict! "An account with this code already exists in this organisation"
-                           {:code (:code acct) :constraint constraint})
+                           (merge {:code (:code acct)}
+                                  (err/internal {:constraint constraint})))
 
             (:foreign-key-violation db/sql-states)
             (err/fail! :unprocessable "Unknown organisation"
@@ -214,12 +215,13 @@
 
       (= sql-state (:unique-violation db/sql-states))
       (err/conflict! "A journal entry with this id has already been posted"
-                     {:id (str (:id posted)) :constraint constraint})
+                     (merge {:id (str (:id posted))}
+                            (err/internal {:constraint constraint})))
 
       (= sql-state (:foreign-key-violation db/sql-states))
       (err/fail! :unprocessable
                  "Journal entry references a record that does not exist"
-                 {:constraint constraint})
+                 (err/internal {:constraint constraint}))
 
       :else (throw t))))
 

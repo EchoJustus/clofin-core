@@ -15,6 +15,14 @@
   (:require [clofin.authz.approval :as approval]
             [clofin.authz.model :as model]
             [clofin.money :as money]
+            ;; Required for the A-016 guard at the foot of this file, and for
+            ;; no other reason. `approval-service` names *this* namespace's test
+            ;; as the thing that fails when its refusal maps fall behind
+            ;; `refusal-reasons`; until A-016 that sentence was a promise
+            ;; nothing kept, because the namespace it named did not load the
+            ;; namespace it was about.
+            [clofin.payments.approval-service :as approval-service]
+            [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]))
 
 ;; ---------------------------------------------------------------------------
@@ -362,3 +370,34 @@
     (is (thrown? Exception (approval/evaluate {:instruction (instruction)
                                                :actor (actor approver-id)
                                                :decision :maybe})))))
+
+;; ---------------------------------------------------------------------------
+;; A-016 — the reason vocabulary and the answers to it are the same set
+;; ---------------------------------------------------------------------------
+;;
+;; `clofin.payments.approval-service` says, verbatim, that "a reason added to
+;; `clofin.authz.approval/refusal-reasons` without an answer here fails
+;; `clofin.authz.approval-test`". Nothing compared the keys, and `refuse!` has
+;; `(or (refusal-status reason) :forbidden)` and `(or (refusal-detail reason)
+;; "This approval was refused")` fallbacks — so an unmapped reason would have
+;; degraded silently to a generic `403` with generic prose, which is the
+;; behaviour a caller cannot branch on and an auditor cannot explain.
+;;
+;; The docstring was the enforcement point, which is standing lesson **L-6**
+;; exactly. These two assertions are the enforcement point now, and the
+;; docstring is true.
+
+(deftest a-016-every-refusal-reason-has-an-http-status
+  (is (= (set approval/refusal-reasons)
+         (set (keys approval-service/refusal-status)))
+      "a reason with no status falls back to a generic 403; a status for a reason
+       `evaluate` cannot return is an answer to a question nobody asks"))
+
+(deftest a-016-every-refusal-reason-has-prose-that-names-its-control
+  (is (= (set approval/refusal-reasons)
+         (set (keys @#'approval-service/refusal-detail)))
+      "a reason with no detail falls back to \"This approval was refused\", which
+       tells an operator nothing they can act on or escalate")
+  (doseq [[reason detail] @#'approval-service/refusal-detail]
+    (is (not (str/blank? detail))
+        (str reason " must say something"))))

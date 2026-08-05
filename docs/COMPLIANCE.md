@@ -104,9 +104,16 @@ control that holds. `clofin.api.approvals-api-test` runs this query and then
 plants the violation it is meant to catch, asserting it is found: an evidence
 query is only evidence if it can fail.
 
-**Tests.** `clofin.authz.approval-test` is table-driven across the full actor ×
-instruction matrix — every role set, every limit, every amount — and calls
-`evaluate` **directly**, with no HTTP anywhere in the file. That is the point:
+**Tests.** `clofin.authz.approval-test` is table-driven across a selected actor
+× instruction matrix — six role sets, three approval ceilings and three amounts,
+including the empty role set and the actor holding every role — and calls
+`evaluate` **directly**, with no HTTP anywhere in the file. It is *not* the
+power set of the five roles and it does not enumerate every numeric limit or
+amount; the claim was written as "every role set, every limit, every amount"
+until the `ref-1` release audit (finding **A-001**), which is a description of a
+test nobody could write for an unbounded set. What the table does cover
+exhaustively is the property the control turns on: the maker is refused in
+**every** cell, whatever roles and limits they hold. That is the point:
 if the control only held for callers who came through a handler, it would not
 be a control. `clofin.api.approvals-api-test` asserts the boundary reports it as
 `403` with a machine-readable `errors.reason`, including for an actor who holds
@@ -248,10 +255,20 @@ transiently incomplete entry mid-transaction is still allowed to complete.
 ### C-05 Complete and attributable audit trail ✅
 
 **Statement.** Every state change records who did what, to which subject, when,
-and what changed — and cannot be altered afterwards. *Who* is null in exactly one
-case, the unauthenticated bootstrap, where there is no principal to record; that
-is not a coverage gap but a property of the one write that precedes identity, and
-it is enforced to stay the only one (see *Attribution* below).
+and what changed — and cannot be altered afterwards — **with one disclosed
+exception: a late `timeout-resolution` that moves an already-complete settlement
+batch's derived status emits no batch-subject event.** That exception is
+described in full in §4 and is named here rather than three hundred lines below,
+because a control statement whose scope a reader discovers elsewhere in the same
+document is the defect standing lesson **L-14** exists to prevent (audit finding
+**A-004**). The payment's own transition *is* recorded in that transaction, so
+nothing is unattributable; what is missing is an event whose subject is the
+batch.
+
+*Who* is null in exactly one case, the unauthenticated bootstrap, where there is
+no principal to record; that is not a coverage gap but a property of the one
+write that precedes identity, and it is enforced to stay the only one (see
+*Attribution* below).
 
 **Design.** `audit_event` is append-only and written **in the same transaction**
 as the change it describes, so an unaudited state change is not representable.
@@ -470,7 +487,10 @@ which also records why a seeded `system` actor row was rejected).
 
 **Statement.** A retry cannot cause a second payment.
 
-**Design.** Every mutating operation requires an `Idempotency-Key`. The key, the
+**Design.** Every operation routed through
+`clofin.idempotency.repository/execute-once!` requires an `Idempotency-Key` —
+the six payment and approval mutations: create, amend, submit, cancel, approve
+and withdraw. The key, the
 organisation and a digest of the request are stored with the resulting response,
 **in the same transaction as the effect they protect** — a key stored separately
 from the effect leaves a window in which a crash makes a payment with no record
@@ -478,6 +498,21 @@ that it was made. A replay of the same request returns the stored response and
 performs no new work; the same key carrying a *different* request is
 `409 Conflict` rather than a silent second payment; a request with no key at all
 is `400`.
+
+**What this does not cover, and why the sentence used to say "every mutating
+operation".** Organisation registration, account creation, journal posting and
+the four settlement mutations do not read the header and are not protected by
+this mechanism. Settlement is guarded instead — by batch lifecycle, by the
+permanent membership index, and by the scheme-response replay key with its
+canonical digest, which together make duplicate settlement work impossible by a
+different route. The three ledger and bootstrap writes expose **no** caller-key
+replay contract at all: a retried `POST /journal-entries` posts a second entry,
+and the correction for one posted twice is a reversing entry (C-03). None of
+that is a duplicate *payment* — the control's subject — but the universal
+wording claimed enforcement over a set four handler families sat outside, which
+the `ref-1` release audit recorded as finding **A-005** and standing lesson
+**L-14** generalises. Extending idempotency to the remaining mutation set is
+named debt in §4.
 
 The digest is taken over a *canonical* serialisation of the request — its
 method, its path and its body
@@ -608,7 +643,19 @@ model needs to be enforceable at all.
 ### C-09 Data minimisation ✅ (partial)
 
 **Statement.** CloFin holds no more counterparty or identity data than the
-function requires, and sensitive values never reach a log.
+function requires, and **no request or configuration logging emits a sensitive
+value**: request logs carry method, path, status, duration and correlation id
+and nothing else, and configuration is redacted before it is printed.
+
+The statement said "sensitive values never reach a log", which C-11 contradicts
+on the same page: an unexpected defect is deliberately `log/error`-ed **in
+full**, throwable and all, because a defect nobody can diagnose is a defect
+nobody fixes — and a throwable's message can carry anything the code that threw
+it put there. Both sentences could not be true, and the one that was false was
+this one (audit finding **A-007**, standing lesson **L-14**). Sanitising
+exception logging is a real control and is named debt in §4; until it exists,
+this statement is scoped to the two enforcement points below rather than to
+every log line CloFin writes.
 
 **Design.**
 - KYC is modelled as state and evidence *references*; identity documents are
@@ -621,17 +668,31 @@ function requires, and sensitive values never reach a log.
 
 **Enforcement point.** `clofin.http.middleware/wrap-request-logging` ✅;
 `clofin.config/redacted` with a test asserting the credential does not appear in
-the printed form ✅.
+the printed form ✅. **Exception logging is outside both** — see the statement
+above and §4.
 
 **Gap.** Field-level encryption at rest for counterparty details is designed but
-not built. Stated rather than glossed over.
+not built. Stated rather than glossed over. So is the log sanitiser: see §4.
 
 ---
 
 ### C-10 Change control over the schema ✅
 
-**Statement.** The schema of any environment is identifiable, comparable and
-tamper-evident.
+**Statement.** The **migration history** of any environment is identifiable,
+comparable and tamper-evident: which migrations have been applied, in what
+order, and whether any applied file has been edited since.
+
+That is narrower than "the schema", and deliberately so. The runner never
+introspects the catalogue — it hashes indexed SQL *files*, not tables,
+constraints, triggers, functions, indexes, comments or privileges — so a direct
+`ALTER TABLE` or a dropped trigger leaves every `schema_migration` checksum and
+the reported `schemaVersion` unchanged. The statement claimed the live schema
+until the `ref-1` release audit (finding **A-008**, standing lesson **L-14**).
+Catalogue hashing, which would make the schema itself comparable, is named debt
+in §4. Note what *is* covered in the meantime by
+`clofin.db.vocabulary-test`: every closed vocabulary is compared with the live
+catalogue on each integration run, so a constraint quietly widened by hand fails
+the build even though no checksum moved.
 
 **Design.** Forward-only migrations with recorded SHA-256 checksums. An edited
 migration that has already been applied aborts start-up. No `down` migrations,
@@ -648,16 +709,30 @@ timestamp; also surfaced by `GET /readyz`.
 
 ### C-11 Error handling that does not leak 🔨
 
-**Statement.** An error response reveals nothing about the system's internals.
+**Statement.** An error response reveals nothing about the system's internals:
+an unexpected defect returns a correlation id and nothing else, and a domain
+error returns its own message plus only the data its call site marked public.
 
 **Design.** A single error boundary. Domain errors render as RFC 9457 problem
 documents with their own message. Any other throwable is a defect: logged in
 full internally, returned to the caller as a correlation id and nothing else.
 Exception detail is available only in the development profile.
 
-**Enforcement point.** `clofin.http.middleware/wrap-errors` ✅; a test asserting
-a credential embedded in an exception message does not appear in a production
-response ✅.
+Domain errors are the half that used to leak. `error->problem` published every
+`ex-data` key except two, and several repositories attach the **PostgreSQL
+constraint name** that refused a statement so a conflict can be diagnosed — so
+`errors.constraint` handed schema identifiers like
+`settlement_item_instruction_key` to anyone who could provoke a conflict, in
+every profile (audit finding **A-009**). A call site now marks diagnostic data
+internal with `clofin.error/internal`, `clofin.error/public-data` decides what
+is rendered, and `wrap-errors` writes the internal half to the log — so removing
+it from the response did not remove it from the investigation.
+
+**Enforcement point.** `clofin.http.middleware/wrap-errors` ✅;
+`clofin.error/public-data`, with tests asserting that a credential embedded in
+an exception message does not appear in a production response **and** that a
+constraint name attached to a domain error appears in neither the response nor
+any profile ✅.
 
 **Gap.** No rate limiting or request throttling. Local-development posture only.
 
@@ -665,15 +740,26 @@ response ✅.
 
 ### C-12 Supply chain control ✅
 
-**Statement.** Every third-party component in the runtime path is known,
-justified and has a named upstream with a security process.
+**Statement.** Every **direct** runtime dependency is known, justified and has a
+named upstream with a security process: the seven coordinates in `deps.edn`,
+each with a row in ADR-0004.
+
+The word "direct" is load-bearing and was absent until the `ref-1` release audit
+(finding **A-010**, standing lesson **L-14**). The repository names top-level
+coordinates only; it contains no resolved transitive inventory, so nothing here
+demonstrates that every *transitive* component in the runtime path is known or
+paired with a named upstream security process — and ADR-0004 separately claims
+"a short, auditable SBOM" it does not contain. A generated SBOM is named debt in
+§4.
 
 **Design.** A deliberately small runtime dependency set; adding one requires an
 ADR recording what was gained and what transitive graph came with it. See
 [ADR-0004](ADR/0004-minimal-dependency-footprint.md).
 
-**Enforcement point.** Review. *(Not mechanical — stated honestly. A dependency
-review job in CI is a candidate improvement.)*
+**Enforcement point.** Review of `:deps` additions. *(Not mechanical — stated
+honestly, and it is prospective: it enforces a policy on new direct
+dependencies, not an inventory of the resolved graph. A dependency review job in
+CI is a candidate improvement.)*
 
 ---
 
@@ -705,3 +791,8 @@ Being explicit about gaps is part of the control design.
 | Runtime role split for append-only enforcement | **Not built.** The append-only triggers on `journal_entry`, `journal_line`, `audit_event` and `approval` refuse `UPDATE`, `DELETE` and `TRUNCATE` — but a trigger cannot bind the table's *owner*, and CloFin connects as the owner (and, in the shipped stack, as a superuser). `DISABLE TRIGGER`, `DROP TRIGGER` and `session_replication_role = 'replica'` all succeed for that role; the last defeats the row-level guards that have existed since migration `0002`, so this residue predates audit finding F-002 rather than being introduced by it. The fix — application role ≠ owner, `TRUNCATE` and DDL revoked — is foreshadowed in `0002`'s own comment and verified to refuse all four attempts. Named here rather than left to be discovered |
 | Automated dependency vulnerability scanning | Candidate for CI |
 | Retention and deletion policy | Not modelled; interacts with C-03 and C-05 immutability and needs a decision |
+| Batch-status-change audit term | **Not built.** A late `timeout-resolution` moves an already-complete batch's derived status and writes no batch-subject event, because `settlement-batch.completed` names the transition *into* completion (C-05, and the paragraph above it). The fix is a distinct vocabulary term, which is vocabulary design and belongs with increment 6's reconciliation work. The exception is stated in C-05's own statement, in `DOMAIN_MODEL.md`'s coverage paragraph and in `api/openapi.yaml`'s Audit tag, so no headline is broader than this row |
+| Log sanitiser for exception paths | **Not built. Target: the operational-hardening brief.** C-11 deliberately logs an unexpected throwable in full, and a throwable's message can carry anything the code that threw it put there — which is why C-09 is now scoped to request and configuration logging rather than to every log line. The mechanism is a sanitiser on the defect-logging path (`clofin.http.middleware/wrap-errors`, `clofin.http.server`), with a pattern set and a test that a credential in an exception message does not reach the log either. Audit finding **A-007**; the claim was narrowed at the same time, so nothing is over-stated while the debt is open |
+| Live-schema catalogue hashing | **Not built. Target: the operational-hardening brief.** C-10 covers the migration *history*: the runner hashes indexed SQL files, so a direct `ALTER TABLE` or a dropped trigger leaves every checksum and the reported `schemaVersion` unchanged. The mechanism is a canonical digest over the catalogue — tables, columns, constraints, triggers, functions, indexes, privileges — recorded per environment and comparable between them. Audit finding **A-008**. Partially mitigated today by `clofin.db.vocabulary-test`, which compares every closed vocabulary with the live catalogue on each integration run and would fail if a constraint were widened by hand |
+| Transitive dependency SBOM | **Not built. Target: the operational-hardening brief.** C-12 covers the seven **direct** dependencies in `deps.edn`; nothing here inventories the resolved graph, and ADR-0004's claim to "a short, auditable SBOM" describes a document the repository does not contain. The mechanism is a generated SBOM (CycloneDX or SPDX) produced in CI from the resolved classpath, reviewed on change, with an upstream security process named per component. Audit finding **A-010** |
+| Deep OpenAPI/handler contract validation | **Not built. Target: the operational-hardening brief.** `clofin.contract-test` proves route identity, published-vocabulary equality and the declared actor boundary. It does not invoke a handler, so request bodies, required members, response schemas and media types are maintained by review — which is how a `CreatePaymentInstructionRequest` that *required* a member the handler *refuses* passed green (findings **A-011** and **A-012**). The mechanism is schema-validating every fixture request and recorded response against the operation it names, so an unsatisfiable schema fails the build rather than an audit |

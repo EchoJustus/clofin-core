@@ -15,7 +15,15 @@ info:
     **Contract discipline.** This document is the interface specification, not
     generated documentation. It changes in the same commit as the handler it
     describes, and a contract test asserts that every operation declared here
-    exists in the service's route table and vice versa.
+    exists in the service's route table and vice versa, that the published
+    vocabularies equal the ones the service enforces, and that every
+    actor-protected operation declares `X-Actor-Id` with its `401` and `403`
+    responses.
+
+    That test does **not** invoke a handler or validate request and response
+    schemas against one, so this document's *semantics* are maintained by
+    review rather than mechanically. Deep validation is named debt in
+    `docs/COMPLIANCE.md` §4.
   license:
     name: EPL-2.0
     identifier: EPL-2.0
@@ -100,9 +108,19 @@ tags:
     description: |
       The audit trail, and evidence extraction from it.
 
-      **Every state change appends an event in the same transaction as the
-      change itself**, so a rolled-back change leaves no event and a committed
-      one leaves exactly one. An unaudited state change is not representable.
+      **Every state change an operation here performs appends an event in the
+      same transaction as the change itself**, so a rolled-back change leaves no
+      event and a committed one leaves exactly one. An unaudited state change is
+      not representable.
+
+      One qualification, stated here rather than left to be found: a late
+      `timeout-resolution` can move an **already-complete** settlement batch's
+      derived status — `failed` to `settled`, say — and that recomputation emits
+      no second batch-subject event, because `settlement-batch.completed` marks
+      the transition *into* a complete batch and this is not one. The payment's
+      own transition is recorded in the same transaction, so the change is not
+      invisible; what is missing is an event whose subject is the batch. It is
+      named debt in `COMPLIANCE.md` §4.
 
       **Events carry digests, not payloads.** An event proves *that* something
       changed and — compared against a value the auditor already holds —
@@ -112,7 +130,11 @@ tags:
       canonicalisation version that produced it, so a later change to the
       canonical form cannot make two incomparable digests look comparable.
 
-      The table rejects `UPDATE` and `DELETE` at the database, row by row.
+      The table rejects `UPDATE` and `DELETE` row by row and `TRUNCATE` per
+      statement, at the database. Those triggers do not bind the table's
+      *owner*, and CloFin connects as the owner in the shipped stack — the
+      runtime role split that would close that is named debt in
+      `COMPLIANCE.md` §4.
 
   - name: Payments
     description: |
@@ -122,20 +144,33 @@ tags:
       request; the entry is the accounting fact. One instruction produces
       several entries over its life — a release, a fee, a settlement.
 
-      **Every mutating operation requires an `Idempotency-Key`.** A retry
-      carrying the same key and the same body returns the stored response and
-      performs no new work; the same key with a *different* body is `409`. A
-      request with no key at all is `400`. This is the control that stops a
-      timeout on submission from becoming a payment made twice.
+      **Every payment-instruction and approval mutation requires an
+      `Idempotency-Key`** — create, amend, submit, cancel, approve and withdraw.
+      A retry carrying the same key and the same request returns the stored
+      response and performs no new work; the same key with a *different*
+      request is `409`. A request with no key at all is `400`. This is the
+      control that stops a timeout on submission from becoming a payment made
+      twice. Account creation, journal posting, organisation registration and
+      the settlement operations do **not** take the header; settlement is
+      guarded instead by batch lifecycle, permanent membership and the
+      scheme-response replay key, and the three ledger and bootstrap writes
+      expose no caller-key replay contract at all.
 
-      **Approval exists; settlement and screening do not.** `submit` moves an
+      **Approval and settlement exist; screening does not.** `submit` moves an
       instruction to `pendingApproval` — and only its creator may do so — and
       `POST /payment-instructions/{id}/approvals` moves it on from there,
       refusing the actor named in `createdBy`. The two halves are one control:
       restricting submission to the creator is what makes refusing `createdBy` a
-      complete maker–checker test. `released`, `settled`, `failed` and
-      `returned` exist in the lifecycle and no operation here drives an
-      instruction into them.
+      complete maker–checker test.
+
+      From `approved`, the **settlement operations drive the rest of the
+      lifecycle**: submitting a batch releases every member (`released`), and a
+      scheme response settles or returns each item (`settled`, `returned`).
+      `failed` alone is reached by nothing — a scheme failure that sends the
+      money back is a *return*, and an unanswered item is `timed-out`, which
+      means unknown rather than failed. It is declared because the lifecycle
+      carries the arrow, and its absence of a driver is stated in
+      `DOMAIN_MODEL.md` rather than left to be discovered.
 
       **`createdBy` is the authenticated actor**, not a value the caller sends;
       a request that sets it is refused rather than quietly overridden. It is
@@ -264,6 +299,7 @@ paths:
           in: path
           required: true
           schema: { type: string, format: uuid }
+        - $ref: "#/components/parameters/ActorId"
       responses:
         "200":
           description: The organisation
@@ -273,6 +309,10 @@ paths:
                 $ref: "#/components/schemas/Organisation"
         "400":
           $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
 
@@ -295,6 +335,8 @@ paths:
         a `409` or a `422` leaves neither the account nor an event behind. The
         event is visible through `GET /audit/events` and
         `GET /audit/evidence/{subjectId}`.
+      parameters:
+        - $ref: "#/components/parameters/ActorId"
       requestBody:
         required: true
         content:
@@ -316,6 +358,10 @@ paths:
                 $ref: "#/components/schemas/Account"
         "400":
           $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "409":
           description: An account with this code already exists in this organisation
           content:
@@ -335,6 +381,7 @@ paths:
         pagination is deferred until there is a consumer that needs it.
       parameters:
         - $ref: "#/components/parameters/OrganisationId"
+        - $ref: "#/components/parameters/ActorId"
       responses:
         "200":
           description: The chart of accounts
@@ -344,6 +391,10 @@ paths:
                 $ref: "#/components/schemas/AccountList"
         "400":
           $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
 
   /accounts/{id}:
     get:
@@ -361,6 +412,7 @@ paths:
           required: true
           schema: { type: string, format: uuid }
         - $ref: "#/components/parameters/OrganisationId"
+        - $ref: "#/components/parameters/ActorId"
       responses:
         "200":
           description: The account
@@ -370,6 +422,10 @@ paths:
                 $ref: "#/components/schemas/Account"
         "400":
           $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
 
@@ -417,6 +473,7 @@ paths:
           schema: { type: string, format: date-time }
           examples:
             august: { value: "2026-09-01T00:00:00Z" }
+        - $ref: "#/components/parameters/ActorId"
       responses:
         "200":
           description: The statement
@@ -426,6 +483,10 @@ paths:
                 $ref: "#/components/schemas/Statement"
         "400":
           $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
 
@@ -463,6 +524,8 @@ paths:
         rolled back with it, so there is never a record of a posting that did
         not happen. The event is visible through `GET /audit/events` and
         `GET /audit/evidence/{subjectId}`.
+      parameters:
+        - $ref: "#/components/parameters/ActorId"
       requestBody:
         required: true
         content:
@@ -484,6 +547,10 @@ paths:
                 $ref: "#/components/schemas/JournalEntry"
         "400":
           $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "409":
           description: |
             The entry, or a reversal of the referenced entry, has already been
@@ -527,6 +594,7 @@ paths:
           required: true
           schema: { type: string, format: uuid }
         - $ref: "#/components/parameters/OrganisationId"
+        - $ref: "#/components/parameters/ActorId"
       responses:
         "200":
           description: The entry, with its lines in posting order
@@ -536,6 +604,10 @@ paths:
                 $ref: "#/components/schemas/JournalEntry"
         "400":
           $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
 
@@ -564,6 +636,7 @@ paths:
         reversal being raised against the same settled instruction.
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/ActorId"
       requestBody:
         required: true
         content:
@@ -594,6 +667,10 @@ paths:
                 $ref: "#/components/schemas/PaymentInstruction"
         "400":
           $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "409":
           $ref: "#/components/responses/IdempotencyConflict"
         "422":
@@ -640,6 +717,7 @@ paths:
           description: Return only instructions in this lifecycle state.
           schema:
             $ref: "#/components/schemas/PaymentStatus"
+        - $ref: "#/components/parameters/ActorId"
       responses:
         "200":
           description: The instructions
@@ -649,6 +727,10 @@ paths:
                 $ref: "#/components/schemas/PaymentInstructionList"
         "400":
           $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
 
   /payment-instructions/{id}:
     get:
@@ -664,6 +746,7 @@ paths:
           required: true
           schema: { type: string, format: uuid }
         - $ref: "#/components/parameters/OrganisationId"
+        - $ref: "#/components/parameters/ActorId"
       responses:
         "200":
           description: The instruction
@@ -673,6 +756,10 @@ paths:
                 $ref: "#/components/schemas/PaymentInstruction"
         "400":
           $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
 
@@ -681,30 +768,32 @@ paths:
       operationId: amendPaymentInstruction
       summary: Amend a draft payment instruction
       description: |
-        **Only a draft may be amended.** An instruction that has been submitted
-        is `409`: it is under consideration by someone else, and changing what
-        they are considering underneath them is the failure segregation of
-        duties exists to prevent (PR-004).
+        **A draft is edited in place; a `pendingApproval` or `approved`
+        instruction is returned to `draft` and every approval given so far is
+        invalidated** — an approver agreed to values that are no longer the
+        instruction's, and the amendment restarts the maker–checker cycle
+        rather than slipping past it. Each invalidation appends its own
+        `approval.invalidated` event. Amending from any other state — `settled`,
+        `released`, `cancelled`, `rejected`, `returned`, `failed` — is `409`.
+
+        **Only the instruction's creator may amend it** (PR-004). Anyone else
+        is `403` with `errors.rule` = `creator-only`, whatever permissions they
+        hold, checked under the instruction's row lock in the same transaction
+        as the change. The actor comes from `X-Actor-Id`; nothing compares a
+        caller-supplied `createdBy`, which is why sending one is refused rather
+        than trusted.
 
         Only substance is amendable. `id`, `organisationId`, `status`,
         `createdBy`, `createdAt` and `reversesId` are not, and naming one is
         `422` rather than being silently ignored — a caller that sent it
         believes it changed something.
-
-        `organisationId` is required, and scopes the request rather than
-        amending anything.
-
-        *Not implemented:* PR-004 says a draft may be amended **by its
-        creator**. There is no authenticated principal to check that against
-        yet, and comparing a caller-supplied `createdBy` to a stored one would
-        check that a UUID had been copied correctly while looking, from
-        outside, like an access control. TASK-003 adds it.
       parameters:
         - name: id
           in: path
           required: true
           schema: { type: string, format: uuid }
         - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/ActorId"
       requestBody:
         required: true
         content:
@@ -790,6 +879,7 @@ paths:
           required: true
           schema: { type: string, format: uuid }
         - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/ActorId"
       requestBody:
         required: true
         content:
@@ -874,6 +964,7 @@ paths:
           required: true
           schema: { type: string, format: uuid }
         - $ref: "#/components/parameters/IdempotencyKey"
+        - $ref: "#/components/parameters/ActorId"
       requestBody:
         required: true
         content:
@@ -894,6 +985,10 @@ paths:
                 $ref: "#/components/schemas/PaymentInstruction"
         "400":
           $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
         "409":
@@ -1313,16 +1408,29 @@ paths:
         reviewer, or an operator demonstrating the controls — posts here, and by
         no other route.
 
-        What a simulated scheme *would* say is deterministic and predictable
-        from the instruction, so a reviewer can produce partial failure on
-        demand: the outcome is derived from the **last digit of the synthetic
-        creditor account**.
+        **The outcome is whatever the caller sends.** `kind` — and, for a
+        `timeout-resolution`, `outcome` — decide what happens to the item; this
+        operation validates their shape and applies them. Nothing here inspects
+        the creditor account.
 
-        | Last digit | Simulated outcome |
+        What a simulated scheme *would* say is separately deterministic and
+        predictable from the instruction, so a reviewer can produce partial
+        failure on demand without inventing a script: `clofin.settlement.scheme`
+        maps the **last digit of the synthetic creditor account** to a suggested
+        outcome.
+
+        | Last digit | Suggested outcome |
         |---|---|
         | `0`–`6` | settled |
         | `7`, `8` | returned |
         | `9` | no response at all — the item will time out |
+
+        That table is **guidance for whoever composes the request**, not a
+        constraint this operation enforces: a caller may post `settled` for an
+        account ending `7` and it will settle. It was described as the
+        derivation rule until the `ref-1` release audit (finding **A-013**),
+        which is a contract a client could have built against and CloFin would
+        not have honoured.
 
         Kinds:
 
@@ -1388,11 +1496,17 @@ paths:
         "409":
           description: |
             The item already has an outcome, is not timed out, is not in this
-            batch, or this reference already names a different message. The
-            response's receipt has been committed before this status is
-            rendered — `errors.dispositionReason` names which case it was, and
+            batch, or this reference already names a different message.
+            `errors.dispositionReason` names which case it was — the complete
+            set of codes is `SchemeResponseRefusalReason` — and
             `errors.replayed` is true when this exact message has been refused
             before and is being given the same answer again.
+
+            For the first three codes the response's **receipt has been
+            committed before this status is rendered**, and is visible under
+            `schemeResponses` on the batch. `replay-key-conflict` is the
+            exception and writes nothing: the receipt it conflicts with is
+            already there, and it is that receipt which stands as the evidence.
           content:
             application/problem+json:
               schema:
@@ -1522,8 +1636,10 @@ paths:
       description: |
         Every state change of one subject, in the order it happened, each entry
         carrying the actor who caused it. A subject is a payment instruction, an
-        approval, an organisation, a ledger account or a journal entry — every
-        record CloFin can write.
+        approval, an organisation, a ledger account, a journal entry or a
+        settlement batch — every record CloFin can write. The authoritative
+        list is `AuditSubjectType`, which the contract test compares with
+        `clofin.audit/subject-types` in both directions.
 
         For a payment instruction the pack **also includes its approvals' own
         events** — `approval.recorded`, `approval.invalidated`,
@@ -1545,7 +1661,8 @@ paths:
           required: true
           description: >-
             The id of any audited subject: a payment instruction, an approval,
-            an organisation, a ledger account or a journal entry.
+            an organisation, a ledger account, a journal entry or a settlement
+            batch.
           schema: { type: string, format: uuid }
         - $ref: "#/components/parameters/ActorId"
         - $ref: "#/components/parameters/OptionalOrganisationId"
@@ -1629,9 +1746,21 @@ components:
       required: true
       description: |
         A caller-supplied identifier that makes a retry safe. **Mandatory on
-        every mutating operation** (PR-040); a request without one is `400`,
-        rather than being quietly executed, because a caller that has not
-        thought about retries is exactly the caller a retry will hurt.
+        every operation that declares this parameter** — the six payment and
+        approval mutations: create, amend, submit, cancel, approve and withdraw.
+        A request without one is `400` rather than being quietly executed,
+        because a caller that has not thought about retries is exactly the
+        caller a retry will hurt.
+
+        PR-040 asks for it on every mutating operation and that is not yet true:
+        organisation registration, account creation, journal posting and the
+        four settlement operations do not take this header. Settlement is
+        guarded instead by batch lifecycle, permanent membership and the
+        scheme-response replay key; the three ledger and bootstrap writes expose
+        no caller-key replay contract at all. The parameter list on each
+        operation is authoritative, and this sentence exists because the
+        requirement's wording was reproduced here as an enforcement claim
+        (`ref-1` audit finding **A-005**).
 
         One key identifies one request. Replaying **the same request** returns
         the stored response and performs no new work; reusing the key for a
@@ -1717,6 +1846,48 @@ components:
             $ref: "#/components/schemas/Problem"
 
   schemas:
+    CurrencyCode:
+      type: string
+      description: |
+        A currency CloFin can represent, as an ISO 4217 alphabetic code.
+
+        **The complete supported set**, not a shape. It was published as
+        `pattern: "^[A-Z]{3}$"` until the `ref-1` release audit (finding
+        **A-019**), which meant a contract-valid request naming `XYZ` was
+        rejected by `clofin.money/of` or by a currency foreign key — a client
+        could not derive the accepted set from the interface specification, and
+        the specification described a system more permissive than the one that
+        answers.
+
+        The minor-unit scale is ISO 4217's and is **not** always 2: `JPY`,
+        `KRW` and `VND` have no minor unit, and `BHD`, `KWD` and `TND` have
+        three. `clofin.contract-test` compares this enum with
+        `clofin.money/currencies` in both directions, so a currency added to
+        one and not the other fails the build.
+      enum:
+        - AUD
+        - BHD
+        - CAD
+        - CHF
+        - CNY
+        - EUR
+        - GBP
+        - HKD
+        - IDR
+        - INR
+        - JPY
+        - KRW
+        - KWD
+        - MYR
+        - NZD
+        - PHP
+        - SGD
+        - THB
+        - TND
+        - USD
+        - VND
+      examples: ["SGD"]
+
     Money:
       type: object
       description: |
@@ -1728,10 +1899,7 @@ components:
       additionalProperties: false
       properties:
         currency:
-          type: string
-          pattern: "^[A-Z]{3}$"
-          description: ISO 4217 alphabetic code.
-          examples: ["SGD"]
+          $ref: "#/components/schemas/CurrencyCode"
         minorUnits:
           type: integer
           format: int64
@@ -1791,8 +1959,7 @@ components:
           type: string
           enum: [asset, liability, equity, revenue, expense]
         currency:
-          type: string
-          pattern: "^[A-Z]{3}$"
+          $ref: "#/components/schemas/CurrencyCode"
           description: Every line posted to this account must be in this currency.
         status:
           type: string
@@ -1809,10 +1976,17 @@ components:
 
     CreateAccountRequest:
       type: object
-      required: [organisationId, code, name, type, currency]
       additionalProperties: false
+      required: [code, name, type, currency]
       properties:
-        organisationId: { type: string, format: uuid }
+        organisationId:
+          type: string
+          format: uuid
+          description: |
+            Optional. The organisation comes from the authenticated actor; when
+            sent, it is verified against the actor's own and refused with `403`
+            if it differs. It was `required` here while the handler never read
+            it as a required field (finding **A-012**).
         code:
           type: string
           pattern: "^[A-Z0-9][A-Z0-9-]{1,63}$"
@@ -1821,8 +1995,7 @@ components:
           type: string
           enum: [asset, liability, equity, revenue, expense]
         currency:
-          type: string
-          pattern: "^[A-Z]{3}$"
+          $ref: "#/components/schemas/CurrencyCode"
 
     AccountList:
       type: object
@@ -1907,10 +2080,17 @@ components:
 
     PostJournalEntryRequest:
       type: object
-      required: [organisationId, occurredAt, narrative, reference, lines]
+      required: [occurredAt, narrative, reference, lines]
       additionalProperties: false
       properties:
-        organisationId: { type: string, format: uuid }
+        organisationId:
+          type: string
+          format: uuid
+          description: |
+            Optional. The organisation comes from the authenticated actor; when
+            sent, it is verified against the actor's own and refused with `403`
+            if it differs. It was `required` here while the handler never read
+            it as a required field (finding **A-012**).
         occurredAt:
           type: string
           format: date-time
@@ -2116,11 +2296,26 @@ components:
 
     CreatePaymentInstructionRequest:
       type: object
-      required: [organisationId, debtorAccountId, creditorName, creditorAccount,
-                 amount, valueDate, purposeCode, createdBy]
+      description: |
+        **`createdBy` is not a member of this request and sending it is `422`.**
+        It is derived from the authenticated actor — the `X-Actor-Id` header —
+        and refused rather than ignored, because a caller that sent it would
+        otherwise believe it had recorded who raised the payment. It was
+        `required` here, and simultaneously refused by the handler, until the
+        `ref-1` release audit (finding **A-012**): no conformant request could
+        succeed, which made this schema unsatisfiable rather than merely stale.
+      required: [debtorAccountId, creditorName, creditorAccount,
+                 amount, valueDate, purposeCode]
       additionalProperties: false
       properties:
-        organisationId: { type: string, format: uuid }
+        organisationId:
+          type: string
+          format: uuid
+          description: |
+            Optional. The organisation comes from the authenticated actor; when
+            sent, this is **verified against it and refused with `403` if it
+            differs** rather than trusted or silently reinterpreted. It also
+            appears in the `Location` header of the created instruction.
         debtorAccountId: { type: string, format: uuid }
         creditorName: { type: string, minLength: 1, maxLength: 140 }
         creditorAccount:
@@ -2138,10 +2333,6 @@ components:
             indistinguishable from work in progress.
         purposeCode:
           $ref: "#/components/schemas/PurposeCode"
-        createdBy:
-          type: string
-          format: uuid
-          description: Caller-asserted until TASK-003. See `PaymentInstruction.createdBy`.
         reversesId:
           type: string
           format: uuid
@@ -2155,13 +2346,17 @@ components:
         A partial update of a draft. Only the members below may appear —
         anything else, including `status` and `createdBy`, is `422` rather than
         being ignored.
-      required: [organisationId]
       additionalProperties: false
       properties:
         organisationId:
           type: string
           format: uuid
-          description: Scopes the request. Not itself amendable.
+          description: |
+            Optional, and **not itself amendable** — it scopes the request. The
+            organisation comes from the authenticated actor; when sent, it is
+            verified against the actor's own and refused with `403` if it
+            differs. It was `required` here while the handler treated it as an
+            optional scoping member (finding **A-012**).
         debtorAccountId: { type: string, format: uuid }
         creditorName: { type: string, minLength: 1, maxLength: 140 }
         creditorAccount:
@@ -2403,6 +2598,44 @@ components:
           description: Required on a `returned` item; the simulated scheme's stated reason.
         resolvedAt: { type: string, format: date-time }
 
+    SchemeResponseRefusalReason:
+      type: string
+      description: |
+        Why CloFin refused a scheme response, as a stable machine code. The
+        complete set a caller may receive under `errors.dispositionReason` on a
+        `409`.
+
+        - `item-already-resolved` — the item already has an outcome; a late
+          answer for a timed-out item must arrive as a `timeout-resolution`.
+        - `item-not-timed-out` — nothing for a timeout resolution to resolve.
+        - `item-not-in-batch` — this batch has no membership for that
+          instruction.
+        - `replay-key-conflict` — this batch, instruction, kind and reference
+          already name a *different* message. Alone among these, it is **never
+          stored**: the refusal happens because a receipt for that identity
+          already exists, and writing a second row would defeat the replay key
+          that produced it. See `StoredSchemeResponseRefusalReason`.
+      enum:
+        - item-already-resolved
+        - item-not-timed-out
+        - item-not-in-batch
+        - replay-key-conflict
+
+    StoredSchemeResponseRefusalReason:
+      type: string
+      description: |
+        The subset of `SchemeResponseRefusalReason` that can be recorded on a
+        receipt. Present only when `disposition` is `refused`.
+
+        Narrower than the set a caller may be told, by exactly one value, and
+        the difference is a fact rather than an omission — `replay-key-conflict`
+        refuses *because* a receipt already exists, so it has no receipt of its
+        own to carry it.
+      enum:
+        - item-already-resolved
+        - item-not-timed-out
+        - item-not-in-batch
+
     SchemeResponseRecord:
       type: object
       description: |
@@ -2438,9 +2671,7 @@ components:
               reproduces this same refusal rather than re-evaluating it against
               whatever state has arrived since.
         dispositionReason:
-          type: string
-          enum: [item-already-resolved, item-not-timed-out, item-not-in-batch]
-          description: Present only when `disposition` is `refused`.
+          $ref: "#/components/schemas/StoredSchemeResponseRefusalReason"
         outcome:
           type: string
           enum: [settled, returned]
@@ -2470,7 +2701,7 @@ components:
             Simulated schemes only. The `SIM-` prefix is enforced by a database
             check constraint so a synthetic record can never name a real
             network.
-        currency: { type: string, minLength: 3, maxLength: 3 }
+        currency: { $ref: "#/components/schemas/CurrencyCode" }
         valueDate: { type: string, format: date }
         status:
           type: string
@@ -2578,7 +2809,7 @@ components:
             Which simulated scheme settles this batch. An operator's routing
             choice: a payment instruction carries no scheme attribute, so this
             is not derived from its members.
-        currency: { type: string, minLength: 3, maxLength: 3 }
+        currency: { $ref: "#/components/schemas/CurrencyCode" }
         valueDate: { type: string, format: date }
         instructionIds:
           type: array

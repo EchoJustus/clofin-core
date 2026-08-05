@@ -181,7 +181,7 @@
         (if (= sql-state (:unique-violation db/sql-states))
           (err/conflict! "This actor already holds a live decision on this instruction"
                          {:instruction-id (str instruction-id)
-                          :constraint constraint})
+                          :clofin/constraint constraint})
           (throw t))))))
 
 (defn invalidate-approval!

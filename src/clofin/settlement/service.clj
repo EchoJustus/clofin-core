@@ -417,6 +417,12 @@
       ;; A different message under a taken identity. No work, and no second row:
       ;; the first receipt already stands as the evidence of what arrived, and
       ;; the replay key exists precisely to stop a second one.
+      ;;
+      ;; The code and its prose both come from `response/refusal-reasons` rather
+      ;; than being written here. They were written here until finding
+      ;; **A-016**, which is how `replay-key-conflict` came to be a code the
+      ;; service emitted and no vocabulary declared: a term defined at its only
+      ;; call site is a term nothing can enumerate.
       existing
       {:batch              batch-row
        :replayed?          false
@@ -424,9 +430,7 @@
        :disposition        "refused"
        :disposition-reason "replay-key-conflict"
        :outcome            nil
-       :detail             (str "This batch, instruction, kind and reference already name a "
-                                "different scheme response. A reference identifies one message; "
-                                "two messages that say different things cannot share it")}
+       :detail             (response/refusal-detail "replay-key-conflict")}
 
       :else
       (let [items-before  (settlement/items-for tx batch-id)

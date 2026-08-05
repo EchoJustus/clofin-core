@@ -22,7 +22,8 @@
 
   Pure: no database, no clock, no identifier generation."
   (:require [clofin.error :as err]
-            [clofin.idempotency :as idem])
+            [clofin.idempotency :as idem]
+            [clojure.string :as str])
   (:import [java.security MessageDigest]
            [java.time Instant LocalDate]
            [java.util HexFormat]))
@@ -136,6 +137,31 @@
          ;; on.
          "settlement-batch"]))
 
+(def payment-action-prefix
+  "The one action prefix whose subject type is not spelt the same way.
+
+  `payment.*` addresses the **instruction** record, so its subject type is
+  `payment-instruction`. Held as a constant rather than inlined because
+  `api/openapi.yaml` publishes the same exception in prose and
+  `clofin.contract-test` compares the two."
+  "payment")
+
+(defn subject-type-for
+  "The subject type `action` is about, derived from the action itself.
+
+  Every action is named `<subject>.<past-tense-verb>` and — with the single
+  `payment.*` exception above — **the prefix is the subject type**. Deriving it
+  rather than tabulating it is what makes the rule enforceable: a term added to
+  `actions` whose prefix names no subject type has nowhere to go, instead of
+  quietly acquiring whatever subject its first caller passed.
+
+  Returns the derived name whether or not it is a known subject type; `event`
+  decides what to do about that."
+  [action]
+  (when (string? action)
+    (let [prefix (first (str/split action #"\." 2))]
+      (if (= payment-action-prefix prefix) "payment-instruction" prefix))))
+
 (def bootstrap-actions
   "The actions that may be recorded with no actor at all.
 
@@ -233,11 +259,21 @@
   caller never computes a digest itself, so there is one place that decides
   what an audit digest is taken over.
 
-  Refuses an unknown action, an unknown subject type, a missing subject, or a
-  missing actor outside the bootstrap. A `record!` that quietly accepted
-  anything would make the vocabulary above a suggestion, and an audit trail
-  whose vocabulary is a suggestion cannot answer \"show me every approval in
-  August\" completely."
+  Refuses an unknown action, an unknown subject type, a **subject type the
+  action is not about**, a missing subject, or a missing actor outside the
+  bootstrap. A `record!` that quietly accepted anything would make the
+  vocabulary above a suggestion, and an audit trail whose vocabulary is a
+  suggestion cannot answer \"show me every approval in August\" completely.
+
+  The third of those was added by the `ref-1` release audit (**A-015**). Until
+  then the two vocabularies were checked *independently*, so `payment.approved`
+  with subject type `account` — two individually valid values, one impossible
+  pair — was accepted and stored. Every call site happened to be right, which
+  is exactly the condition under which a missing check goes unnoticed: the
+  naming rule this vocabulary is documented and queried by was a convention the
+  code did not hold anyone to. It holds them to it now (standing lesson
+  **L-6**: a premise a control rests on is traced to its own enforcement
+  point)."
   [{:keys [organisation-id actor-id action subject-type subject-id
            before after correlation-id]}]
   (when-not (contains? actions action)
@@ -252,6 +288,15 @@
   (when-not (contains? subject-types subject-type)
     (err/invalid! (str "Unknown audit subject type: " subject-type)
                   {:subject-type (str subject-type) :known (vec subject-types)}))
+  ;; Checked last of the three vocabulary rules, so a caller that got both
+  ;; values wrong is told which one is unknown before being told the pair is
+  ;; impossible.
+  (when-not (= subject-type (subject-type-for action))
+    (err/invalid! (str "An audit event for " action " is about a "
+                       (subject-type-for action) ", not a " subject-type)
+                  {:action       action
+                   :subject-type (str subject-type)
+                   :expected     (subject-type-for action)}))
   (when-not (uuid? subject-id)
     (err/invalid! "An audit event must name the subject it is about"
                   {:action action}))

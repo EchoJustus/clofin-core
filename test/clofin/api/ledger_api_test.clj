@@ -132,6 +132,51 @@
     (is (= "Meridian Freight Holdings Pte Ltd" (get json "legalName")))
     (is (= "active" (get json "status")))))
 
+;; ---------------------------------------------------------------------------
+;; A-006 — reading an organisation is authenticated and authorised
+;; ---------------------------------------------------------------------------
+;;
+;; The `ref-1` release audit found `GET /organisations/:id` outside the
+;; permission model entirely: the handler namespace did not require
+;; `clofin.api.principal`, so any caller holding a tenant UUID could read its
+;; legal name. The test above covers the permitted read; these three cover what
+;; the route now refuses, because a control is only as good as its refusals.
+
+(deftest a-006-reading-an-organisation-requires-an-actor
+  (testing "C-08: no business route authenticates nobody. `POST /organisations` is the only exception"
+    (let [org (new-organisation!)
+          {:keys [status json]} (call :get (str "/organisations/" (get org "id")) :actor false)]
+      (is (= 401 status))
+      (is (= "https://clofin.dev/problems/unauthorised" (get json "type"))))))
+
+(deftest a-006-reading-another-organisation-is-forbidden-not-not-found
+  (testing "the tenant boundary is an authorisation answer, never an existence oracle"
+    (let [_       (new-organisation! "meridian")
+          actor-a @current-actor
+          other   (created! "/organisations" {"legalName" "Kowloon Trading Company Limited"
+                                              "shortName" "kowloon"})
+          {:keys [status json]} (call :get (str "/organisations/" (get other "id"))
+                                      :actor actor-a)]
+      (is (= 403 status)
+          "403 rather than 404: the caller may not act for the organisation it named")
+      (is (= "https://clofin.dev/problems/forbidden" (get json "type")))
+      (is (not (str/includes? (:body (call :get (str "/organisations/" (get other "id"))
+                                           :actor actor-a))
+                              "Kowloon"))
+          "and the refusal discloses nothing about the organisation it refused"))))
+
+(deftest a-006-an-actor-without-the-permission-is-refused
+  (testing "the permission is checked, not merely the authentication"
+    (let [org      (new-organisation!)
+          roleless (tdb/insert-actor! tdb/*pool*
+                                      {:organisation-id (java.util.UUID/fromString (get org "id"))
+                                       :display-name "No roles"
+                                       :roles []})
+          {:keys [status json]} (call :get (str "/organisations/" (get org "id"))
+                                      :actor roleless)]
+      (is (= 403 status))
+      (is (= "organisation/read" (get-in json ["errors" "permission"]))))))
+
 (deftest a-duplicate-short-name-is-a-conflict
   (new-organisation! "meridian")
   (let [{:keys [status json]} (call :post "/organisations"
