@@ -253,11 +253,31 @@
 
   `approval` permits `UPDATE` — that is how PR-014 invalidates an approval —
   and refuses the two verbs that destroy a decision. The asymmetry is
-  deliberate and is commented in migration `0005`."
-  [{:table "journal_entry" :refuses #{:update :delete :truncate}}
-   {:table "journal_line"  :refuses #{:update :delete :truncate}}
-   {:table "audit_event"   :refuses #{:update :delete :truncate}}
-   {:table "approval"      :refuses #{:delete :truncate} :permits #{:update}}])
+  deliberate and is commented in migration `0005`.
+
+  **`scheme_response` was missing from this list until audit finding F-010.**
+  Its guards worked; nothing here proved they did. The auditor dropped
+  `scheme_response_append_only` in a disposable database and both this namespace
+  and `clofin.settlement.repository-test` stayed green — 33 tests, 120
+  assertions — so two thirds of a control could be removed by a future migration
+  or a fixture regression without a single test noticing. That is the
+  partial-enforcement failure **L-5** and **L-6** exist to prevent, on the newest
+  evidence table those lessons should have covered automatically. Adding a
+  guarded table here is not optional bookkeeping; it is the guard on the guard.
+
+  Verbs are an ordered **vector**, not a set, and `truncate` is last on purpose.
+  A set leaves the order to the runtime, and if `TRUNCATE` ever ran first *and
+  succeeded* the row would be gone before `UPDATE` and `DELETE` were tried —
+  which they would then pass trivially, against nothing. The suite would report
+  one broken guard where three were. That costs nothing on a healthy schema,
+  where every verb is refused and the row survives all three; it is worth having
+  for the run where the schema is not healthy, which is the only run this test
+  exists for."
+  [{:table "journal_entry"   :refuses [:update :delete :truncate]}
+   {:table "journal_line"    :refuses [:update :delete :truncate]}
+   {:table "audit_event"     :refuses [:update :delete :truncate]}
+   {:table "approval"        :refuses [:delete :truncate] :permits [:update]}
+   {:table "scheme_response" :refuses [:update :delete :truncate]}])
 
 (defn- seeded-row!
   "One row in `table`, so that row-level triggers have something to fire on.
@@ -295,7 +315,26 @@
                      values (?, ?, ?, 'Pacific Rim Logistics Pte Ltd', 'SG-SYNTH-88012345',
                              125000, 'SGD', '2026-12-01', 'SUPP', 'pending-approval', ?)"
                     instruction org account actor])
-      (tdb/insert-approval! tdb/*pool* {:instruction-id instruction :actor-id actor}))))
+      (tdb/insert-approval! tdb/*pool* {:instruction-id instruction :actor-id actor}))
+
+    ;; A **committed** receipt, as F-010 asks. The verbs below are attempted
+    ;; against a row that is really there: an UPDATE or a DELETE matching
+    ;; nothing succeeds trivially and proves nothing about the trigger.
+    "scheme_response"
+    (let [batch (random-uuid)
+          id    (random-uuid)]
+      (db/execute! tdb/*pool*
+                   ["insert into settlement_batch
+                       (id, organisation_id, scheme, currency, value_date, created_by)
+                     values (?, ?, 'SIM-RTGS', 'SGD', '2026-12-01', ?)"
+                    batch org actor])
+      (db/execute! tdb/*pool*
+                   ["insert into scheme_response
+                       (id, batch_id, instruction_id, kind, reference, disposition,
+                        request_digest)
+                     values (?, ?, null, 'ack', ?, 'acknowledged', 'v1:seeded')"
+                    id batch (str "SIM-ACK-" batch)])
+      id)))
 
 (defn- attempt
   "Issue `verb` against `table` in raw SQL. Returns the exception, or nil."
@@ -361,10 +400,11 @@
                                join pg_namespace n on n.oid = c.relnamespace
                               where n.nspname = 'public'
                                 and not t.tgisinternal
-                                and c.relname in ('journal_entry','journal_line','audit_event','approval')
+                                and c.relname in ('journal_entry','journal_line','audit_event',
+                                                  'approval','scheme_response')
                               order by 1, 2"])]
-      (is (= 10 (count guards))
-          (str "expected 8 append-only guards plus the two deferred completeness "
+      (is (= 12 (count guards))
+          (str "expected 10 append-only guards plus the two deferred completeness "
                "triggers (journal_entry_must_be_complete, journal_entry_must_balance), found "
                (pr-str (mapv (juxt :table-name :trigger-name) guards))))
       (doseq [{:keys [table-name trigger-name enabled]} guards]

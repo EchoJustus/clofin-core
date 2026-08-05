@@ -38,7 +38,8 @@
   (:require [clofin.db.core :as db]
             [clofin.error :as err]
             [clofin.money :as money]
-            [clofin.settlement.batch :as batch]))
+            [clofin.settlement.batch :as batch]
+            [clofin.settlement.response :as response]))
 
 (def row-cap
   "Maximum rows a list query returns. The same cap and the same reasoning as
@@ -74,14 +75,32 @@
    :outcome-reason (:outcome-reason row)
    :resolved-at    (db/->instant (:resolved-at row))})
 
+(def ^:private response-columns
+  "Named once, because three queries read this row and a receipt read through
+  two different column lists is a receipt that can replay differently depending
+  on which function fetched it."
+  "select id, batch_id, instruction_id, kind, reference, received_at,
+          disposition, disposition_reason, request_digest, outcome, reason
+     from scheme_response ")
+
 (defn- row->response
   [row]
-  {:id             (:id row)
-   :batch-id       (:batch-id row)
-   :instruction-id (:instruction-id row)
-   :kind           (:kind row)
-   :reference      (:reference row)
-   :received-at    (db/->instant (:received-at row))})
+  (when row
+    {:id                 (:id row)
+     :batch-id           (:batch-id row)
+     :instruction-id     (:instruction-id row)
+     :kind               (:kind row)
+     :reference          (:reference row)
+     :received-at        (db/->instant (:received-at row))
+     ;; Migration `0010`. The disposition is what makes this row a receipt
+     ;; rather than a record of successful work (F-008), and the digest is what
+     ;; makes a replay a replay of the same message rather than of the same
+     ;; reference (F-009).
+     :disposition        (:disposition row)
+     :disposition-reason (:disposition-reason row)
+     :request-digest     (:request-digest row)
+     :outcome            (:outcome row)
+     :reason             (:reason row)}))
 
 ;; ---------------------------------------------------------------------------
 ;; Reading
@@ -119,9 +138,8 @@
   `idempotency_key` takes and the reason this table exists."
   [source batch-id]
   (mapv row->response
-        (db/query source ["select id, batch_id, instruction_id, kind, reference, received_at
-                             from scheme_response
-                            where batch_id = ? order by received_at, id limit ?"
+        (db/query source [(str response-columns
+                               "where batch_id = ? order by received_at, id limit ?")
                           batch-id (inc row-cap)])))
 
 (defn list-batches
@@ -236,16 +254,38 @@
               (:currency candidate) (:value-date candidate) (:created-by candidate)])]
     (assoc candidate :status "open" :created-at (db/->instant (:created-at row)))))
 
+(def membership-index
+  "The unique index that makes a second settlement membership unrepresentable.
+
+  Renamed by migration `0010` from `settlement_item_live_key`, and redefined
+  with it. The old index excepted `returned` — it was a *partial* index, and its
+  comment advertised a re-batching permission no public workflow could reach,
+  because batch eligibility is `approved`-only and `:returned` is terminal in
+  the payment lifecycle. Audit finding **F-007** proved the contradiction from
+  both sides at once, and the ruling withdrew the permission rather than
+  widening the lifecycle: an instruction belongs to at most one membership,
+  ever.
+
+  Named as a value because both this namespace and its tests reason about the
+  constraint by name, and a constraint name spelled out in two places is one
+  that can be renamed in one of them."
+  "settlement_item_instruction_key")
+
 (defn add-items!
   "Add memberships, or refuse the whole batch.
 
-  The refusal an operator will actually hit is `settlement_item_live_key` — the
-  partial unique index that lets an instruction belong to at most one membership
-  that is pending, settled or timed out. It is translated here into a named
-  `409` rather than surfacing as a `500`, because \"this payment is already in a
-  batch\" is something the caller can act on, and because that index **is**
-  AC-7: the guard against settling one payment twice lives in the schema, so it
-  binds a fix-up script and a defect as well as this function."
+  The refusal an operator will actually hit is `membership-index`, and it is
+  translated here into a named `409` rather than surfacing as a `500`, because
+  \"this payment is already in a batch\" is something the caller can act on, and
+  because that index **is** AC-7: the guard against settling one payment twice
+  lives in the schema, so it binds a fix-up script and a defect as well as this
+  function.
+
+  The reason names the terminal state and the correction. An operator whose
+  payment came back is not told \"already in a batch\" and left to wonder which
+  one — they are told that a returned payment is finished and that a retry is a
+  new instruction, because a refusal an operator cannot act on becomes a request
+  to disable the check."
   [tx batch-id instruction-ids]
   (try
     (doseq [id (sort-by str instruction-ids)]
@@ -255,13 +295,16 @@
     (catch Exception t
       (let [{:keys [sql-state constraint]} (db/violation t)]
         (if (and (= sql-state (:unique-violation db/sql-states))
-                 (= "settlement_item_live_key" constraint))
+                 (= membership-index constraint))
           (err/conflict!
-           (str "A payment instruction named here is already in a settlement batch that is "
-                "pending, settled or timed out; only a returned item frees its instruction "
-                "for re-batching")
+           (str "A payment instruction named here has already been in a settlement batch. "
+                "A membership is permanent whatever became of it: pending, settled, "
+                "timed out and returned all block a second one. A returned payment is "
+                "terminal — retry it by raising a new payment instruction, approving that, "
+                "and batching it")
            {:constraint constraint
-            :batch-id   (str batch-id)})
+            :batch-id   (str batch-id)
+            :retry      "raise-a-new-instruction"})
           (throw t))))))
 
 (defn set-batch-status!
@@ -341,7 +384,7 @@
 
   Timing out is not failing. The instruction stays `released`, because CloFin
   does not know what happened to it, and the item stays un-re-batchable because
-  `settlement_item_live_key` counts `timed-out` as live. Treating unknown as
+  `membership-index` admits no second membership at all. Treating unknown as
   failed and re-batching is how a payment gets made twice, which is the failure
   this whole module exists to prevent.
 
@@ -370,20 +413,31 @@
 ;; ---------------------------------------------------------------------------
 
 (defn record-response!
-  "Store a scheme response verbatim. Returns the row, or **nil when it is a
-  duplicate**.
+  "Commit the receipt for one scheme response, carrying what CloFin did about
+  it. Returns the row, or **nil when the replay key was already taken**.
 
-  The unique key `(batch_id, instruction_id, kind, reference)` — declared
-  `nulls not distinct`, so two batch-level acks collide rather than coexisting —
-  is what makes a duplicate delivery detectable. Catching the violation and
-  returning nil, rather than letting it propagate, is deliberate: a scheme
-  answering twice is the *normal* case in the world this simulates, not an
-  error, and the caller's correct response is to do no work and return the same
-  answer as the first time (AC-5).
+  ## The row is a receipt, not a record of work
 
-  The first row stays and the second is discarded. That is the same posture
-  `idempotency_key` takes, and for the same reason: what is worth keeping is the
-  evidence that a duplicate arrived and was refused work.
+  Standing lesson **L-11**. `disposition` is written here, in the same statement
+  as the arrival, so the two commit together: `applied`, `acknowledged`, or
+  `refused` with a machine-readable `disposition_reason`. Before migration
+  `0010` a refusal did not exist as a stored state at all — the service threw,
+  the outer transaction rolled back, and the receipt went with it. The first
+  delivery was then unprovable *and* the same reference could do work later
+  against changed state, which is the opposite of what an append-only evidence
+  table is for (audit finding **F-008**).
+
+  Nothing in this function renders an error. A refusal is data; the `409` is the
+  handler's, after the caller's transaction has committed.
+
+  ## The digest is what makes a replay a replay
+
+  `request_digest` covers the complete semantic request including `outcome` and
+  `reason` (**F-009**, lesson **L-12**). The unique key
+  `(batch_id, instruction_id, kind, reference)` — `nulls not distinct`, so two
+  batch-level acks collide rather than coexisting — still names the *identity*
+  of a delivery; the caller compares digests to decide whether an arrival under
+  a taken identity is the same message or a contradiction.
 
   **Inside a savepoint**, and that is load-bearing rather than defensive.
   PostgreSQL aborts the whole transaction on a constraint violation, so merely
@@ -392,17 +446,25 @@
   `clofin.db.core/tolerating-violation` existed, and it surfaced as a `500` on
   the duplicate path rather than as the `200` a repeated scheme response
   deserves."
-  [tx {:keys [id batch-id instruction-id kind reference]}]
+  [tx {:keys [id batch-id instruction-id kind reference
+              disposition disposition-reason request-digest outcome reason]}]
+  (when-not (contains? response/dispositions disposition)
+    (err/invalid! (str "Unknown scheme response disposition: " disposition)
+                  {:disposition (str disposition) :known (vec response/dispositions)}))
   (db/tolerating-violation
    tx
    (fn [conn]
      (row->response
       (db/insert-returning!
        conn
-       ["insert into scheme_response (id, batch_id, instruction_id, kind, reference)
-         values (?, ?, ?, ?, ?)
-         returning id, batch_id, instruction_id, kind, reference, received_at"
-        id batch-id instruction-id kind reference])))
+       ["insert into scheme_response
+           (id, batch_id, instruction_id, kind, reference,
+            disposition, disposition_reason, request_digest, outcome, reason)
+         values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         returning id, batch_id, instruction_id, kind, reference, received_at,
+                   disposition, disposition_reason, request_digest, outcome, reason"
+        id batch-id instruction-id kind reference
+        disposition disposition-reason request-digest outcome reason])))
    (fn [{:keys [sql-state constraint]}]
      (if (and (= sql-state (:unique-violation db/sql-states))
               (= "scheme_response_replay_key" constraint))
@@ -411,15 +473,18 @@
                   {:constraint constraint :sql-state sql-state})))))
 
 (defn find-response
-  "The stored response matching a replay key, or nil.
+  "The stored receipt matching a replay key, or nil.
 
-  Read after a duplicate is detected, so the caller can report *when* the
-  original arrived rather than only that this one was a repeat."
+  Read **before** any work is attempted, not only after a collision. That order
+  is what makes replay reproduce the original answer rather than re-derive one:
+  a receipt whose disposition was `refused` must answer `409` again however the
+  world has moved on since, and a receipt whose disposition was `applied` must
+  answer with the outcome it recorded (F-008, F-009). Deciding by re-running the
+  work and seeing what happens is exactly the re-evaluation both findings name."
   [source {:keys [batch-id instruction-id kind reference]}]
   (row->response
    (db/query-one source
-                 ["select id, batch_id, instruction_id, kind, reference, received_at
-                     from scheme_response
-                    where batch_id = ? and instruction_id is not distinct from ?
-                      and kind = ? and reference = ?"
+                 [(str response-columns
+                       "where batch_id = ? and instruction_id is not distinct from ?
+                          and kind = ? and reference = ?")
                   batch-id instruction-id kind reference])))

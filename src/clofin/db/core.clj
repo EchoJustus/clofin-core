@@ -256,6 +256,38 @@
   [[binding source opts] & body]
   `(with-transaction* ~source ~(or opts {}) (fn [~binding] ~@body)))
 
+(defn assert-transaction!
+  "Return `source` if it is a connection inside an open transaction; throw
+  otherwise.
+
+  **The one runtime check behind a precondition that used to be prose.** \"This
+  is a connection\" and \"this is a transaction\" are different claims, and until
+  audit finding **F-011** only services' *documentation* asserted the second.
+  The pool is configured `autoCommit true`, so a caller who passed a raw pooled
+  connection got each statement committed on its own — silently: every write
+  still succeeds, and only atomicity is gone. For a service that composes an
+  aggregate write with the audit event describing it, losing atomicity means the
+  aggregate can commit and the event fail, which is the unaudited state change
+  C-05 calls unrepresentable (standing lesson **L-13**).
+
+  Two callers, deliberately at two different depths. `transactionally` uses it
+  to protect the `select … for update` in a repository, whose locks are released
+  per statement under autocommit and so guarantee nothing (finding **F-004**).
+  `clofin.audit.repository/assert-unit-of-work!` re-exports it for services,
+  which must fail *before their first write* rather than at whichever repository
+  happens to check.
+
+  Reported as a `:validation` error, which is what the guard has raised since
+  F-004; the message is asserted by `clofin.ledger.repository-test`."
+  [source]
+  (when-not (instance? Connection source)
+    (err/invalid! "This work must run inside a transaction, and it was given a connection pool"
+                  {:hint "Wrap the call in `with-transaction` and pass the transaction, not the pool."}))
+  (when (.getAutoCommit ^Connection source)
+    (err/invalid! "This work must run inside a transaction, and the connection it was given is in autocommit"
+                  {:hint "Wrap the call in `with-transaction`, or pass the pool and let it open one."}))
+  source)
+
 (defn transactionally
   "Run `(f conn)` in a transaction, joining the caller's if there is one.
 
@@ -280,11 +312,7 @@
   `getAutoCommit` call is the whole cost of making it real."
   [source f]
   (if (instance? Connection source)
-    (let [^Connection conn source]
-      (when (.getAutoCommit conn)
-        (err/invalid! "This work must run inside a transaction, and the connection it was given is in autocommit"
-                      {:hint "Wrap the call in `with-transaction`, or pass the pool and let it open one."}))
-      (f conn))
+    (f (assert-transaction! source))
     (with-transaction* source f)))
 
 ;; ---------------------------------------------------------------------------

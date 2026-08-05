@@ -62,6 +62,44 @@
      :occurred-at     (db/->instant (:occurred-at row))}))
 
 ;; ---------------------------------------------------------------------------
+;; The unit-of-work precondition
+;; ---------------------------------------------------------------------------
+
+(defn assert-unit-of-work!
+  "Refuse anything that is not a connection inside an open transaction. Returns
+  `tx`.
+
+  **Called at the entry of every audit-composing service, before its first
+  write.** That placement is the whole point, and it is what audit finding
+  **F-011** found missing (standing lesson **L-13**).
+
+  Those services took an argument named `tx`, documented that it was a
+  transaction the caller owned, and accepted a pool. `clofin.ledger.purity-test`
+  proved they could not *open* a connection; nothing proved a caller had
+  supplied a transaction. Calling `create-account!` or `post-entry!` with the
+  pool and an actor the audit vocabulary would reject therefore committed the
+  aggregate row on its own connection and then failed the audit write — one
+  account, zero events; one journal entry, zero events. The HTTP handlers pass a
+  transaction correctly, so this was never a front-door loss; it was the control
+  boundary itself, which is supposed to make that state unrepresentable rather
+  than merely unusual.
+
+  It lives **here**, in the audit repository, for two reasons. A service may not
+  require `clofin.db.*` (ADR-0012), and every audit-composing service already
+  requires this namespace — so the check reaches all of them without any of them
+  acquiring a connection. And the precondition *belongs* to the audit write: the
+  reason a pool is unacceptable is that the event and the change it describes
+  must commit together.
+
+  Checking at service entry rather than relying on the repository's own guard is
+  deliberate. `clofin.db.core/transactionally` refuses autocommit too, but it
+  refuses it at whichever write happens to route through it — which for
+  `create-account!` was *after* the row had committed. A precondition that fails
+  after the first write is not a precondition."
+  [tx]
+  (db/assert-transaction! tx))
+
+;; ---------------------------------------------------------------------------
 ;; Writing
 ;; ---------------------------------------------------------------------------
 

@@ -21,8 +21,11 @@
   - `401` / `403` — no actor, or an actor without `:settlement/execute`. Reads
     need only `:payment/read`: a settlement batch is a fact about payments, and
     an auditor who may read the payments may read how they settled.
-  - `409` — the batch is not in a state that permits this, the instruction is
-    already in a live batch, or a response arrived out of order.
+  - `409` — the batch is not in a state that permits this, the instruction has
+    already been in a settlement batch, or a response arrived out of order. On
+    `recordSchemeResponse` this status is rendered **after** the transaction
+    commits, so the refused response's receipt survives its own refusal
+    (F-008).
   - `422` — understood, and the organisation is not set up for it: an
     ineligible instruction, or no settlement accounts in the batch's currency.
 
@@ -36,6 +39,7 @@
             [clofin.http.response :as resp]
             [clofin.settlement.batch :as batch]
             [clofin.settlement.repository :as settlement]
+            [clofin.settlement.response :as response]
             [clofin.settlement.service :as service]
             [clojure.string :as str]))
 
@@ -62,12 +66,23 @@
     (:resolved-at item)    (assoc "resolvedAt" (str (:resolved-at item)))))
 
 (defn- response->wire
+  "One receipt, including what CloFin did about it.
+
+  `disposition` is rendered rather than left implicit, because the point of
+  keeping a refused arrival (audit finding **F-008**) is defeated if a reader of
+  the batch document cannot tell which responses did work from which merely
+  arrived. `outcome` is what *this response claimed*, which for a refused
+  arrival is nothing — the item carries what was recorded."
   [response]
-  (cond-> {"id"         (str (:id response))
-           "kind"       (:kind response)
-           "reference"  (:reference response)
-           "receivedAt" (str (:received-at response))}
-    (:instruction-id response) (assoc "instructionId" (str (:instruction-id response)))))
+  (cond-> {"id"          (str (:id response))
+           "kind"        (:kind response)
+           "reference"   (:reference response)
+           "receivedAt"  (str (:received-at response))
+           "disposition" (:disposition response)}
+    (:instruction-id response)     (assoc "instructionId" (str (:instruction-id response)))
+    (:disposition-reason response) (assoc "dispositionReason" (:disposition-reason response))
+    (:outcome response)            (assoc "outcome" (:outcome response))
+    (:reason response)             (assoc "reason" (:reason response))))
 
 (defn- batch-document
   "A batch, its items and every response recorded against it.
@@ -190,10 +205,25 @@
   "`POST /settlement-batches/:id/scheme-responses` — **the simulation injection
   point**.
 
-  A duplicate delivery — the same `(instructionId, kind, reference)` — is
-  answered `200` with `replayed: true` and does no work: no second posting, no
-  second audit event, no second transition (AC-5). That is the normal case in
-  the world this simulates, not an error, so it is not reported as one."
+  A duplicate delivery — the same `(instructionId, kind, reference)` carrying
+  the same message — is answered `200` with `replayed: true` and does no work:
+  no second posting, no second audit event, no second transition (AC-5). That is
+  the normal case in the world this simulates, not an error, so it is not
+  reported as one. The body it returns is the *original* answer, `outcome`
+  included (audit finding **F-009**).
+
+  **The `409` is rendered here, after the transaction has committed**, and that
+  ordering is the fix for audit finding **F-008**. The service returns a
+  refusal as a value; the receipt for the refused arrival is inside the
+  transaction this handler commits; only then does `err/conflict!` throw. Doing
+  it the other way round — throwing from inside the unit of work, as this
+  endpoint used to — rolled the receipt back with the rejection, so the first
+  delivery was unprovable and the identical reference could perform work later
+  against changed state (standing lesson **L-11**).
+
+  Nothing between the commit and the throw can fail in a way that loses the
+  receipt: the transaction is already durable, and a failure while rendering the
+  problem document costs the caller its answer, not its evidence."
   [pool]
   (fn [request]
     (let [body (wire/read-object request)
@@ -222,8 +252,23 @@
                  :correlation-id  (:correlation-id request)
                  :entry-id        (random-uuid)
                  :occurred-at     (java.time.Instant/now)}))]
+      ;; Committed. The receipt exists whichever branch follows.
+      (when (response/refused? (:disposition result))
+        (err/conflict!
+         (:detail result)
+         {:batch-id          (str id)
+          :instruction-id    (some-> instruction-id str)
+          :kind              (name kind)
+          :disposition       (:disposition result)
+          :dispositionReason (:disposition-reason result)
+          ;; True when this exact message has been refused before. The caller is
+          ;; being told the same answer as last time, not a fresh evaluation
+          ;; against state that has moved since (F-008).
+          :replayed          (boolean (:replayed? result))
+          :receiptId         (some-> (:receipt result) :id str)}))
       (resp/ok (assoc (batch-document pool (:batch result))
                       "replayed" (boolean (:replayed? result))
+                      "disposition" (:disposition result)
                       "outcome" (:outcome result))))))
 
 (defn sweep-timeouts

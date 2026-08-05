@@ -29,6 +29,7 @@ is a justification, not a decision.
 | [0016](0016-audit-events-store-digests-not-payloads.md) | The audit trail stores digests, not payloads | Accepted |
 | [0017](0017-bootstrap-identity-for-organisation-creation.md) | The bootstrap write records no actor, and the null is enforced | Accepted |
 | [0018](0018-release-posts-to-settlement-in-transit.md) | A release posts to settlement-in-transit; finality moves that leg | Accepted |
+| [0019](0019-a-returned-payment-is-terminal-and-retries-as-a-new-instruction.md) | A returned payment is terminal; the retry is a new instruction | Accepted |
 
 ## Conventions
 

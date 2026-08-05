@@ -83,10 +83,18 @@ tags:
 
       The failure modes are the interesting part, and each has a defined
       answer. A duplicate response does no work and says so. A response for an
-      item that already has an outcome is `409`. An item nobody answered about
-      becomes `timed-out` when an operator sweeps — which means **unknown**, not
-      failed: the payment stays `released` and can never be re-batched until a
-      late `timeout-resolution` says what really happened.
+      item that already has an outcome is `409` — and its receipt is kept
+      anyway, because a message that arrived is evidence whether or not CloFin
+      could act on it. An item nobody answered about becomes `timed-out` when an
+      operator sweeps — which means **unknown**, not failed: the payment stays
+      `released`, and a late `timeout-resolution` says what really happened.
+
+      **A settlement membership is permanent.** An instruction that has been in
+      a batch is never batched again, whatever became of it — pending, settled,
+      timed out and returned all block a second membership. A returned payment
+      is terminal, exactly as a settled one is; the retry is a **new payment
+      instruction**, approved on its own merits. That is a database constraint,
+      not a check in a handler.
 
   - name: Audit
     description: |
@@ -1124,11 +1132,15 @@ paths:
         each, rather than one at a time — an operator batching forty payments
         fixes them in one pass.
 
-        An instruction already in a batch that is pending, settled or timed out
-        is `409`. Only a **returned** item frees its instruction for
-        re-batching: a timed-out item's true outcome is unknown, and
-        re-submitting it risks the duplicate settlement this module exists to
-        prevent. That rule is a database constraint, not a check in a handler.
+        An instruction that has **ever** been in a settlement batch is `409`.
+        No outcome frees it: pending, settled, timed out and returned all block
+        a second membership, because a timed-out item's true outcome is unknown
+        and a returned one is terminal, and re-submitting either risks the
+        duplicate settlement this module exists to prevent. The retry for a
+        returned payment is a new payment instruction, approved on its own
+        merits — the doctrine a settled payment already follows, where a
+        correction is a new reversing instruction. That rule is a database
+        constraint, not a check in a handler.
 
         Requires `settlement/execute`, which `controller` holds and no role
         holding `payment/approve` does.
@@ -1322,12 +1334,30 @@ paths:
           gave up on. Must carry `outcome`, and resolves that item exactly once.
 
         **A duplicate delivery does no work.** The same
-        `(instructionId, kind, reference)` is answered `200` with
-        `replayed: true`: no second posting, no second audit event, no second
-        transition. A scheme answering twice, late, or out of order is the
-        normal case in the world this simulates, so it is not reported as an
-        error. A response whose replay key is new but whose item already has an
-        outcome is `409` — that is out of order, not a repeat.
+        `(instructionId, kind, reference)` carrying the same `outcome` and
+        `reason` is answered `200` with `replayed: true`: no second posting, no
+        second audit event, no second transition. A scheme answering twice,
+        late, or out of order is the normal case in the world this simulates, so
+        it is not reported as an error. The replayed body is the **original**
+        answer, `outcome` included.
+
+        **Identity is the reference; sameness is the whole message.** The
+        reference names one delivery; whether two deliveries under it are the
+        same message is decided by a canonical digest over the complete semantic
+        request — batch, instruction, kind, reference, outcome and reason — the
+        same posture `Idempotency-Key` takes. So a `timeout-resolution(settled)`
+        and a `timeout-resolution(returned)` sharing one reference are two
+        messages claiming one identity: that is `409`, and it is never described
+        as a replay.
+
+        **Every arrival is kept, including one CloFin cannot act on.** A
+        response whose replay key is free but whose item is not in a state this
+        kind can resolve is `409` — out of order, not a repeat — and its
+        **receipt is committed first**, carrying `disposition: refused` and a
+        machine-readable `dispositionReason`. Replaying that exact message
+        reproduces the same refusal; it is not re-evaluated against state that
+        has arrived since. The receipt is visible under `schemeResponses` on the
+        batch.
       requestBody:
         required: true
         content:
@@ -1356,7 +1386,13 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
         "409":
-          description: The item already has an outcome, or is not timed out.
+          description: |
+            The item already has an outcome, is not timed out, is not in this
+            batch, or this reference already names a different message. The
+            response's receipt has been committed before this status is
+            rendered — `errors.dispositionReason` names which case it was, and
+            `errors.replayed` is true when this exact message has been refused
+            before and is being given the same answer again.
           content:
             application/problem+json:
               schema:
@@ -1377,9 +1413,11 @@ paths:
 
         **Timed out means unknown, not failed.** The instruction stays
         `released` — no lifecycle event is driven, because CloFin does not know
-        what happened to the money — and the item can never be re-batched until
-        a late `timeout-resolution` says what really happened. Treating unknown
-        as failed and re-batching is how a payment gets made twice.
+        what happened to the money — and the item can never be re-batched. A
+        late `timeout-resolution` is what says which of the two really happened;
+        it resolves the item, and it does not free the instruction, because a
+        settlement membership is permanent. Treating unknown as failed and
+        re-batching is how a payment gets made twice.
 
         Running the sweep twice, or before the horizon, marks nothing and emits
         no audit event: nothing happened, so nothing is recorded as having
@@ -2351,9 +2389,12 @@ components:
           enum: [settled, returned, timed-out]
           description: |
             Null while the simulated scheme has not answered. `timed-out` means
-            **unknown** — CloFin stopped waiting — not failed, and an item in
-            that state can never be re-batched until a `timeout-resolution`
-            says what really happened.
+            **unknown** — CloFin stopped waiting — not failed, and a
+            `timeout-resolution` is what says which of the two really happened.
+
+            No outcome frees the instruction for another batch. A membership is
+            permanent: a returned payment is terminal and is retried as a new
+            instruction.
 
             There is deliberately no `failed`: a scheme failure that sends the
             money back is a `returned`.
@@ -2365,10 +2406,11 @@ components:
     SchemeResponseRecord:
       type: object
       description: |
-        A simulated scheme response as recorded. Kept whether or not it caused
-        work: the evidence that a duplicate arrived and was refused is the point
-        of storing them.
-      required: [id, kind, reference, receivedAt]
+        A simulated scheme response as recorded — a **receipt**. Kept whether or
+        not it caused work, including when CloFin could not act on it at all:
+        the evidence that a message arrived is the point of storing them, and a
+        receipt destroyed by its own processing failure is not a receipt.
+      required: [id, kind, reference, receivedAt, disposition]
       properties:
         id: { type: string, format: uuid }
         instructionId:
@@ -2380,6 +2422,37 @@ components:
           enum: [ack, settled, returned, timeout-resolution]
         reference: { type: string }
         receivedAt: { type: string, format: date-time }
+        disposition:
+          type: string
+          enum: [applied, acknowledged, refused]
+          description: |
+            What CloFin did about this arrival.
+
+            - `applied` — it resolved an item, transitioned the instruction and
+              posted finality.
+            - `acknowledged` — a batch-level `ack`: recorded by design, moves
+              nothing.
+            - `refused` — it arrived, it is kept, and the item was not in a
+              state this kind could resolve. The caller received `409` **after**
+              this receipt committed, and replaying this exact message
+              reproduces this same refusal rather than re-evaluating it against
+              whatever state has arrived since.
+        dispositionReason:
+          type: string
+          enum: [item-already-resolved, item-not-timed-out, item-not-in-batch]
+          description: Present only when `disposition` is `refused`.
+        outcome:
+          type: string
+          enum: [settled, returned]
+          description: |
+            What this response *claimed*, on the arrival that acted on it.
+            Absent on an `ack` and on a refused arrival, which resolved nothing.
+            Distinct from `SettlementBatchItem.outcome`, which is what CloFin
+            **recorded** — the two differ in exactly the case that matters, a
+            message kept as evidence that did no work.
+        reason:
+          type: string
+          description: The reason this response carried, normalised.
 
     SettlementBatch:
       type: object
@@ -2435,12 +2508,31 @@ components:
         replayed:
           type: boolean
           description: |
-            On `recordSchemeResponse` only: true when this delivery was a
-            duplicate and did no work.
+            On `recordSchemeResponse` only: true when this delivery was the
+            **same message** as one already received — same
+            `(instructionId, kind, reference)` *and* the same `outcome` and
+            `reason` — so it did no work and this body reproduces the original
+            answer.
+
+            A delivery that reuses a reference while saying something different
+            is never reported here. It is `409`, because a caller cannot be told
+            CloFin has already seen a request nobody sent.
+        disposition:
+          type: string
+          enum: [applied, acknowledged]
+          description: |
+            On `recordSchemeResponse` only: what CloFin did about this arrival.
+            A `refused` disposition is reported as `409` rather than in a `200`
+            body; the receipt carrying it is still readable under
+            `schemeResponses`.
         outcome:
           type: string
           nullable: true
-          description: "On `recordSchemeResponse` only: the outcome this response resolved."
+          description: |
+            On `recordSchemeResponse` only: the outcome this response resolved
+            the item to, `null` for an `ack`. **A replay carries the original
+            response's outcome**, not `null` — the answer being replayed is
+            reproduced, not merely acknowledged.
         timedOut:
           type: array
           description: "On `sweepSettlementTimeouts` only: the instructions this sweep gave up on."
@@ -2568,6 +2660,18 @@ components:
         journal entry is never drafted and never amended — posting is the only
         transition it has, and a correction is a separate reversing entry with
         its own event.
+
+        **`payment.failed` is reserved and has no producer.** The payment
+        lifecycle carries a `fail` arrow out of `released`, and nothing in
+        CloFin drives it: a settlement item's outcome is `settled`, `returned`
+        or `timed-out`, a scheme failure that sends the money back **is** a
+        return, and an outcome nobody knows is a timeout — which leaves the
+        payment `released`, because CloFin cannot claim a payment did not
+        happen. The term is published rather than omitted so that a future
+        increment can drive it without churning this enum. It is called out here
+        because a consumer reading only this contract would otherwise be unable
+        to distinguish "no payments have failed" from "this action has no
+        producer" — and those are very different answers to give an auditor.
       enum:
         - payment.created
         - payment.submitted

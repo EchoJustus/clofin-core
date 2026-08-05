@@ -264,10 +264,30 @@ The transactional property is made structural rather than remembered.
 connection available to a caller *is* the transaction carrying the change.
 Every service that composes a change with its event likewise takes the caller's
 transaction and requires no `clofin.db.*` namespace at all —
-`clofin.payments.approval-service`, `clofin.ledger.service` and
-`clofin.organisations.service`. A service that could open its own connection is
-a service that could write an audit event outside the change it describes, and
-`clofin.ledger.purity-test` fails the build if any of them acquires one.
+`clofin.payments.approval-service`, `clofin.ledger.service`,
+`clofin.organisations.service` and `clofin.settlement.service`. A service that
+could open its own connection is a service that could write an audit event
+outside the change it describes, and `clofin.ledger.purity-test` fails the build
+if any of them acquires one.
+
+**And the other half, which was documentation until audit finding F-011.** Those
+services could not *open* a transaction; nothing made a caller *supply* one.
+Each took an argument named `tx` and said in its docstring that it was a
+transaction, and each accepted the pool — under which every statement commits on
+its own. Calling `create-account!` or `post-entry!` directly with the pool
+therefore committed the aggregate row and then failed the audit write, leaving
+**account 1 / event 0** and **journal entry 1 / event 0**: precisely the state
+this control calls unrepresentable, reached through the service API exactly as
+Clojure permits. The HTTP handlers pass a transaction correctly, so this was
+never a front-door loss; it was the control boundary itself.
+
+Every audit-composing service now calls
+`clofin.audit.repository/assert-unit-of-work!` **before its first write**, and a
+pool or an autocommit connection is refused there. Checking at service entry
+rather than relying on a repository's own guard is the point: `create-account!`
+reached its repository only after the row was already durable, and a
+precondition that fires after the first write is not a precondition (standing
+lesson **L-13**).
 
 **One event per state change, named after the change it is.** `clofin.audit`
 holds a closed vocabulary and `event` refuses anything outside it. Two rules
@@ -308,7 +328,9 @@ is about.
 | `clofin.audit.repository/record!` | Writes on the caller's transaction. Cannot open one. |
 | `clofin.audit/event` | Refuses an action outside the vocabulary — default deny reaching the audit trail, so "show me every approval in August" has a complete answer. |
 | `clofin.audit/event`, actor rule | Refuses a **null actor** for any action outside `clofin.audit/bootstrap-actions`, so the trail's one unattributed case is the one that is documented and not merely the one that happens to be there ([ADR-0017](ADR/0017-bootstrap-identity-for-organisation-creation.md)). |
-| `clofin.ledger.purity-test` | Fails the build if `clofin.payments.approval-service`, `clofin.ledger.service` or `clofin.organisations.service` acquires a `clofin.db.*` dependency. A service that can open a connection is a service that can write an event outside the change it describes. |
+| `clofin.ledger.purity-test` | Fails the build if `clofin.payments.approval-service`, `clofin.ledger.service`, `clofin.organisations.service` or `clofin.settlement.service` acquires a `clofin.db.*` dependency. A service that can open a connection is a service that can write an event outside the change it describes. |
+| `clofin.audit.repository/assert-unit-of-work!` | Refuses a pool or an autocommit connection at the entry of every audit-composing service, **before its first write**. The runtime half of the rule above: the purity test says a service cannot open a transaction, this says a caller must have supplied one (finding **F-011**, lesson **L-13**). |
+| `scheme_response_append_only`, `scheme_response_no_truncate` | Reject `UPDATE`, `DELETE` and `TRUNCATE` on the settlement receipt table (migration `0009`), reusing `reject_mutation()`. In the raw-SQL verb matrix since finding **F-010** — before which their removal left the focused suites green. |
 
 **Evidence.** Evidence pack extraction for a nominated payment or period
 (PR-074): `GET /audit/evidence/{subjectId}` returns every state change in order
@@ -338,6 +360,15 @@ router, middleware and error boundary: every write leaves exactly one event,
 every refused request (`400`, `401`, `403`, `409`, `422`) leaves none, no payload
 field reaches `audit_event`, and `GET /audit/events` returns the ledger and
 payment events together, in order, with no change to the query.
+
+`clofin.audit.unit-of-work-test` carries the F-011 half as a **matrix over every
+audit-composing entry point**, with two negative arrivals each — the pool, and
+an autocommit connection, which is the convincing near-miss because it satisfies
+every type check a reviewer would think to write. Each case asserts both the
+refusal and that **nothing was written**, which is what distinguishes a
+precondition from an error message. The set of services is enumerated there and
+in `clofin.ledger.purity-test`, and the two are compared: a service added to one
+and not the other is the partial enforcement lesson **L-6** exists to catch.
 
 **What a trigger cannot do, stated because the previous wording claimed
 otherwise.** This table used to say the guard was "not revoked privileges — a
@@ -399,6 +430,31 @@ database refused. That is the concrete reason `record!` cannot open a connection
 of its own, and `clofin.ledger.service-test` asserts it by unbalancing an entry
 after it has been posted and letting the commit fail.
 
+**The boundary of "every state change", stated because the control reads
+broader than it is.** One derived value moves without a subject event of its
+own, and an auditor reading this control literally would not expect it.
+
+A settlement batch's `status` is **derived** from its items' outcomes. When the
+last unresolved item resolves, the batch reaches a terminal derived status and
+`settlement-batch.completed` is written once, in that transaction — L-7's rule.
+A **late** `timeout-resolution` can then move that already-terminal status
+again: a batch that derived to `failed` while an item was `timed-out` becomes
+`settled` or `partially-settled` when the late truth arrives. That transaction
+writes the payment's own event (`payment.settled` / `payment.returned`), posts
+its finality entry, and updates the stored batch status — and it writes **no
+second batch-subject event**, because `settlement-batch.completed` names the
+transition *into* a complete batch and that transition happened earlier. Two
+`completed` events for one batch would be F-005's mislabelling with a new name.
+
+So the batch status is auditable through its items rather than directly: every
+item resolution that moved it has its own event, in its own transaction, with
+its own actor. What is missing is an event whose *subject* is the batch. This is
+recorded debt, named in `004-REQ` and reproduced by the Milestone 2 audit; the
+fix is a distinct term for "a completed batch's derived status changed", which
+is vocabulary design and belongs with increment 6's reconciliation work rather
+than being invented here. It is written down at the point this control is read
+so the central record is not broader than its accepted edge.
+
 **Attribution, including where there is none.** `POST /organisations` is the
 bootstrap: no actor can exist before the organisation that holds one, so it is
 unauthenticated and its event records a **null actor**. That null is not left as
@@ -445,6 +501,8 @@ of that scope are load-bearing:
 | `clofin.idempotency.repository/execute-once!` | Runs the effect inside the transaction that writes the key, and translates the unique violation into a replay. |
 | `clofin.idempotency/canonical` and `/digest` | Decide whether a replay is the same request. |
 | `SELECT … FOR UPDATE` in `clofin.payments.repository/transition!` | The lifecycle's own defence, for two concurrent state changes carrying *different* keys — where idempotency does not apply and the row lock is what stops both succeeding. |
+| `scheme_response_replay_key` and `scheme_response.request_digest` | The same posture on the settlement side, for a message CloFin did not send and cannot retry: the key names a delivery's identity, the digest — over the **complete semantic request**, outcome and reason included — says whether two deliveries under it are the same message. An exact duplicate replays the stored answer; the same reference saying something different is `409` and is never called a replay. Until finding **F-009** the digest did not exist and the key excluded the fields that decide the payment's transition, so two contradictory timeout resolutions were one response (lesson **L-12**). |
+| `settlement_item_instruction_key` | The other way a payment can be made twice, and the one this product cares most about: an instruction is in **at most one** settlement membership, ever. Pending, settled, timed out and returned all block a second. A unique index rather than a handler check, so it binds a fix-up script and a defect too. Migration `0010` widened it to cover `returned` on finding **F-007**. |
 
 **Evidence.** The `idempotency_key` row: the digest, the stored response status
 and body, and `created_at` as the first-seen timestamp.
@@ -457,6 +515,17 @@ across two instructions' submissions, or across a submission and a cancellation:
 reverting the digest to body-only makes those fail, which is what makes them
 regression tests rather than documentation. `clofin.idempotency-test` covers the
 canonical form the digest is taken over.
+
+On the settlement side, `clofin.api.settlement-api-test` asserts that an
+identical scheme response delivered twice posts nothing, writes no second audit
+event, and **returns the original body including its outcome**; that a
+contradictory message under the same reference is `409` and is not reported as a
+replay; and that a refused arrival's receipt survives, effect-free, and
+reproduces its own refusal when re-delivered rather than being re-evaluated
+against later state. `clofin.settlement.repository-test` asserts the schema
+halves in raw SQL, application bypassed — including the second membership for a
+**returned** instruction, which is the audit's own reproduction turned into a
+refusal test.
 
 **Scope of this control.** It prevents a *retry* from acting twice. It does not
 prevent a caller from deliberately submitting two distinct instructions for the
