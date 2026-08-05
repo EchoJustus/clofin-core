@@ -23,7 +23,7 @@ judged on — not by feature count.
 | D2 | **Every state change must be explainable after the fact.** | Append-only journal and audit trail. No destructive updates on financial records; corrections are compensating entries. |
 | D3 | **Money movement must be authorised by more than one person.** | Maker–checker as a first-class domain concept, with threshold-driven dual authorisation and segregation-of-duties checks. |
 | D4 | **Networks fail; clients retry.** | Idempotency keys on every mutating payment operation. Exactly-once *effect*, at-least-once *delivery*. |
-| D5 | **The system must be inspectable by non-engineers.** | The API contract, domain model and acceptance criteria are versioned artefacts, reviewed alongside the code. |
+| D5 | **The system must be inspectable by non-engineers.** | The API contract, domain model and acceptance criteria are versioned artefacts, reviewed alongside the code — and, from [ADR-0020](docs/ADR/0020-two-repositories-and-the-generate-replay-rules.md), diagrams generated from their sources and a replay walkthrough of captured runs. Documents make the system auditable; they do not make it visible. |
 | D6 | **It must run anywhere, including offline.** | One `docker compose` stack, no cloud-specific services, no hard-coded paths. |
 | D7 | **Supply-chain surface is a control concern.** | Small, justified dependency set; new runtime dependencies require an ADR. |
 
