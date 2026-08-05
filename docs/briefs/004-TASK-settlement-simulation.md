@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | **Increment** | 5 |
-| **Status** | `CLOSED` — merged to `main` in PR #7 (`cba31c5`) 2026-08-04; all three objections ruled, see Changelog. Carried the TASK-005 O-3 contract fix (`b21d4c1`) to `main` with it |
+| **Status** | `IN PROGRESS` — **reopened 2026-08-04 by [FEEDBACK-M2](../audits/FEEDBACK-M2-settlement-and-audit-coverage.md)** (verdict REMEDIATION-REQUIRED: F-007 blocking, F-008/F-009/F-010 should-fix). Was `CLOSED` — merged in PR #7 (`cba31c5`). Remediation runs on a fresh branch off `main`, migration `0010`; rulings in the FEEDBACK-M2 changelog below |
 | **Depends on** | TASK-003 — settlement drives the `release` arrow the authorisation increment left in the table |
 | **Base branch** | `main` at `2ba977e` — TASK-003 **and TASK-005 are both merged**, so this is an ordinary branch off `main` with the PR against `main`. The `clofin.audit/actions` coordination this brief anticipated is resolved: TASK-005 landed first; you extend the literal (and its OpenAPI enum twin — see In-scope item 9) in place |
 | **Blocks** | Increment 6 (reconciliation) |
@@ -231,7 +231,7 @@ your REQ, not an edit.
 | AC-4 | Given a submitted batch where the simulated scheme settles some members and returns others, then settled items post finality entries, returned items carry their reason, batch status derives to `partially-settled`, and the ledger's zero-sum invariant holds — asserted by property test across generated outcome mixes. | I1, C-04 |
 | AC-5 | Given a `settled` outcome recorded for an item, when the identical scheme response is delivered again, then the answer is the same, **no second posting exists and no second audit event exists** — proven at the repository level and through the API. | I10's posture, C-06 |
 | AC-6 | Given an item with no response past the timeout horizon, when the sweep runs, then it is `timed-out`; when a late `timeout-resolution` response arrives, then it resolves to its true outcome **exactly once**, and a second resolution attempt is refused. | PRD §5.3 |
-| AC-7 | Given a `timed-out` (or pending, or settled) item, when the instruction is added to a new batch, then the database refuses — asserted with raw SQL like `db.audit-constraints-test`, application bypassed. A `returned` item's instruction re-batches successfully. | C-04 |
+| AC-7 | Given a `timed-out` (or pending, or settled) item, when the instruction is added to a new batch, then the database refuses — asserted with raw SQL like `db.audit-constraints-test`, application bypassed. ~~A `returned` item's instruction re-batches successfully.~~ **[Amended by ruling F-007, 2026-08-04]** The struck sentence promised behaviour the lifecycle forbids — `:returned` is terminal and batch eligibility is `approved`-only — an L-4 recurrence caught by FEEDBACK-M2. Ruled: **a returned instruction is terminal; a retry is a NEW instruction** (the doctrine `settled` already follows). The index therefore tightens to refuse **any** second membership per instruction (migration `0010`), and the raw-SQL assertion covers `returned` too. Linked-retry provenance is increment 6's. | C-04 |
 | AC-8 | Given a `returned` item, then the instruction is `returned`, an exception case is visible via the API with the return reason, and the posting consequence matches your release ADR. | PRD §5.3 |
 | AC-9 | Given a rolled-back outcome transaction (deliberate throw after the posting), then no posting, no outcome, no audit event — the I9 pair, extended to settlement. | I9, C-05 |
 | AC-10 | Given an actor without `:settlement/execute`, when any settlement operation is attempted, then it is refused with a named reason; the `controller` role succeeds; **no role holds both `:payment/approve` and `:settlement/execute`** — asserted in the model tests. | C-01, C-08 |
@@ -315,3 +315,22 @@ the duplicate-response path needed `clofin.db.core/tolerating-violation` (a
 savepoint) because PostgreSQL aborts the whole transaction on a constraint
 violation, so *catching* the duplicate key was not enough — a real defect the
 Worker's own tests caught, on precisely the path meant to answer `200 replayed`.
+
+---
+
+## Changelog — FEEDBACK-M2 rulings (2026-08-04)
+
+Milestone 2 verdict: **REMEDIATION-REQUIRED**; this brief reopened
+`IN PROGRESS`. All findings independently verified in source by Master Control
+before triage; all actioned, none disputed, none deferred. Remediation runs as
+**one batch on a fresh branch off `main`** (the PR #7 history is merged and is
+never re-used), migration `0010`.
+
+| Finding | Ruling |
+|---|---|
+| **F-007** (blocking) — a returned instruction cannot re-enter the public settlement workflow, while the schema advertises the retry | **Confirmed — dual root cause.** (1) *Brief defect, Master Control's (L-4 recurrence):* AC-7's re-batch sentence promised behaviour the lifecycle — which this brief itself ordered driven, not redrawn — forbids. (2) *Test gap (new lesson L-10):* the AC was "proved" by a raw-SQL insert, never from the public command. **Ruling on the retry model: `returned` is terminal; a retry is a new instruction** — the doctrine `settled` already follows (reversal-by-new-instruction). Consequences: migration `0010` replaces `settlement_item_live_key` with **full uniqueness over `instruction_id`** (the auditor's raw second membership committing is now a refusal); AC-7 amended above; `DOMAIN_MODEL`, the index rationale and UAT-006 aligned; a public retry attempt is refused with a reason naming the terminal state and the new-instruction path. **Linked-retry provenance** (a `retries_id`-style reference and exception workflow) is real product surface and is **deferred to increment 6 (reconciliation)**, where return-exception handling natively lives — recorded on the ROADMAP. |
+| **F-008** — a rejected scheme response is erased by its own rejection and can later perform work | **Confirmed — actioned (new lesson L-11).** Receipt and disposition become separate facts: every arrival commits its immutable receipt plus a machine-readable disposition; the `409` renders **after** commit; a replayed rejected receipt reproduces its original no-work answer rather than re-evaluating against later state. Tests: premature timeout-resolution and late contradiction both assert the row survives, effect-free. |
+| **F-009** — the replay key and stored response omit effect-bearing fields | **Confirmed — actioned (new lesson L-12, extending L-2).** The idempotency posture applies: canonical digest over the complete semantic request (kind, reference, outcome, reason), stored with the original response; exact duplicates return the original body (`outcome` included — the current `nil` is exactly the misreporting L-7 exists to prevent); same reference with a different digest is `409`, never described as a replay. |
+| **F-010** — loss of the scheme-response UPDATE/DELETE guard is not test-detectable | **Confirmed — actioned (L-5/L-6 reinforcement, no new lesson).** `scheme_response` joins the raw-SQL table × verb matrix with a committed row; a one-time negative control proves removing either trigger fails the suite. |
+| *(from TASK-005's verdict)* **F-011** — audited services accept a pool; the transaction precondition is documentation, not enforcement | **Confirmed — actioned here (new lesson L-13, extending L-6)** because the fix spans every audit-composing service, settlement included: a fail-closed assertion at service entry accepting only a non-autocommit transaction, plus direct-pool and autocommit negative tests, keeping the no-`clofin.db.*` purity rule. Brief 005 stays `CLOSED` with this as its recorded condition. |
+| *(cross-cutting, folded in)* | `payment.failed`'s OpenAPI enum description states it is **reserved with no producer**, so an API-only consumer can distinguish "none happened" from "cannot happen yet"; COMPLIANCE C-05's text gains the late-status boundary the auditor noted, so the central record is not broader than its accepted edge. The refuted concurrency candidate (C-06) is recorded as positive evidence — the five forced-schedule tests are preserved, per the auditor's observation. |

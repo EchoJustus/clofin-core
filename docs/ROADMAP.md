@@ -21,7 +21,7 @@ and this table is stale.
 | 3 | Payment lifecycle and idempotency | [TASK-002](briefs/002-TASK-payment-instruction-lifecycle.md) | ✅ `CLOSED` — merged to `main` in PR #4 (`31306dd`); audited in FEEDBACK-M1, no new findings | green, 1547+ assertions |
 | 4 | Authorisation, maker–checker, audit | [TASK-003](briefs/003-TASK-authorisation-and-audit-trail.md) | ✅ `CLOSED` — merged to `main` in PR #5 (`5ff00eb`); FEEDBACK-M1 fully remediated & verified (migrations `0007`/`0008`) | green, 2515 assertions |
 | 4c | Audit coverage completion (C-05 unqualified) | [TASK-005](briefs/005-TASK-audit-coverage-completion.md) | ✅ `CLOSED` — merged to `main` in PR #6 (`2ba977e`) | green, 2747 assertions |
-| 5 | Settlement simulation | [TASK-004](briefs/004-TASK-settlement-simulation.md) | ✅ `CLOSED` — merged to `main` in PR #7 (`cba31c5`; migration `0009`, ADR-0018, UAT-006) | green, 3435 assertions |
+| 5 | Settlement simulation | [TASK-004](briefs/004-TASK-settlement-simulation.md) | 🔨 `IN PROGRESS` — **reopened by FEEDBACK-M2** (F-007 blocking); merged code stands on `main` (PR #7 `cba31c5`), remediation on a fresh branch, migration `0010` | green, 3435 assertions |
 | 6–9 | Reconciliation onwards | not yet briefed | 💭 later | — |
 
 **Controls now enforced on `main`.** As of 2026-08-04 the increment-3/4 stack is
@@ -45,8 +45,9 @@ never a production deployment or an external attestation. It follows a
 milestone once that milestone's audit findings are remediated and closed, and
 is gated by a whole-repo release audit
 ([AGENT_HANDOFF §1c](AGENT_HANDOFF.md); mechanics and charter in
-[audits/](audits/README.md)). **First candidate: `ref-1`, after Milestone 2 is
-ingested and any blocking remediation lands.**
+[audits/](audits/README.md)). **First candidate: `ref-1` — Milestone 2 is ingested (1 blocking / 4
+should-fix, all actioned); the tag is gated on the FEEDBACK-M2 remediation
+batch landing green and `CLOSED`.**
 
 ---
 
@@ -198,6 +199,7 @@ to rediscover them:
 | Event bus / service extraction | No driver. See [ADR-0007](ADR/0007-modular-monolith-over-microservices.md). |
 | Authentication provider integration | The permission model is the interesting part; OIDC wiring is not. |
 | Multi-region and DR | Meaningless without real institutional connectivity. |
+| Linked-retry provenance for returned payments | FEEDBACK-M2 F-007 ruling: a returned instruction is terminal and a retry is a **new** instruction — already possible via capture today. The linkage (`retries_id`-style provenance and the exception workflow around it) belongs to increment 6 (reconciliation), where return-exception handling natively lives. |
 | Audit logging of *refused* control attempts | FEEDBACK-M1 surfaced that a refused submission/approval leaves no audit event (audit writes sit inside the successful effect). C-05 scopes the trail to state *changes*, so this is new scope — a distinct security-event control with its own volume and retention, briefed separately when prioritised. Distinct from TASK-005, which covers *successful* writes that currently go unaudited. |
 
 ## How to pick up the next task
