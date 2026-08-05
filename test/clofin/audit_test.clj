@@ -232,16 +232,19 @@
 ;; ---------------------------------------------------------------------------
 
 (defn- subject-type-for
-  "The subject type an action names, derived from the action itself.
+  "The subject type an action names, derived *here* rather than read from
+  `clofin.audit`.
 
   Every action is `<subject>.<past-tense-verb>`, and — with one deliberate
-  exception — the prefix *is* the subject type. Deriving it here rather than
-  listing it is what makes the test below a statement about the naming rule and
-  not merely a table someone remembered to extend: an action whose prefix names
-  no subject type fails, which is the drift worth catching.
+  exception — the prefix *is* the subject type. The exception is `payment.*`,
+  whose subject type is spelt `payment-instruction` because the row it
+  addresses is the instruction record.
 
-  The exception is `payment.*`, whose subject type is spelt `payment-instruction`
-  because the row it addresses is the instruction record."
+  Kept as an independent second implementation on purpose. Since finding
+  **A-015** the rule is enforced by `clofin.audit/subject-type-for`, and a test
+  that called that function would be asking the rule to confirm itself: every
+  pair would agree by construction, including the pairs a mis-stated rule
+  produces. Two implementations that must agree is the assertion."
   [action]
   (let [prefix (first (str/split action #"\." 2))]
     (if (= "payment" prefix) "payment-instruction" prefix)))
@@ -249,6 +252,8 @@
 (deftest every-action-names-a-subject-type-that-exists
   (doseq [action audit/actions]
     (let [subject-type (subject-type-for action)]
+      (is (= subject-type (audit/subject-type-for action))
+          (str "the shipped derivation and this test must agree on " action))
       (is (contains? audit/subject-types subject-type)
           (str action " names subject type " (pr-str subject-type)
                ", which is not in the vocabulary"))
@@ -259,6 +264,25 @@
                                            ;; and `valid-event` supplies one.
                                            :actor-id (random-uuid))))
           (str action " must be recordable")))))
+
+(deftest a-015-an-action-with-the-wrong-subject-type-is-refused
+  (testing "two individually valid values are not a valid pair"
+    (let [t (try (audit/event (valid-event :action "payment.approved"
+                                           :subject-type "account"))
+                 nil (catch Exception e e))]
+      (is (some? t)
+          "`payment.approved` about an `account` was accepted until A-015: the two
+           vocabularies were checked independently and never against each other")
+      (is (= :validation (:clofin/error (ex-data t))))
+      (is (= "payment-instruction" (:expected (ex-data t))))))
+
+  (testing "and the rule holds across the whole vocabulary, not one sampled pair"
+    (doseq [action      audit/actions
+            subject-type audit/subject-types
+            :when (not= subject-type (subject-type-for action))]
+      (is (thrown? Exception (audit/event (valid-event :action action
+                                                       :subject-type subject-type)))
+          (str action " must not be recordable about a " subject-type)))))
 
 (deftest the-writes-this-brief-covers-are-in-the-vocabulary
   (testing "TASK-005: organisation creation, account opening and journal posting each have a term"

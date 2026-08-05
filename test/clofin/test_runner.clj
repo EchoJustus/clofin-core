@@ -38,6 +38,10 @@
 (def integration-namespaces
   "Tests that need a reachable PostgreSQL instance."
   '[clofin.db.migrate-test
+    ;; A-014: every closed vocabulary compared with the live catalogue, in both
+    ;; directions. Runs against the schema rather than against migration text,
+    ;; which is why it needs a database at all.
+    clofin.db.vocabulary-test
     clofin.db.ledger-constraints-test
     clofin.db.audit-constraints-test
     clofin.organisations.repository-test

@@ -237,9 +237,20 @@ prefixed with the canonicalisation version that produced it. See
 states what this costs an auditor.
 
 **Coverage.** Every state change the API can perform emits one event: payment
-instructions, approvals, and — since TASK-005 — organisation creation, account
-opening and journal posting. There is no qualification left on
-[C-05](COMPLIANCE.md).
+instructions, approvals, settlement batches, and — since TASK-005 —
+organisation creation, account opening and journal posting. **One qualification
+remains on [C-05](COMPLIANCE.md)**, and it is the same one C-05 itself now
+states: a late `timeout-resolution` recomputes an already-complete batch's
+derived status, and that recomputation emits no batch-subject event, because
+`settlement-batch.completed` marks the transition *into* a complete batch and a
+second move is not one. The instruction's own transition is recorded in that
+transaction. The missing term — a batch-status-change action distinct from
+`completed` — is named debt in [COMPLIANCE §4](COMPLIANCE.md).
+
+This paragraph said "there is no qualification left on C-05" while the
+qualification was disclosed later in COMPLIANCE itself; the `ref-1` release
+audit recorded that as finding **A-004**, and the headline now agrees with the
+disclosure (standing lesson **L-14**).
 
 **Attribution, including where there is none.** `actor` is null on exactly one
 action, `organisation.created`, because `POST /organisations` is the bootstrap
@@ -448,8 +459,8 @@ enforcement point is named — an invariant with no enforcement is a wish.
 | I3 | A posted entry is never updated or deleted. | Append-only database triggers ✅ |
 | I4 | An entry may be reversed at most once. | Partial unique index ✅ |
 | I5 | Money arithmetic never crosses currencies implicitly. | `clofin.money` raises ✅ |
-| I6 | An account holds exactly one currency. | Schema and balance computation ✅ |
-| I7 | Every entry references the business object that caused it. | `NOT NULL` plus a constrained vocabulary ✅ |
+| I6 | An account holds exactly one currency, and every line posted to it is denominated in that currency. | `ledger_account.currency` `NOT NULL`; the composite foreign key `journal_line (account_id, currency) → ledger_account (id, currency)` (migration `0011`); and `clofin.ledger.repository/assert-postable!`, which refuses a mismatched line before the write. The schema half is new: until audit finding **A-002** both columns referenced the currency registry and **nothing related them**, so raw SQL could commit a balanced entry whose lines were denominated differently from their accounts — the application blocked it and the balance query then filtered by account currency, computing a correct balance over an incorrect row ✅ |
+| I7 | Every entry names a reference type from a closed vocabulary and a reference id, both required. | `NOT NULL` plus the `journal_entry_reference_type_known` constraint. **Shape only: nothing resolves `reference.id` to a target or proves causation** — the API accepts a well-formed UUID for any known type, and its own opening-balance fixtures do exactly that. The invariant read "every entry references the business object that caused it", which is broader than the mechanical guarantee (audit finding **A-003**); referential resolution is named debt in [COMPLIANCE §4](COMPLIANCE.md) ✅ |
 | I8 | An instruction's approver is never its maker. | `clofin.authz.approval/evaluate`, a pure function — refused with no HTTP layer involved, and table-driven over the whole actor × instruction matrix ✅ |
 | I9 | A state change and its audit event commit together. | Same transaction. `clofin.audit.repository/record!` takes the caller's connection and cannot open one, so an audit write outside the change it describes is not expressible ✅ |
 | I10 | A replayed idempotency key never performs work twice. | Primary key `(organisation_id, key)` plus the stored response, written in the same transaction as the effect ✅ |

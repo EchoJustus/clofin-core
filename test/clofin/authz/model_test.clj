@@ -64,6 +64,19 @@
         (is (false? (model/permitted? suspended permission))))
       (is (false? (model/approver? suspended))))))
 
+(deftest a-014-only-active-grants-anything-across-the-whole-status-vocabulary
+  (testing "stated over `actor-statuses` rather than over the one status someone
+            sampled — the set is compared with `actor_status_known` in
+            `clofin.db.vocabulary-test`, so this covers whatever it holds"
+    (doseq [status model/actor-statuses
+            :when (not= :active status)]
+      (is (empty? (model/granted (actor :roles (set model/roles) :status status)))
+          (str status " must grant nothing"))))
+  (testing "and a status neither the model nor the schema knows grants nothing either"
+    (is (empty? (model/granted (actor :roles (set model/roles) :status :undead)))
+        "`granted` fails closed for an unrecognised status, which is what makes a
+         deployment mid-migration safe rather than merely unlikely")))
+
 ;; ---------------------------------------------------------------------------
 ;; No superuser
 ;; ---------------------------------------------------------------------------
@@ -104,20 +117,41 @@
 
 (deftest the-auditor-role-is-read-only
   (testing "an auditor who can change the thing being audited is not an auditor"
+    ;; Stated as a rule over the permission *name* rather than as a list of the
+    ;; reads that existed when this was written. A hard-coded allowlist has to
+    ;; be extended every time a read is added — and the extension is exactly
+    ;; where someone waves a write through, because the diff looks like the four
+    ;; that came before it. `:organisation/read` (A-006) was the first such
+    ;; addition and is what surfaced the shape.
     (doseq [permission (:auditor model/role-permissions)]
-      (is (contains? #{:audit/read :payment/read :account/read :entry/read} permission)
+      (is (= "read" (name permission))
           (str "auditor holds " permission ", which is not a read")))))
 
 ;; ---------------------------------------------------------------------------
 ;; The model and the schema cannot disagree
 ;; ---------------------------------------------------------------------------
 
-(deftest every-role-in-the-model-is-a-role-the-database-accepts
+(deftest every-role-in-the-model-is-a-role-the-migration-text-mentions
+  ;; **This is the weaker half of the guard, and it says so.** It read
+  ;;
+  ;;   #"'(operator|approver|controller|compliance|auditor)'"
+  ;;
+  ;; and compared the result with `model/roles` — a regex that can only ever
+  ;; capture the five roles it already names, so a sixth SQL role matched
+  ;; nothing, `declared` still held five, and the equality still passed. It was
+  ;; described as *the* role drift guard, and it was blind in the one direction
+  ;; drift actually travels (audit finding **A-014**).
+  ;;
+  ;; What survives here is what a unit test can honestly assert without a
+  ;; database: every role the model declares is *named somewhere* in the
+  ;; migration that constrains the column. Set equality against the live
+  ;; `role_known` constraint — in both directions, over values discovered
+  ;; rather than enumerated — is `clofin.db.vocabulary-test`.
   (testing "a role here and not in the check constraint fails on insert, in production"
-    (let [sql (slurp (io/file "resources/migrations/0005-authorisation-and-audit.sql"))
-          declared (set (map second (re-seq #"'(operator|approver|controller|compliance|auditor)'" sql)))]
-      (is (= (set (map name model/roles)) declared)
-          "clofin.authz.model/roles and the role_known check constraint must name the same roles"))))
+    (let [sql (slurp (io/file "resources/migrations/0005-authorisation-and-audit.sql"))]
+      (doseq [role model/roles]
+        (is (str/includes? sql (str "'" (name role) "'"))
+            (str role " is in `model/roles` and appears nowhere in migration 0005"))))))
 
 (deftest every-role-has-a-permission-set
   (testing "a role nobody wrote permissions for grants nothing, silently"

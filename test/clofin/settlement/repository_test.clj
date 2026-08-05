@@ -242,9 +242,15 @@
 
   `record-response!` runs inside a savepoint and translates a violation that is
   not the replay key into a domain error carrying the constraint name in its
-  data rather than in its message — so the assertion reads the data."
+  data rather than in its message — so the assertion reads the data.
+
+  It reads `:clofin/constraint`, the **internal** half of that data. Since
+  finding **A-009** a constraint name is marked internal and never rendered to a
+  caller; it is still in `ex-data`, where the error boundary logs it and where a
+  test that is asserting on schema behaviour can see it."
   [f]
-  (:constraint (ex-data (try (f) nil (catch clojure.lang.ExceptionInfo e e)))))
+  (:clofin/constraint
+   (ex-data (try (f) nil (catch clojure.lang.ExceptionInfo e e)))))
 
 (deftest a-refusal-without-a-reason-is-refused-by-the-schema
   (testing "and a non-refusal carrying one is too — two columns that can disagree"
@@ -415,7 +421,7 @@
           (is (re-find #"returned payment is terminal" (ex-message t)))
           (is (re-find #"new payment instruction" (ex-message t)))
           (is (= "raise-a-new-instruction" (:retry (ex-data t))))
-          (is (= settlement/membership-index (:constraint (ex-data t)))))))))
+          (is (= settlement/membership-index (:clofin/constraint (ex-data t)))))))))
 
 (deftest locking-instructions-names-the-ones-that-do-not-exist
   (let [{:keys [org] :as f} (setup)

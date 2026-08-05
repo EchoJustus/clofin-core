@@ -4,7 +4,8 @@
   Handlers are built by passing the components they need and returning a
   function of a request — so a test calls a function and asserts on a map,
   with no socket and no server (ADR-0010)."
-  (:require [clofin.api.wire :as wire]
+  (:require [clofin.api.principal :as principal]
+            [clofin.api.wire :as wire]
             [clofin.db.core :as db]
             [clofin.error :as err]
             [clofin.http.response :as resp]
@@ -49,11 +50,37 @@
       (resp/created (str "/organisations/" (:id org)) (wire/organisation->wire org)))))
 
 (defn show
-  "`GET /organisations/:id`."
+  "`GET /organisations/:id` — retrieve the actor's own organisation.
+
+  **Authenticated and authorised like every other business route.** Until the
+  `ref-1` release audit it was neither (finding **A-006**): this namespace did
+  not require `clofin.api.principal` at all, so any caller holding — or
+  guessing — a tenant UUID could read its legal name, short name and status.
+  That falsified C-08's claim to be enforced *on every operation*, which is the
+  reason a single unguarded route is a control finding rather than a missing
+  feature. `POST /organisations` above remains the documented unauthenticated
+  bootstrap; it is the exception, and it is the only one.
+
+  **The organisation acted on comes from the actor.** The path names one and it
+  is *verified, not trusted* — exactly as `organisationId` is in every body and
+  query string (`principal/assert-organisation!`). A foreign organisation is
+  therefore `403`, not `404`: the caller is told it may not act for the tenant
+  it named, and learns nothing about whether that tenant exists, because the
+  comparison never reads one. Answering `404` would have been the accidental
+  outcome of scoping the lookup by the principal's organisation, and it would
+  have turned an authorisation boundary into an existence oracle in reverse —
+  a caller could distinguish \"no such organisation\" from \"not yours\" by
+  whether its *own* id worked.
+
+  The `404` below therefore survives only for the case it describes: the
+  principal's own organisation row is missing, which is a deleted tenant with a
+  live actor, not a caller reaching across a boundary."
   [pool]
   (fn [request]
-    (let [id  (wire/read-uuid (get-in request [:path-params :id]) "id")
-          org (organisations/find-organisation pool id)]
+    (let [[actor _] (principal/for-request pool request :organisation/read)
+          id  (wire/read-uuid (get-in request [:path-params :id]) "id")
+          organisation-id (principal/assert-organisation! actor id)
+          org (organisations/find-organisation pool organisation-id)]
       (when-not org
-        (err/not-found! "No such organisation" {:id (str id)}))
+        (err/not-found! "No such organisation" {:id (str organisation-id)}))
       (resp/ok (wire/organisation->wire org)))))

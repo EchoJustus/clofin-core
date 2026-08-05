@@ -26,10 +26,23 @@
          (ex-data e))))
 
 ;; ---------------------------------------------------------------------------
-;; The vocabulary agrees with the schema
+;; The vocabulary appears in the schema
 ;; ---------------------------------------------------------------------------
+;;
+;; These two ask, for each *code* value, whether that literal appears in
+;; migration `0009`'s text. That question can only ever be asked about values
+;; the code already has, so an extra SQL scheme, status or outcome is invisible
+;; to it and the suite stays green while the schema accepts something no
+;; namespace knows about — audit finding **A-014**.
+;;
+;; They are kept because they still catch the other direction without a
+;; database, and because "every scheme is simulated" and "`failed` is not an
+;; item outcome" are properties of the code alone. The **equality** claim these
+;; tests used to carry now lives in `clofin.db.vocabulary-test`, which reads the
+;; live catalogue and compares complete sets in both directions. Their names say
+;; which of the two they are.
 
-(deftest the-schemes-in-code-are-the-schemes-in-the-migration
+(deftest the-schemes-in-code-appear-in-the-migration
   (testing "a scheme one knows and the other does not is a 500 the first time a caller hits it —
             the same discipline clofin.authz.model/roles keeps with role_known"
     (doseq [scheme batch/schemes]
@@ -38,7 +51,7 @@
   (testing "and every scheme is simulated, which the SIM- prefix is what makes checkable"
     (is (every? #(str/starts-with? % "SIM-") batch/schemes))))
 
-(deftest the-statuses-and-outcomes-in-code-are-the-ones-in-the-migration
+(deftest the-statuses-and-outcomes-in-code-appear-in-the-migration
   (doseq [status batch/statuses]
     (is (str/includes? migration (str "'" status "'"))
         (str status " is not in settlement_batch_status_known")))
