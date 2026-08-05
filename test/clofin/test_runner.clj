@@ -50,6 +50,8 @@
     clofin.api.payments-api-test
     clofin.api.approvals-api-test
     clofin.api.audit-coverage-test
+    ;; F-011: the transaction precondition, over every audit-composing service.
+    clofin.audit.unit-of-work-test
     clofin.settlement.repository-test
     clofin.api.settlement-api-test
     clofin.system-test])

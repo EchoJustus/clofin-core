@@ -12,15 +12,6 @@
 | **Controls** | C-03, C-04 exercised. **C-07 untouched and still 📋**; `TODO(increment-7)` left exactly where it was |
 | **Status** | Implemented. **Three objections** in §4, one of them a process finding about the previous increment. Seven observations in §5 |
 
-> **Meta copy — refreshed 2026-08-05** after the FEEDBACK-M2 remediation batch
-> (`fa31eb7`, PR #8) landed on the submission branch with its §8 addendum. All
-> five findings independently re-verified by Master Control against the new
-> tip (empty-schema 0001–0010 replay; all four outcome states refused a second
-> membership, including the `returned` case that committed at `cba31c5`). The
-> four declared divergences in §8.7 are **all ruled accepted** — rulings in
-> [TASK-004's changelog](../briefs/004-TASK-settlement-simulation.md).
-
-
 > **Reopened 2026-08-05.** The Milestone 2 external audit returned
 > REMEDIATION-REQUIRED against this increment. §1–§7 below are the original
 > submission and are **left as written** — a report edited after its findings

@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | **Increment** | 5 |
-| **Status** | `IMPLEMENTED` — FEEDBACK-M2 remediation batch complete and **verified by Master Control** (`fa31eb7`, PR #8 open and green, migration `0010`, ADR-0019); nothing in flight per L-9. Pending merge, then `CLOSED`. Was reopened 2026-08-04 by FEEDBACK-M2 from `CLOSED` (PR #7 `cba31c5`) |
+| **Status** | `CLOSED` — FEEDBACK-M2 remediation merged to `main` in PR #8 (`5d21334`) 2026-08-05; migration `0010`, ADR-0019; all five findings verified closed. **The PR #8 merge commit is the `ref-1` release candidate.** History: PR #7 `cba31c5` merged 2026-08-04; reopened by FEEDBACK-M2; remediated at `fa31eb7` |
 | **Depends on** | TASK-003 — settlement drives the `release` arrow the authorisation increment left in the table |
 | **Base branch** | `main` at `2ba977e` — TASK-003 **and TASK-005 are both merged**, so this is an ordinary branch off `main` with the PR against `main`. The `clofin.audit/actions` coordination this brief anticipated is resolved: TASK-005 landed first; you extend the literal (and its OpenAPI enum twin — see In-scope item 9) in place |
 | **Blocks** | Increment 6 (reconciliation) |

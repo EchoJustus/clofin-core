@@ -45,8 +45,17 @@
 
   Returns the account as stored. A refused opening — a duplicate code, an
   unknown organisation — throws before the audit write is reached and takes the
-  transaction with it, so a `409` or a `422` leaves no event behind."
+  transaction with it, so a `409` or a `422` leaves no event behind.
+
+  **`tx` must be a transaction, and that is now checked rather than named.**
+  Audit finding **F-011** called this function with the pool and an actor the
+  audit vocabulary refuses: the account committed on its own connection, the
+  audit write then failed, and the result was one account and zero events — the
+  state C-05 says cannot exist. `assert-unit-of-work!` runs before
+  `create-account!` because a precondition checked after the first write is not
+  a precondition (standing lesson **L-13**)."
   [tx {:keys [account actor-id correlation-id]}]
+  (audit-store/assert-unit-of-work! tx)
   (let [acct (ledger/create-account! tx account)]
     ;; Same transaction as the insert above (C-05, PR-075, invariant I9).
     (audit-store/record! tx {:organisation-id (:organisation-id acct)
@@ -77,8 +86,16 @@
      after the event has been written. The event is inside that transaction, so
      it goes down with it. That is the whole reason `record!` cannot open a
      connection of its own: an event committed on its own connection would have
-     survived a posting the database then refused."
+     survived a posting the database then refused.
+
+  A third, which is why `assert-unit-of-work!` runs first: **the caller supplied
+  no transaction at all.** `clofin.ledger.repository/post-entry!` opens one of
+  its own when handed a pool, so the entry commits and the audit write that
+  follows commits — or fails — separately, and reason 2 above quietly stops
+  being true. Audit finding **F-011** reproduced exactly that: one journal
+  entry, zero events (standing lesson **L-13**)."
   [tx {:keys [entry actor-id correlation-id]}]
+  (audit-store/assert-unit-of-work! tx)
   (let [posted (ledger/post-entry! tx entry)]
     (audit-store/record! tx {:organisation-id (:organisation-id posted)
                              :actor-id        actor-id

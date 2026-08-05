@@ -13,3 +13,4 @@
 0007-append-only-truncate-guards.sql
 0008-journal-entry-completeness.sql
 0009-settlement-batches-and-scheme-responses.sql
+0010-settlement-remediation.sql

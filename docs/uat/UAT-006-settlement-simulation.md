@@ -252,10 +252,14 @@ Tuesday.
 curl -sS -X POST $BASE/settlement-batches/$BATCH/scheme-responses -H "x-actor-id: $CTRL" \
   -H 'content-type: application/json' \
   -d "{\"organisationId\":\"$ORG\",\"kind\":\"settled\",\"instructionId\":\"$SETTLES\",
-       \"reference\":\"SIM-STL-1\"}" | jq '{replayed, responses: (.schemeResponses|length)}'
+       \"reference\":\"SIM-STL-1\"}" | jq '{replayed, outcome, responses: (.schemeResponses|length)}'
 ```
 
-**Expected: `200` with `replayed: true`,** and the response count **unchanged**.
+**Expected: `200` with `replayed: true` and `outcome: "settled"`,** and the
+response count **unchanged**. The `outcome` matters: a replay reproduces the
+*original answer*, and reporting `null` there was audit finding **F-009** —
+a caller could not tell a replayed settlement from a replayed nothing.
+
 Confirm no second posting was made:
 
 ```sh
@@ -284,6 +288,31 @@ curl -sS -o /dev/null -w '%{http_code}\n' -X POST $BASE/settlement-batches/$BATC
 **Expected: `409`.** This is a *new* response — its replay key is free — for an
 item that already has an outcome. Silently overwriting it would be a settled
 payment turning into a returned one on the say-so of a late message.
+
+**7c(ii). And the refusal is still evidence.** A message that arrived is a fact
+whether or not CloFin could act on it. Look for it:
+
+```sql
+select kind, reference, disposition, disposition_reason, outcome
+  from scheme_response where reference = 'SIM-RTN-LATE';
+```
+
+**Expected: one row**, `disposition = 'refused'`,
+`disposition_reason = 'item-already-resolved'`, `outcome` null. Before audit
+finding **F-008** there was **no row**: the conflict rolled its own receipt back,
+so the first delivery of a rejected message was unprovable and the identical
+reference could perform work later, once state had moved. Send it again and you
+get the same `409` — the stored answer reproduced, not re-derived:
+
+```sh
+curl -sS -X POST $BASE/settlement-batches/$BATCH/scheme-responses -H "x-actor-id: $CTRL" \
+  -H 'content-type: application/json' \
+  -d "{\"organisationId\":\"$ORG\",\"kind\":\"returned\",\"instructionId\":\"$SETTLES\",
+       \"reference\":\"SIM-RTN-LATE\",\"reason\":\"too late\"}" \
+  | jq '{status, replayed: .errors.replayed, why: .errors.dispositionReason}'
+```
+
+**Expected: `409` again, with `replayed: true`** — and still exactly one row.
 
 **7d. One comes back.**
 
@@ -357,12 +386,42 @@ values ('<NEW BATCH>', '<SILENT>');
 **Expected:**
 
 ```
-ERROR:  duplicate key value violates unique constraint "settlement_item_live_key"
+ERROR:  duplicate key value violates unique constraint "settlement_item_instruction_key"
 ```
 
-**This is the control.** Not a check in a handler — a partial unique index, so
-it binds SQL run by hand exactly as it binds the API. A `timed-out` item counts
-as live precisely because its outcome is unknown.
+**This is the control.** Not a check in a handler — a unique index, so it binds
+SQL run by hand exactly as it binds the API.
+
+**8c — and the same is true of a payment that came *back*.** Run the identical
+insert for `$RETURNS`, the payment the scheme returned in step 7d:
+
+```sql
+insert into settlement_batch_item (batch_id, instruction_id)
+values ('<NEW BATCH>', '<RETURNS>');
+```
+
+**Expected: the same refusal.** This is the one worth doing by hand, because
+until migration `0010` it **succeeded** — the index excepted `returned`, and the
+Milestone 2 audit committed exactly this row while the API answered `422` to the
+same retry. The schema was advertising a permission no workflow could reach
+(finding **F-007**; a schema path is not a product path, standing lesson
+**L-10**).
+
+The retry a returned payment gets is a **new instruction**, approved on its own
+merits — the doctrine a settled payment already follows, where a correction is a
+new reversing instruction. Prove it works:
+
+```sh
+RETRY=$(raise 1)     # a NEW instruction, raised, submitted and approved by `raise`
+curl -sS -X POST $BASE/settlement-batches -H "x-actor-id: $CTRL" \
+  -H 'content-type: application/json' \
+  -d "{\"organisationId\":\"$ORG\",\"scheme\":\"SIM-ACH\",\"currency\":\"SGD\",
+       \"valueDate\":\"2026-12-01\",\"instructionIds\":[\"$RETRY\"]}" | jq -r .status
+```
+
+**Expected: `open`.** A returned payment is finished; the money's second attempt
+is a second payment decision, and it gets a second maker–checker cycle. See
+[ADR-0019](../ADR/0019-a-returned-payment-is-terminal-and-retries-as-a-new-instruction.md).
 
 ---
 
@@ -463,11 +522,12 @@ Two things to check deliberately:
 
 ```sql
 update scheme_response set reference = 'edited';
+update scheme_response set disposition = 'applied';   -- including the receipt's verdict
 delete from scheme_response;
 truncate scheme_response;
 ```
 
-**Expected:** all three refused —
+**Expected:** all four refused —
 
 ```
 ERROR:  Table scheme_response is append-only: correct a posted entry with a
@@ -493,9 +553,11 @@ table.
 | Settlement is a controller's right, and never an approver's | Step 5 |
 | A release posts, and clearing exposure is visible in the ledger | Step 6, 10 |
 | Partial batch failure is ordinary | Step 7 |
-| A duplicate response costs nothing | Step 7b |
-| A late contradiction is refused, not applied | Step 7c |
+| A duplicate response costs nothing, and replays its original answer | Step 7b |
+| A late contradiction is refused, not applied — and is kept as evidence | Step 7c |
+| A refused message replays its refusal rather than being re-evaluated | Step 7c(ii) |
 | **Unknown is not failed, and cannot be re-batched — including from SQL** | **Step 8** |
+| **A returned payment is terminal too; the retry is a new instruction** | **Step 8c** |
 | A timeout resolves exactly once | Step 9 |
 | The zero-sum invariant survives every outcome mix | Step 10 |
 | The trail names one event per thing that happened | Step 11 |
