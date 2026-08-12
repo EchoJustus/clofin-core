@@ -60,9 +60,9 @@ performed, 5–7 were not, and the tag annotation says so. All 19 findings were
 remediated before the tag. **Uncovered audit scope (items 5–7) carries forward
 as mandatory-first scope for `ref-2`.**
 
-**Visual layer — and what it displaces.** `ADR-0020` *(on `main` —
-`docs/ADR/0020-two-repositories-and-the-generate-replay-rules.md`, merged in
-PR #11, `cbbd669`, 2026-08-05, per amendment A1; this file's `main` copy links it)*
+**Visual layer — and what it displaces.** `ADR-0020`
+*(`docs/ADR/0020-two-repositories-and-the-generate-replay-rules.md`, merged to
+`main` in PR #11, `cbbd669`, 2026-08-05, per amendment A1)*
 adds generated diagrams ([TASK-006](briefs/006-TASK-generated-diagrams.md), in
 `clofin-core`) and **`clofin-trace`**, a published replay walkthrough
 ([TASK-007](briefs/007-TASK-clofin-trace.md), a second repository). Driver D5 —
