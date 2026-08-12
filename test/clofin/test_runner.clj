@@ -37,7 +37,11 @@
     ;; ADR-0020 RULE 1: every committed diagram compared with its source of
     ;; truth, in both directions. `make diagrams-check` proves the bytes match;
     ;; this proves the drawing and the table say the same thing.
-    clofin.tools.diagrams-test])
+    clofin.tools.diagrams-test
+    ;; The document-consistency guard, run against documents built to
+    ;; contradict each other — including the actual 2026-08-05 contradiction
+    ;; that standing lesson L-15 records.
+    clofin.tools.doc-consistency-test])
 
 (def integration-namespaces
   "Tests that need a reachable PostgreSQL instance."
