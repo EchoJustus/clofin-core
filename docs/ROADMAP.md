@@ -1,6 +1,6 @@
 # CloFin — Roadmap
 
-**Status:** living document · **Last reviewed:** 2026-08-03
+**Status:** living document · **Last reviewed:** 2026-08-12
 
 Increments are sequenced by **product relevance and regulatory risk**, not by
 implementation convenience. Each increment leaves `main` runnable, migrated,
@@ -17,12 +17,12 @@ and this table is stale.
 | Increment | Theme | Brief | Status | CI |
 |---|---|---|---|---|
 | 1 | Foundation and ledger core | — (predates the brief protocol) | ✅ done — merged to `main` at `3bde834` (PR #1; milestone audit waived, see audits register) | green, 303 assertions |
-| 2 | Ledger persistence and account API | [TASK-001](briefs/001-TASK-ledger-persistence-and-account-api.md) | ✅ `IMPLEMENTED` — merged to `main` in PR #2 (`f7018a1`); `FEEDBACK-001` outstanding | green, 757 assertions |
+| 2 | Ledger persistence and account API | [TASK-001](briefs/001-TASK-ledger-persistence-and-account-api.md) | ✅ `CLOSED` — merged to `main` in PR #2 (`f7018a1`); audited in FEEDBACK-M1 (F-002/F-003/F-004, actioned via the increment-4 stack) | green, 757 assertions |
 | 3 | Payment lifecycle and idempotency | [TASK-002](briefs/002-TASK-payment-instruction-lifecycle.md) | ✅ `CLOSED` — merged to `main` in PR #4 (`31306dd`); audited in FEEDBACK-M1, no new findings | green, 1547+ assertions |
 | 4 | Authorisation, maker–checker, audit | [TASK-003](briefs/003-TASK-authorisation-and-audit-trail.md) | ✅ `CLOSED` — merged to `main` in PR #5 (`5ff00eb`); FEEDBACK-M1 fully remediated & verified (migrations `0007`/`0008`) | green, 2515 assertions |
 | 4c | Audit coverage completion (C-05 unqualified) | [TASK-005](briefs/005-TASK-audit-coverage-completion.md) | ✅ `CLOSED` — merged to `main` in PR #6 (`2ba977e`) | green, 2747 assertions |
 | 5 | Settlement simulation | [TASK-004](briefs/004-TASK-settlement-simulation.md) | ✅ `CLOSED` — PR #7 (`cba31c5`) + FEEDBACK-M2 remediation PR #8 (`5d21334`; migration `0010`, ADR-0019) | green, 584 tests / 3638 assertions |
-| 5v.1 | Visual layer — generated diagrams | [TASK-006](briefs/006-TASK-generated-diagrams.md) | 🔨 `IN PROGRESS` — dispatched 2026-08-05; ADR-0020 merged in PR #11 (`cbbd669`) | — |
+| 5v.1 | Visual layer — generated diagrams | [TASK-006](briefs/006-TASK-generated-diagrams.md) | ✅ `CLOSED` — merged to `main` in PR #12 (`2237a39`); five objections ruled, O-1 actioned on `meta` | green, 322 tests / 1991 assertions (verify), 640 / 4222 (integration) |
 | 5v.2 | Visual layer — `clofin-trace` replay walkthrough | [TASK-007](briefs/007-TASK-clofin-trace.md) | 📋 `READY`, **dispatch gated** on the TASK-006 decision point (A3) | — |
 | 6–9 | Reconciliation onwards | not yet briefed | 💭 later — starts ~3–4 weeks later than it otherwise would; see below | — |
 
@@ -60,7 +60,9 @@ performed, 5–7 were not, and the tag annotation says so. All 19 findings were
 remediated before the tag. **Uncovered audit scope (items 5–7) carries forward
 as mandatory-first scope for `ref-2`.**
 
-**Visual layer — and what it displaces.** `ADR-0020` *(merged to `main` in PR #11, `cbbd669`, 2026-08-05, per amendment A1; the link resolves after the next sync)*
+**Visual layer — and what it displaces.** `ADR-0020` *(on `main` —
+`docs/ADR/0020-two-repositories-and-the-generate-replay-rules.md`, merged in
+PR #11, `cbbd669`, 2026-08-05, per amendment A1; this file's `main` copy links it)*
 adds generated diagrams ([TASK-006](briefs/006-TASK-generated-diagrams.md), in
 `clofin-core`) and **`clofin-trace`**, a published replay walkthrough
 ([TASK-007](briefs/007-TASK-clofin-trace.md), a second repository). Driver D5 —
@@ -99,7 +101,7 @@ discovered late.
 
 ## Increment 2 — Ledger persistence and account API ✅
 
-**Brief:** [TASK-001](briefs/001-TASK-ledger-persistence-and-account-api.md) · **Status:** `IMPLEMENTED` — merged in PR #2, `FEEDBACK-001` outstanding
+**Brief:** [TASK-001](briefs/001-TASK-ledger-persistence-and-account-api.md) · **Status:** `CLOSED` — merged in PR #2; audited in FEEDBACK-M1, findings actioned via the increment-4 stack
 
 *Why it came next: the domain model existed but could not be exercised through
 the API, so nothing above it could be built.*
@@ -129,9 +131,9 @@ to rediscover them:
 - **Account lifecycle is not an API operation.** Freezing and closing are done
   in SQL; the transitions belong with authorisation and audit in TASK-003.
 
-## Increment 3 — Payment instruction lifecycle 📋
+## Increment 3 — Payment instruction lifecycle ✅
 
-**Brief:** [TASK-002](briefs/002-TASK-payment-instruction-lifecycle.md) · **Status:** `IMPLEMENTED` — PR #4 open and green; O-3 digest-scope fix applied (`f529663`, migration `0004`)
+**Brief:** [TASK-002](briefs/002-TASK-payment-instruction-lifecycle.md) · **Status:** `CLOSED` — merged in PR #4 (`31306dd`); audited in FEEDBACK-M1, no new findings
 
 **Carried forward, deliberately** (from [002-REQ](audits/002-REQ-payment-instruction-lifecycle.md) §6):
 
@@ -152,9 +154,9 @@ to rediscover them:
 - **Risk addressed:** duplicate payments from retries — the failure with the
   most direct financial consequence.
 
-## Increment 4 — Authorisation, maker–checker and audit 🔨
+## Increment 4 — Authorisation, maker–checker and audit ✅
 
-**Brief:** [TASK-003](briefs/003-TASK-authorisation-and-audit-trail.md) · **Status:** `IMPLEMENTED` — PR #5 open and green at `6f58857`, stacked on PR #4; four objections ruled and actioned, O-1 fixed by migration `0006`
+**Brief:** [TASK-003](briefs/003-TASK-authorisation-and-audit-trail.md) · **Status:** `CLOSED` — merged in PR #5 (`5ff00eb`); FEEDBACK-M1 fully remediated and verified
 
 *Why next: this is the control an auditor asks about first.*
 
@@ -181,9 +183,9 @@ to rediscover them:
 - **No actor administration API** — deliberate; self-granted roles would make
   C-01 unenforceable.
 
-## Increment 5 — Settlement simulation 📋
+## Increment 5 — Settlement simulation ✅
 
-**Brief:** [TASK-004](briefs/004-TASK-settlement-simulation.md) · **Status:** `READY` — stacks on TASK-003's branch; migration DDL pre-validated against a live PostgreSQL 16 (lesson L-3)
+**Brief:** [TASK-004](briefs/004-TASK-settlement-simulation.md) · **Status:** `CLOSED` — merged in PR #7 (`cba31c5`); FEEDBACK-M2 remediation merged in PR #8 (`5d21334`)
 
 - Batch construction by scheme, currency and value date
 - Simulated scheme adapter behind a protocol, with partial-failure outcomes
