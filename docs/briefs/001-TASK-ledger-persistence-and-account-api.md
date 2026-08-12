@@ -3,13 +3,13 @@
 | Field | Value |
 |---|---|
 | **Increment** | 2 |
-| **Status** | `IMPLEMENTED` |
+| **Status** | `CLOSED` — merged to `main` in PR #2 (`f7018a1`); audited in FEEDBACK-M1 *(status corrected 2026-08-12 — this field had read `IMPLEMENTED` since the merge while the backlog read `CLOSED`, both copies stale together, so TASK-006's guard could not see it; found during the O-1 reproduction)* |
 | **Depends on** | — (increment 1 is merged and green) |
 | **Blocks** | TASK-002, TASK-003 |
 | **Requirements** | PR-020, PR-021, PR-022, PR-023, PR-024 |
 | **Controls touched** | C-03, C-04 |
 | **Scope** | Medium |
-| **Audit** | Submitted: [001-REQ](../audits/001-REQ-ledger-persistence-and-account-api.md) — merged in PR #2; `FEEDBACK-001` outstanding |
+| **Audit** | [001-REQ](../audits/001-REQ-ledger-persistence-and-account-api.md) submitted; **audited in [FEEDBACK-M1](../audits/FEEDBACK-M1-foundation.md)** — F-002/F-003/F-004, all actioned via the increment-4 stack |
 
 > Status lifecycle: `READY` → `IN PROGRESS` → `IMPLEMENTED` → `AUDITED` → `CLOSED`.
 > Status is maintained by Master Control on the `meta` branch — see AGENT_HANDOFF §1b.
