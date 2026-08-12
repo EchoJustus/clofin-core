@@ -1,0 +1,31 @@
+Date:        2026-08-05
+Commit:      5c7b4badced5e807e1022fce44cbcad38c6d2095
+Candidate:   5d21334c1bfc59aba702e094155eea03dc9b1ef0 (tagged on its
+             remediation descendant, as the release rules permit)
+
+WHAT THIS IS. A tagged, audited snapshot of a reference implementation that
+runs on SYNTHETIC DATA ONLY. It is not a production deployment, not an
+attestation, not a claim of real institutional connectivity, and nothing here
+has handled real funds or connected to any bank, payment scheme or central
+bank. The release audit is an internal quality gate.
+
+RELEASE AUDIT: PARTIAL. Charter items 1-4 of 8 were performed (migrations
+replayed from empty; full suite; cross-document consistency; the partial-set
+sweep). Items 5-7 were NOT performed - standing-lessons compliance, known-debt
+reconciliation, and the synthetic-data/neutrality sweep - because the external
+auditor's compute quota was exhausted mid-audit. Closed under the recorded
+resource-interruption fallback; the uncovered items carry forward as
+mandatory-first scope for ref-2.
+
+FINDINGS. 19 raised (2 blocking, 17 should-fix), all remediated before this
+tag. Four mechanisms are deferred with named targets, their claims narrowed
+now so no document holds an unsupported statement.
+
+CONTENTS. Increments 1-5: double-entry ledger, payment lifecycle and
+idempotency, authorisation with maker-checker and an append-only audit trail,
+audit coverage across every API write, and settlement simulation. Eleven
+forward-only migrations. Controls C-01 through C-06 and C-08 through C-12
+enforced; C-07 (screening) designed and not built.
+
+Records: docs/audits/ on the meta branch - FEEDBACK-M1, FEEDBACK-M2,
+FEEDBACK-REL-ref-1, and standing lessons L-1 through L-14.
