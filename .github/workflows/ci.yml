@@ -54,6 +54,12 @@ jobs:
       - name: Check generated diagrams against their sources
         run: make diagrams-check
 
+      # L-15's mechanical guard: the status documents must not contradict each
+      # other. Governance documents are repaired on `meta` and re-synced, never
+      # edited in place (AGENT_HANDOFF §1).
+      - name: Check the status documents agree with each other
+        run: make doc-consistency
+
       - name: Run unit and property tests
         run: make test
 
