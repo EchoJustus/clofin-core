@@ -38,6 +38,8 @@ artefacts a product or business-analysis owner would actually be accountable for
 - Architecture decision records with the alternatives considered and rejected — [`docs/ADR/`](docs/ADR/)
 - A control-to-requirement mapping — [`docs/COMPLIANCE.md`](docs/COMPLIANCE.md)
 - Acceptance criteria and UAT scripts per feature slice — [`docs/uat/`](docs/uat/)
+- Diagrams **generated from** the code and tables they depict, and failed in CI
+  when they drift — [`docs/diagrams/`](docs/diagrams/README.md)
 
 **Engineering**
 - A double-entry ledger whose balance invariant is enforced by property-based tests
@@ -108,7 +110,10 @@ make repl                 # development REPL
 │   ├── ROADMAP.md           Delivery increments
 │   ├── ADR/                 Architecture decision records
 │   ├── briefs/              Self-contained implementation briefs
+│   ├── diagrams/            Generated — never hand-drawn (ADR-0020 RULE 1)
 │   └── uat/                 Acceptance criteria and UAT scripts
+├── tools/clofin/tools/    Diagram generator; not on the runtime classpath
+├── scripts/               Documentation guards run by `make verify`
 ├── api/openapi.yaml       API contract
 ├── docker-compose.yml     Local stack
 └── Makefile               Unified entrypoint

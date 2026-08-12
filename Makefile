@@ -165,8 +165,30 @@ smoke: up ## Bring the stack up and verify it answers health and readiness
 docs-check: ## Verify that every internal documentation link resolves
 	@sh scripts/check-doc-links.sh
 
+.PHONY: diagrams
+diagrams: ## Regenerate every committed diagram from its source of truth
+	$(CLJ) -M:diagrams
+
+.PHONY: diagrams-check
+diagrams-check: ## Fail if a committed diagram no longer matches its source
+	@$(CLJ) -M:diagrams --check
+
+.PHONY: doc-consistency
+doc-consistency: ## Report where the status documents contradict each other
+	@sh scripts/check-doc-consistency.sh
+
+# `doc-consistency` is deliberately NOT in `verify` yet. It finds five real
+# disagreements on `main` today: ROADMAP.md's per-increment sections still show
+# increments 3, 4 and 5 as `📋 next` / `IMPLEMENTED` / `READY` while their
+# briefs are `CLOSED`. ROADMAP.md is a governance document, synced from the
+# `meta` branch by Master Control and never edited in place (AGENT_HANDOFF §1),
+# so a Worker cannot repair it — see objection O-1 in
+# docs/audits/006-REQ-generated-diagrams.md. `clofin.tools.doc-consistency-test`
+# pins that failure set exactly, so a *new* disagreement still fails the build.
+# When the ROADMAP is corrected on `meta` and re-synced, add `doc-consistency`
+# to the line below and delete that expectation.
 .PHONY: verify
-verify: test docs-check ## Everything CI runs that does not need a database
+verify: test docs-check diagrams-check ## Everything CI runs that does not need a database
 
 # ---------------------------------------------------------------------------
 # Housekeeping

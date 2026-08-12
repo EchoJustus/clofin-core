@@ -26,9 +26,19 @@
   :run
   {:main-opts ["-m" "clofin.main"]}
 
+  ;; Regenerate every committed diagram from its source of truth:
+  ;;   clojure -M:diagrams            (write)
+  ;;   clojure -M:diagrams --check    (fail on drift)
+  ;; `tools` is deliberately not in `:paths` above: documentation machinery has
+  ;; no business on the runtime classpath. No dependency beyond Clojure itself —
+  ;; ADR-0020 RULE 1 is satisfied without Node, npm or a rendering toolchain.
+  :diagrams
+  {:extra-paths ["tools"]
+   :main-opts   ["-m" "clofin.tools.diagrams"]}
+
   ;; Unit + property tests (no database):  clojure -M:test
   :test
-  {:extra-paths ["test" "test-resources"]
+  {:extra-paths ["test" "test-resources" "tools"]
    :extra-deps  {org.clojure/test.check {:mvn/version "1.1.3"}
                  ;; Test scope only: the contract test reads api/openapi.yaml and
                  ;; asserts it matches the route table. Not a runtime dependency.
@@ -42,6 +52,6 @@
 
   ;; REPL for local development:  clojure -M:dev
   :dev
-  {:extra-paths ["test" "test-resources" "dev"]
+  {:extra-paths ["test" "test-resources" "dev" "tools"]
    :extra-deps  {org.clojure/test.check {:mvn/version "1.1.3"}
                  org.yaml/snakeyaml     {:mvn/version "2.6"}}}}}
