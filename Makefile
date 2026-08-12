@@ -177,6 +177,30 @@ diagrams-check: ## Fail if a committed diagram no longer matches its source
 doc-consistency: ## Report where the status documents contradict each other
 	@sh scripts/check-doc-consistency.sh
 
+# ---------------------------------------------------------------------------
+# Capture — the fixtures `clofin-trace` replays (ADR-0020 RULE 2)
+# ---------------------------------------------------------------------------
+
+CAPTURE_REF ?= ref-1
+CAPTURE_OUT ?= target/capture
+
+# Starts the *tagged* commit's own service from a detached worktree, so this
+# one needs a local Clojure CLI and a reachable PostgreSQL rather than the
+# container fallback: which commit built the running stack is the whole point,
+# and a toolchain container decides that for you. The capture database is
+# scratch — it is dropped and recreated — which is why its name must end in
+# `_capture`.
+.PHONY: capture-trace
+capture-trace: ## Capture the replay bundles for clofin-trace from a tagged commit
+	clojure -M:capture --ref $(CAPTURE_REF) --out $(CAPTURE_OUT)
+
+# Re-reads the GitHub release body for each tag mirrored in docs/releases/ and
+# fails if the committed copy has drifted. Not in `verify`: it needs the
+# network, and a verification that fails offline is one people learn to skip.
+.PHONY: check-release-annotation
+check-release-annotation: ## Compare docs/releases/*.annotation.txt with the published release
+	@sh scripts/check-release-annotation.sh
+
 # `doc-consistency` entered `verify` on 2026-08-12, once the O-1 ROADMAP
 # staleness was corrected on `meta` and re-synced (006-REQ objection O-1;
 # the deferral it replaces was pinned by a test, deleted in the same commit).
