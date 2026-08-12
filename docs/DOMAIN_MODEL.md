@@ -304,38 +304,73 @@ PRD Q1.
 
 ## 3. Payment instruction lifecycle 🔨
 
-```
-       ┌────────── amend ──────────┬────────── amend ──────────┐
-       ▼                           │                           │
-   ┌───────┐    submit    ┌────────┴─────────┐   approve  ┌────┴─────┐
-   │ draft │─────────────▶│ pending_approval │───────────▶│ approved │
-   └───┬───┘              └────────┬─────────┘            └────┬─────┘
-       │                           │                           │
-       │ cancel                    │ reject                    │ release
-       ▼                           ▼                           ▼
-  ┌───────────┐              ┌──────────┐               ┌──────────┐
-  │ cancelled │              │ rejected │               │ released │
-  └───────────┘              └──────────┘               └────┬─────┘
-                                                             │
-                                            ┌────────────────┼────────────────┐
-                                            ▼                ▼                ▼
-                                      ┌─────────┐      ┌────────┐      ┌──────────┐
-                                      │ settled │      │ failed │      │ returned │
-                                      └────┬────┘      └────────┘      └──────────┘
-                                           │ reverse
-                                           ▼
-                                    ┌──────────────┐
-                                    │ new reversal │
-                                    │  instruction │
-                                    └──────────────┘
+<!-- BEGIN GENERATED: payment-lifecycle -->
+
+> **Generated.** This diagram is produced from
+> `clofin.payments.state/transitions` by `clofin.tools.diagrams` and checked
+> by `make diagrams-check`, per
+> [ADR-0020](ADR/0020-two-repositories-and-the-generate-replay-rules.md) RULE 1.
+> Editing it here is pointless: the next `make diagrams` overwrites it, and
+> the build fails in between. The standalone artifact is
+> [`diagrams/payment-lifecycle.md`](diagrams/payment-lifecycle.md).
+
+```mermaid
+stateDiagram-v2
+    direction LR
+
+    state "approved" as approved
+    state "cancelled" as cancelled
+    state "draft" as draft
+    state "failed" as failed
+    state "pending-approval" as pending_approval
+    state "rejected" as rejected
+    state "released" as released
+    state "returned" as returned
+    state "settled" as settled
+
+    [*] --> draft
+
+    approved --> draft : amend
+    approved --> cancelled : cancel
+    approved --> released : release
+    draft --> cancelled : cancel
+    draft --> pending_approval : submit
+    pending_approval --> draft : amend
+    pending_approval --> approved : approve
+    pending_approval --> rejected : reject
+    released --> failed : fail
+    released --> returned : return
+    released --> settled : settle
+
+    cancelled --> [*]
+    failed --> [*]
+    rejected --> [*]
+    returned --> [*]
+    settled --> [*]
 ```
 
-`amend` leaves **two** states — `pending_approval` and `approved` — and both
-land back in `draft`, invalidating every approval given so far. The diagram is
-checked against `clofin.payments.state/transitions`, which carries eleven
-permitted pairs; a drawing that disagreed with the table would be the failure
-[ADR-0014](ADR/0014-payment-lifecycle-as-data.md) exists to prevent, and it is
-the failure this diagram *was* until ruling O-2 (lesson L-4).
+<!-- END GENERATED: payment-lifecycle -->
+
+`amend` leaves **two** states — `pending-approval` and `approved` — and both
+land back in `draft`, invalidating every approval given so far. The drawing
+above is **generated from** `clofin.payments.state/transitions`, which carries
+eleven permitted pairs, so it can no longer disagree with the table — the
+failure [ADR-0014](ADR/0014-payment-lifecycle-as-data.md) exists to prevent,
+and the failure this diagram *was*, by hand, until ruling O-2 (lesson **L-4**).
+It was hand-maintained with a note asking a reader to compare it against the
+table; [ADR-0020](ADR/0020-two-repositories-and-the-generate-replay-rules.md)
+RULE 1 replaced the note with `make diagrams-check`.
+
+One arrow the hand-drawn version carried is deliberately absent: `reverse`,
+from `settled` to a new instruction. It was never a transition — rule 4 below
+and `clofin.payments.state/reversible-states` say a settled instruction is
+never mutated — so a generated drawing of the transition table cannot contain
+it. That the drawing used to show it, and now cannot, is the point.
+
+**This closes half of L-4, not the lesson.** The numbered rules below are prose
+about the lifecycle rather than a drawing of it, and prose can still contradict
+the table. Diagram-versus-table is now mechanical; prose-versus-table remains a
+human check.
 
 Rules that the diagram alone does not carry:
 
@@ -365,9 +400,10 @@ Rules that the diagram alone does not carry:
    the lifecycle forbade. A structured exception workflow — relating a retry
    back to the payment it replaces — is increment 6's. 📋
 
-Transitions are held as data in `clofin.payments.state`, so the table above can
-be generated from the code and tested exhaustively rather than sampled — every
-(state, event) pair is walked, not a chosen few.
+Transitions are held as data in `clofin.payments.state`, so the diagram above
+**is** generated from the code — not "can be" — and the lifecycle is tested
+exhaustively rather than sampled: every (state, event) pair is walked, not a
+chosen few.
 
 **Two rules about status are not transitions**, and are held as named sets
 beside the table rather than as conditionals in a handler

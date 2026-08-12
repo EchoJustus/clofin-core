@@ -48,6 +48,12 @@ jobs:
       - name: Check documentation links
         run: make docs-check
 
+      # ADR-0020 RULE 1. Regenerates every committed diagram in a fresh JVM and
+      # fails on any difference — which is also what proves the generator's
+      # output does not depend on one run's hash seeds.
+      - name: Check generated diagrams against their sources
+        run: make diagrams-check
+
       - name: Run unit and property tests
         run: make test
 

@@ -84,6 +84,15 @@ failure modes without adding product insight at this stage
 | **Compliance** | `clofin.compliance` | Screening, fraud rules, cases |
 | **Audit** | `clofin.audit` | Append-only event capture and evidence extraction |
 
+**Drawn:** [`docs/diagrams/context-topology.md`](docs/diagrams/context-topology.md)
+— generated from this table, with its arrows read from the `:require` clauses of
+the `ns` forms under `src/`, per
+[ADR-0020](docs/ADR/0020-two-repositories-and-the-generate-replay-rules.md) RULE
+1 and [ADR-0021](docs/ADR/0021-diagrams-are-mermaid-generated-from-code-and-tables.md).
+The paragraph below states the rule; the diagram shows what the code does. They
+are worth reading against each other, and the diagram is the one that cannot be
+out of date.
+
 Dependency rule: **the ledger's domain depends on nothing.** Payments depends on
 ledger and authz. Settlement and reconciliation depend on ledger. Nothing depends
 on HTTP. This is what makes the domain testable without a server or a database.

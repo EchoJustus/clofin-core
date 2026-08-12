@@ -35,6 +35,13 @@ Status: ✅ enforced · 🔨 partial · 📋 designed, not yet built
 
 ## 2. Controls
 
+**Drawn:** [`diagrams/control-map.md`](diagrams/control-map.md) — every control
+below, with the status stated in its heading and the enforcement points it
+names, generated from this section and checked by `make diagrams-check`
+([ADR-0020](ADR/0020-two-repositories-and-the-generate-replay-rules.md) RULE 1).
+The map shows what this document *claims*; the enforcement points named here are
+what makes each claim true.
+
 ### C-01 Segregation of duties ✅
 
 **Statement.** The actor who creates or submits a payment instruction must not

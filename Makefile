@@ -165,8 +165,16 @@ smoke: up ## Bring the stack up and verify it answers health and readiness
 docs-check: ## Verify that every internal documentation link resolves
 	@sh scripts/check-doc-links.sh
 
+.PHONY: diagrams
+diagrams: ## Regenerate every committed diagram from its source of truth
+	$(CLJ) -M:diagrams
+
+.PHONY: diagrams-check
+diagrams-check: ## Fail if a committed diagram no longer matches its source
+	@$(CLJ) -M:diagrams --check
+
 .PHONY: verify
-verify: test docs-check ## Everything CI runs that does not need a database
+verify: test docs-check diagrams-check ## Everything CI runs that does not need a database
 
 # ---------------------------------------------------------------------------
 # Housekeeping

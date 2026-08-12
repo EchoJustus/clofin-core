@@ -33,7 +33,11 @@
     clofin.http.middleware-test
     clofin.api.health-test
     clofin.api.wire-test
-    clofin.contract-test])
+    clofin.contract-test
+    ;; ADR-0020 RULE 1: every committed diagram compared with its source of
+    ;; truth, in both directions. `make diagrams-check` proves the bytes match;
+    ;; this proves the drawing and the table say the same thing.
+    clofin.tools.diagrams-test])
 
 (def integration-namespaces
   "Tests that need a reachable PostgreSQL instance."
