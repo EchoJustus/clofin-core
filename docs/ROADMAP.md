@@ -22,7 +22,7 @@ and this table is stale.
 | 4 | Authorisation, maker–checker, audit | [TASK-003](briefs/003-TASK-authorisation-and-audit-trail.md) | ✅ `CLOSED` — merged to `main` in PR #5 (`5ff00eb`); FEEDBACK-M1 fully remediated & verified (migrations `0007`/`0008`) | green, 2515 assertions |
 | 4c | Audit coverage completion (C-05 unqualified) | [TASK-005](briefs/005-TASK-audit-coverage-completion.md) | ✅ `CLOSED` — merged to `main` in PR #6 (`2ba977e`) | green, 2747 assertions |
 | 5 | Settlement simulation | [TASK-004](briefs/004-TASK-settlement-simulation.md) | ✅ `CLOSED` — PR #7 (`cba31c5`) + FEEDBACK-M2 remediation PR #8 (`5d21334`; migration `0010`, ADR-0019) | green, 584 tests / 3638 assertions |
-| 5v.1 | Visual layer — generated diagrams | [TASK-006](briefs/006-TASK-generated-diagrams.md) | 📋 `READY` — dispatched after ADR-0020 lands (A1) | — |
+| 5v.1 | Visual layer — generated diagrams | [TASK-006](briefs/006-TASK-generated-diagrams.md) | 🔨 `IN PROGRESS` — dispatched 2026-08-05; ADR-0020 merged in PR #11 (`cbbd669`) | — |
 | 5v.2 | Visual layer — `clofin-trace` replay walkthrough | [TASK-007](briefs/007-TASK-clofin-trace.md) | 📋 `READY`, **dispatch gated** on the TASK-006 decision point (A3) | — |
 | 6–9 | Reconciliation onwards | not yet briefed | 💭 later — starts ~3–4 weeks later than it otherwise would; see below | — |
 
@@ -60,7 +60,7 @@ performed, 5–7 were not, and the tag annotation says so. All 19 findings were
 remediated before the tag. **Uncovered audit scope (items 5–7) carries forward
 as mandatory-first scope for `ref-2`.**
 
-**Visual layer — and what it displaces.** `ADR-0020` *(lands on `main` first, per amendment A1; resolves here after the next sync)*
+**Visual layer — and what it displaces.** `ADR-0020` *(merged to `main` in PR #11, `cbbd669`, 2026-08-05, per amendment A1; the link resolves after the next sync)*
 adds generated diagrams ([TASK-006](briefs/006-TASK-generated-diagrams.md), in
 `clofin-core`) and **`clofin-trace`**, a published replay walkthrough
 ([TASK-007](briefs/007-TASK-clofin-trace.md), a second repository). Driver D5 —

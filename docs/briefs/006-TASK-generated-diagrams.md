@@ -3,9 +3,9 @@
 | Field | Value |
 |---|---|
 | **Increment** | 5v.1 (visual layer, tier 0) — inside `clofin-core` |
-| **Status** | `READY` — **do not dispatch until ADR-0020 has merged to `main`** (amendment A1) |
-| **Depends on** | **ADR-0020** (must be merged first — it governs this brief) and the `meta` → `main` sync (see the ordering trap below) |
-| **Base branch** | `main`, at whatever tip carries ADR-0020 and the sync. Verify both before starting |
+| **Status** | `IN PROGRESS` — dispatched 2026-08-05. Amendment A1's gate is satisfied: ADR-0020 merged to `main` in PR #11 (`cbbd669`) |
+| **Depends on** | **ADR-0020** ✅ merged (`cbbd669`) and the `meta` → `main` sync ✅ merged (PR #10, `64ceef0`) — both satisfied; the ordering trap below is therefore **released**, see the note there |
+| **Base branch** | `main` at `cbbd669` or later. Both preconditions verified by Master Control at dispatch; verify them yourself anyway |
 | **Blocks** | TASK-007 |
 | **Requirements** | Driver D5; lessons L-4 (drawing half), L-15 |
 | **Controls touched** | None move. This is document machinery, not enforcement |
@@ -68,6 +68,15 @@ whole premise. Read it before you start.
      status is `CLOSED` or `IMPLEMENTED`;
    - the ROADMAP's stated increment count agrees with the briefs backlog.
    Failure messages name the two documents and the disagreeing values.
+
+   **Which copies it reads:** the ones in the working tree it is run from — i.e.
+   `main`'s. `docs/briefs/` and `docs/audits/` on `main` are Master-Control-synced
+   snapshots of `meta`; the script compares `main` against itself and never
+   reaches across branches. A cross-branch check would fail in a shallow CI
+   checkout and would make the build depend on a branch the PR does not contain.
+   Consequence you must not "fix": a brief may read `IN PROGRESS` on `meta` and
+   `READY` on `main` — including **this** brief, right now. That is expected
+   drift between a live copy and a snapshot, not a finding.
 6. **`DOMAIN_MODEL.md` §3's ASCII diagram is deleted** and replaced by the
    generated artifact, with a line stating it is generated and by what.
 
@@ -82,6 +91,14 @@ whole premise. Read it before you start.
 | Diagrams of anything without a machine-readable source | RULE 1 has no exception. A diagram of something only prose describes would be a hand-drawn diagram with extra steps |
 
 ## ⚠️ The ordering trap — read this before you touch `verify` (amendment A2)
+
+> **Released at dispatch (2026-08-05).** The sync landed in PR #10 (`64ceef0`);
+> `main`'s ROADMAP shows increments 3, 4, 4c and 5 as `CLOSED` and its controls
+> prose agrees with `COMPLIANCE.md`. You may wire the script into `verify` in the
+> same PR. **Confirm it yourself before you do** — the paragraph below is the
+> check to run, kept because a released trap is still a trap if the release was
+> asserted rather than verified (L-14). If what you find disagrees with this
+> note, the tree wins and the note is the defect: stop and report.
 
 **`check-doc-consistency.sh` must not enter `verify` until the `meta` → `main`
 sync has landed.** Added before it, its first run fails on exactly the staleness
