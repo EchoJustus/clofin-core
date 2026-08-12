@@ -44,7 +44,7 @@ table and a brief disagree, the brief on `origin/meta` wins.
 | [004 — Settlement simulation](004-TASK-settlement-simulation.md) | 5 | `CLOSED` — merged in PR #7 (`cba31c5`); FEEDBACK-M2 remediation merged in PR #8 (`5d21334`) | 003 ✅, 005 ✅ merged | PRD §5.3 | Large |
 | [005 — Audit coverage completion](005-TASK-audit-coverage-completion.md) | 4 (completion) | `CLOSED` — merged in PR #6 (`2ba977e`); three objections ruled for the Worker | 003 ✅ merged | PR-072, C-05 | Small |
 | [006 — Generated diagrams and CI doc guards](006-TASK-generated-diagrams.md) | 5v.1 | `CLOSED` — merged in PR #12 (`2237a39`); five objections ruled for the Worker, O-1 actioned on `meta` (L-16) | ADR-0020 ✅ | D5, L-4, L-15 | Medium |
-| [007 — `clofin-trace` replay walkthrough](007-TASK-clofin-trace.md) | 5v.2 | `READY` — dispatch **gated on the TASK-006 decision point** (A3), now due | 006 ✅, ADR-0020 ✅ | D5, PR-015 | Large |
+| [007 — `clofin-trace` replay walkthrough](007-TASK-clofin-trace.md) | 5v.2 | `IN PROGRESS` — dispatched 2026-08-12; A3 ruled **proceed, full three scenarios** | 006 ✅, ADR-0020 ✅, `ref-1` ✅ | D5, PR-015 | Large |
 
 Sequencing follows **product relevance and regulatory risk**, not implementation
 convenience:

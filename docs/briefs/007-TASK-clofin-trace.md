@@ -3,8 +3,8 @@
 | Field | Value |
 |---|---|
 | **Increment** | 5v.2 (visual layer, tier 1) — spans `clofin-core` and a **new** repository |
-| **Status** | `READY` — **dispatch is gated on the TASK-006 decision point** (amendment A3). Master Control reports elapsed-versus-estimate and recommends proceed / wait / narrow-to-one-scenario before this is handed to anyone |
-| **Depends on** | TASK-006 merged; `ADR-0020` merged to `main`; the `ref-1` tag (fixtures are captured from it) |
+| **Status** | `IN PROGRESS` — dispatched 2026-08-12. **The A3 decision point was held and ruled: proceed, full three scenarios.** Grounds: TASK-006 delivered in one Worker session, seven calendar days after dispatch, under its Medium estimate with zero rework and all five objections ruled in the Worker's favour. The narrow-to-one-scenario fallback (settlement only) remains available mid-flight if part A overruns — raise it as an objection, do not take it unilaterally |
+| **Depends on** | TASK-006 ✅ merged (PR #12, `2237a39`); `ADR-0020` ✅ merged (PR #11, `cbbd669`); the `ref-1` tag ✅ (`5c7b4ba`, fixtures are captured from it) — all satisfied at dispatch |
 | **Base branch** | `main` for the harness half. The `clofin-trace` repository **does not exist yet** — the operator creates it at dispatch, deliberately not before (A6) |
 | **Requirements** | Driver D5 |
 | **Controls touched** | None move. The walkthrough enforces nothing and is enforced by nothing |
