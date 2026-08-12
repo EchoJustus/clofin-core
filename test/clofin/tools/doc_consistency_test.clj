@@ -280,25 +280,30 @@
   `docs/audits/006-REQ-generated-diagrams.md`.
 
   This expectation is why `check-doc-consistency` is not yet in `make verify`,
-  and it is deliberately exact. It fails if a **new** disagreement appears, and
-  it fails when the ROADMAP is corrected — at which point the deferral is over:
-  delete this test and wire the script into `verify` (brief AC-7)."
-  [["docs/ROADMAP.md:132" "increment 3" "not started (📋)"]
-   ["docs/ROADMAP.md:134" "increment 3" "IMPLEMENTED"]
-   ["docs/ROADMAP.md:157" "increment 4" "IMPLEMENTED"]
-   ["docs/ROADMAP.md:184" "increment 5" "not started (📋)"]
-   ["docs/ROADMAP.md:186" "increment 5" "READY"]])
+  and it is deliberately exact in **count**. It fails if a new disagreement
+  appears, and it fails when the ROADMAP is corrected — at which point the
+  deferral is over: delete this test and wire the script into `verify` (brief
+  AC-7).
+
+  Line numbers are deliberately *not* pinned. They would turn any unrelated
+  edit above line 132 into a failure that says nothing true, and a guard that
+  cries wolf is a guard somebody deletes."
+  [["increment 3" "not started (📋)"]
+   ["increment 3" "IMPLEMENTED"]
+   ["increment 4" "IMPLEMENTED"]
+   ["increment 5" "not started (📋)"]
+   ["increment 5" "READY"]])
 
 (deftest the-known-roadmap-staleness-has-not-grown
   (let [{:keys [exit out]} (run ".")
         reported (count (re-seq #"(?m)^DISAGREE" out))]
     (testing "every known disagreement is still reported, and named the same way"
-      (doseq [[location increment value] known-staleness]
-        (is (some (fn [block] (and (str/includes? block location)
+      (doseq [[increment value] known-staleness]
+        (is (some (fn [block] (and (str/includes? block "docs/ROADMAP.md")
                                    (str/includes? block increment)
                                    (str/includes? block value)))
                   (str/split out #"\n\n"))
-            (str "expected a disagreement at " location " about " increment " (" value ")"))))
+            (str "expected a disagreement about " increment " (" value ")"))))
     (testing "and nothing else has appeared"
       (is (= (count known-staleness) reported)
           (str "the guard reports " reported " disagreement(s) on this branch; "

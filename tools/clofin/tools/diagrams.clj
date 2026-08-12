@@ -538,8 +538,24 @@
       (spit file content))
     (vec (keys generated))))
 
+(defn- orphans
+  "Committed files under `docs/diagrams/` that the generator no longer produces.
+
+  The other direction of the same comparison, and the one a check written in a
+  hurry leaves out: a diagram dropped from the generator leaves its artifact
+  sitting in the repository, still rendering, still wrong, and still passing a
+  check that only ever looks at what it was about to write (lesson **L-6**)."
+  [root generated]
+  (let [dir (io/file root "docs/diagrams")]
+    (->> (when (.isDirectory dir) (.listFiles dir))
+         (filter #(.isFile ^java.io.File %))
+         (map #(str "docs/diagrams/" (.getName ^java.io.File %)))
+         (remove (set (keys generated)))
+         sort
+         vec)))
+
 (defn check
-  "Compare every artifact with what is committed.
+  "Compare every artifact with what is committed, in both directions.
 
   Returns `{:ok? bool :report string}`. The regenerated files are also written
   to a temporary directory, whose path the report names, so that a reader who
@@ -548,19 +564,25 @@
   (let [generated (artifacts root)
         tmp       (java.nio.file.Files/createTempDirectory
                    "clofin-diagrams" (into-array java.nio.file.attribute.FileAttribute []))
-        drift     (vec
-                   (for [[relative content] generated
-                         :let [file      (io/file root relative)
-                               committed (when (.exists file)
-                                           (str/replace (slurp file) "\r\n" "\n"))
-                               out       (io/file (.toFile tmp) relative)]
-                         :let [_ (do (io/make-parents out) (spit out content))]
-                         :when (not= content committed)]
-                     (if committed
-                       (format "DRIFT   %s — the committed diagram no longer matches its source.\n%s"
-                               relative (differing-lines content committed))
-                       (format "MISSING %s — generated from its source, but not committed."
-                               relative))))]
+        drift     (into
+                   (vec
+                    (for [[relative content] generated
+                          :let [file      (io/file root relative)
+                                committed (when (.exists file)
+                                            (str/replace (slurp file) "\r\n" "\n"))
+                                out       (io/file (.toFile tmp) relative)]
+                          :let [_ (do (io/make-parents out) (spit out content))]
+                          :when (not= content committed)]
+                      (if committed
+                        (format "DRIFT   %s — the committed diagram no longer matches its source.\n%s"
+                                relative (differing-lines content committed))
+                        (format "MISSING %s — generated from its source, but not committed."
+                                relative))))
+                   (for [orphan (orphans root generated)]
+                     (format (str "ORPHAN  %s — committed under docs/diagrams/ but produced by no\n"
+                                  "        source. `make diagrams` will not remove it; delete it, or\n"
+                                  "        restore whatever stopped generating it.")
+                             orphan)))]
     {:ok?    (empty? drift)
      :report (if (empty? drift)
                (format "Diagrams OK (%d generated artifact(s) match their sources)."

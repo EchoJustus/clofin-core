@@ -164,7 +164,12 @@
   (-> s
       (str/replace #"\[([^\]]*)\]\([^)]*\)" "$1")    ; [text](target) -> text
       (str/replace #"`+" "")
-      (str/replace #"\*\*" "")
-      (str/replace #"(?<![\w*])\*(?!\*)" "")         ; single-asterisk emphasis
+      ;; Every asterisk, not just the ones a lookbehind recognises as opening
+      ;; emphasis. A rule that removed `*` only when it was not preceded by a
+      ;; word character stripped the opening marker of *emphasis* and left the
+      ;; closing one, putting a stray asterisk in a diagram label. No label in
+      ;; this repository wants a literal asterisk; a leaked delimiter is the
+      ;; only outcome the clever version produces.
+      (str/replace #"\*+" "")
       (str/replace #"\s+" " ")
       str/trim))
