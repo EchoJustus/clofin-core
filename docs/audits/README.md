@@ -87,6 +87,23 @@ denies any reading of the tag as a production-ready or attested artifact before
 a human reads a word of the notes. Adopted at `ref-1`, 2026-08-05. The tag
 annotation always carries the release-audit coverage statement.
 
+> **Correction, 2026-08-12 (007-REQ O-1).** `ref-1` as published is a
+> **lightweight** tag: the annotated tag Master Control cut locally never
+> reached the remote (the original push was proxy-blocked), and the release was
+> then published through the GitHub web UI, which creates the tag ref directly
+> on the commit with no tag object. The annotation *text* exists in full as the
+> **release body** on that tag, mirrored byte-for-byte at
+> `docs/releases/ref-1.annotation.txt` on `main` and checked by
+> `make check-release-annotation`. The capture harness reads coverage from an
+> annotated tag's message when one exists and from the mirror when not, and
+> stamps which source it used. `ref-1` is **not** re-tagged: the published tag
+> is immutable by this register's own rule, and replacing the tag object —
+> even pointing at the same commit — would mutate a published artifact to make
+> a document true, which is backwards. From `ref-2` onward the tag is pushed
+> annotated via git and verified by the **peeled `^{}` line in
+> `git ls-remote`** — existence and target were verified for `ref-1`; kind was
+> asserted, not verified, which is the L-16 shape applied to a release step.
+
 *What does not change.* Severity taxonomy, gating rule, remediation routing
 (A2), provenance recording, and Master Control's independent reproduction
 duties are untouched. A partial audit still gates on its **blocking** findings.
@@ -254,7 +271,11 @@ blocking findings clear.
 
 **Tag scheme.** `ref-<n>` — `ref-1`, `ref-2`, … — annotated, with the date and
 RC SHA in the tag message. Deliberately not semantic versioning: `v1.0.0`
-reads as a product general-availability claim, which this is not.
+reads as a product general-availability claim, which this is not. *(Correction
+2026-08-12: `ref-1` as published is lightweight, with its annotation text as
+the release body — see the dated correction under "Tag form" above. The
+annotated requirement stands from `ref-2` onward, verified by the peeled
+`ls-remote` line at publish time.)*
 
 **Artifact.** `FEEDBACK-REL-<tag>.md`, beside `FEEDBACK-Mn`, ingested and
 registered exactly like a milestone audit. The audit is performed by **GPT-5.6
