@@ -11,7 +11,7 @@
 | **Model** | `claude-opus-5` |
 | **Reasoning effort** | high |
 | **Date** | 2026-08-14 |
-| **Verification still in flight** | **None.** See [§8](#8-verification-l-9). |
+| **Verification still in flight** | **No self-review or adversarial pass is running.** CI is watched — see [§8](#8-verification-l-9). |
 
 ---
 
@@ -323,8 +323,17 @@ provenance rather than used to select an account. Stated in ADR-0023.
 
 ## 8. Verification (L-9)
 
-**No verification is in flight. Nothing is still running, and I am not expecting
-a result that could change this report.**
+**No self-review, adversarial pass or long-running check of mine is
+outstanding.** Everything I started has finished; nothing is pending that could
+surface a fix and change this report.
+
+**One thing is running and it is not mine to hide:** GitHub Actions on the pull
+request, started by the push. It is the same three jobs as the table below plus
+`make smoke`, which this session could not run. I am subscribed to the PR and
+will report the result; a merge should wait for it, as it would for any PR.
+Stating it here rather than only in the PR body because a completion report that
+is silent about a running check is what standing lesson **L-9** exists to
+prevent, and because enumerating every copy of a claim is **L-16**.
 
 Everything below was run to completion on this branch's final tree, against
 PostgreSQL 16.13:
