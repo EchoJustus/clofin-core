@@ -12,6 +12,16 @@
 Append-only. A later change appends a new dated block; an existing block is
 never edited — the record of what was decided, and when, is the point.
 
+**2026-08-14 — Milestone-3 batch audit deferred, by operator decision.**
+TASK-006 (5v.1) and TASK-007 (5v.2) are merged and `CLOSED` with their REQ
+objections ruled, but **neither has received an independent audit**, and their
+register rows stay open until one does. Deferral is not waiver: the next
+commissioned audit — Milestone 3 or the `ref-2` release audit, whichever comes
+first — takes both increments as scope, plus TASK-009 if closed by then, and
+inherits this note. Until then, every claim about the visual layer's assurance
+is bounded by "objection-ruled and Master-Control-verified, not independently
+audited", and nothing may describe it more generously (L-14, L-15).
+
 **2026-08-04 — Tiered assurance with a terminal release gate.** Proposed by
 Master Control; **ruled approved by the operator the same day, with amendments
 A1 and A2**, both applied below and in [*Release audits*](#release-audits).

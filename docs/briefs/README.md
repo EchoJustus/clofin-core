@@ -45,6 +45,8 @@ table and a brief disagree, the brief on `origin/meta` wins.
 | [005 — Audit coverage completion](005-TASK-audit-coverage-completion.md) | 4 (completion) | `CLOSED` — merged in PR #6 (`2ba977e`); three objections ruled for the Worker | 003 ✅ merged | PR-072, C-05 | Small |
 | [006 — Generated diagrams and CI doc guards](006-TASK-generated-diagrams.md) | 5v.1 | `CLOSED` — merged in PR #12 (`2237a39`); five objections ruled for the Worker, O-1 actioned on `meta` (L-16) | ADR-0020 ✅ | D5, L-4, L-15 | Medium |
 | [007 — `clofin-trace` replay walkthrough](007-TASK-clofin-trace.md) | 5v.2 | `CLOSED` — part A merged in PR #14 (`261c778`), part B merged in `clofin-trace` PR #1 (`71cb13f`); five objections ruled for the Worker (O-1 → tag-form correction) | 006 ✅, ADR-0020 ✅, `ref-1` ✅ | D5, PR-015 | Large |
+| [008 — Reconciliation](008-TASK-reconciliation.md) | 6 | `IN PROGRESS` — dispatched 2026-08-14 | 004 ✅, 006 ✅ | PR-050…054 | Large |
+| [009 — Trace hardening and cross-links](009-TASK-trace-hardening-and-cross-links.md) | 5v.3 | `IN PROGRESS` — dispatched 2026-08-14 | 007 ✅ | D5 | Small |
 
 Sequencing follows **product relevance and regulatory risk**, not implementation
 convenience:
@@ -70,6 +72,10 @@ flight — but do not merge out of order.
 `clofin.audit/actions` literal.** They may be planned in parallel but Master
 Control sequences dispatch; whichever lands second rebases over a one-line
 conflict. 005 is a single sitting — dispatching it first is the default.
+
+**008 and 009 share no files and may run in parallel, in separate Worker
+sessions.** 009's only `clofin-core` change is one README line; 008 does not
+touch the README. Neither waits on the other.
 
 ## Writing a new brief
 
