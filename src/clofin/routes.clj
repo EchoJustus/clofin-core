@@ -14,6 +14,7 @@
             [clofin.api.health :as health]
             [clofin.api.organisations :as organisations]
             [clofin.api.payments :as payments]
+            [clofin.api.reconciliation :as reconciliation]
             [clofin.api.settlement :as settlement]))
 
 (defn routes
@@ -172,6 +173,68 @@
     :operation-id "sweepSettlementTimeouts"
     :handler (settlement/sweep-timeouts pool)
     :summary "Mark unanswered settlement items as timed out"}
+
+   {:method :get :path "/settlement-statements"
+    :operation-id "generateSimulatedStatement"
+    :handler (settlement/simulated-statement pool)
+    :summary "Produce the simulated scheme's statement for a period"}
+
+   ;; -------------------------------------------------------------------------
+   ;; Reconciliation
+   ;;
+   ;; A statement is *received*, and receiving it is what matches it: matching
+   ;; runs synchronously on ingestion, because this codebase has no job runner
+   ;; and one increment must not introduce one as a side effect. What comes out
+   ;; is a set of breaks — tracked objects with an owner and an age, addressable
+   ;; on their own, which is why they are a resource rather than a field on the
+   ;; statement.
+   ;;
+   ;; An adjustment is a sub-resource of the break it resolves, and an approval
+   ;; a sub-resource of the adjustment it decides — the same shape approvals
+   ;; take on payment instructions, and for the same reason: a decision that can
+   ;; be addressed and evidenced on its own is what lets CloFin say who agreed
+   ;; to what.
+   ;; -------------------------------------------------------------------------
+
+   {:method :post :path "/reconciliation-statements"
+    :operation-id "ingestReconciliationStatement"
+    :handler (reconciliation/ingest pool)
+    :summary "Receive a synthetic statement and match it against the ledger"}
+
+   {:method :get :path "/reconciliation-statements/:id"
+    :operation-id "getReconciliationStatement"
+    :handler (reconciliation/show-statement pool)
+    :summary "Retrieve a received statement with its matches and breaks"}
+
+   {:method :get :path "/reconciliation-breaks"
+    :operation-id "listReconciliationBreaks"
+    :handler (reconciliation/index-breaks pool)
+    :summary "List reconciliation breaks, oldest first"}
+
+   {:method :get :path "/reconciliation-breaks/:id"
+    :operation-id "getReconciliationBreak"
+    :handler (reconciliation/show-break pool)
+    :summary "Retrieve a reconciliation break with its adjustments"}
+
+   {:method :post :path "/reconciliation-breaks/:id/assignment"
+    :operation-id "assignReconciliationBreak"
+    :handler (reconciliation/assign-break pool)
+    :summary "Assign a reconciliation break to an actor"}
+
+   {:method :post :path "/reconciliation-breaks/:id/adjustments"
+    :operation-id "proposeReconciliationAdjustment"
+    :handler (reconciliation/propose-adjustment pool)
+    :summary "Propose an adjustment that resolves a reconciliation break"}
+
+   {:method :post :path "/reconciliation-adjustments/:id/approvals"
+    :operation-id "approveReconciliationAdjustment"
+    :handler (reconciliation/approve-adjustment pool)
+    :summary "Approve a reconciliation adjustment, posting it when complete"}
+
+   {:method :get :path "/reconciliation-status"
+    :operation-id "getReconciliationStatus"
+    :handler (reconciliation/status pool)
+    :summary "Report reconciliation status for an account and period"}
 
    ;; -------------------------------------------------------------------------
    ;; Audit

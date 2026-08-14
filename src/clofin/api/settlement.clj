@@ -41,6 +41,7 @@
             [clofin.settlement.repository :as settlement]
             [clofin.settlement.response :as response]
             [clofin.settlement.service :as service]
+            [clofin.settlement.statement :as sim-statement]
             [clojure.string :as str]))
 
 ;; ---------------------------------------------------------------------------
@@ -308,6 +309,58 @@
       (if-let [found (settlement/find-batch pool organisation-id id)]
         (resp/ok (batch-document pool found))
         (err/not-found! "No such settlement batch in this organisation" {:id (str id)})))))
+
+(defn simulated-statement
+  "`GET /settlement-statements` — **the simulated scheme's own account
+  statement** for a period.
+
+  A read: it computes what the simulation would have sent and writes nothing.
+  The document it returns is in CloFin's own format and can be posted straight
+  back to `POST /reconciliation-statements`, which is the whole walk a reviewer
+  needs — generate, ingest, look at the breaks.
+
+  `perturbation` names one of `clofin.settlement.statement/perturbation-classes`
+  and defaults to `none`. A generator that could only produce agreement would be
+  a generator that could not test disagreement, and a *named* class is what lets
+  a reviewer predict the break before running anything.
+
+  It lives in the settlement API rather than the reconciliation one because the
+  scheme is what sends a statement. That is also what keeps the two sides
+  honest: this endpoint reads the settlement tables and the matcher reads the
+  journal, so nothing they agree about was derived from the other (standing
+  lesson **L-16**)."
+  [pool]
+  (fn [request]
+    (let [[_ organisation-id] (principal/for-request pool request :payment/read)
+          scheme   (batch/assert-scheme! (wire/read-query-param request "scheme"))
+          currency (wire/read-query-param request "currency")
+          from     (wire/read-instant (wire/read-query-param request "from") "from")
+          to       (wire/read-instant (wire/read-query-param request "to") "to")
+          class    (sim-statement/assert-perturbation!
+                    (wire/read-optional-query-param request "perturbation"))
+          _ (when-not (.isBefore from to)
+              (err/invalid! "A statement period ends before it begins"
+                            {:from (str from) :to (str to)}))
+          {:keys [items truncated?]}
+          (settlement/resolved-items-for pool organisation-id
+                                         {:scheme scheme :currency currency
+                                          :from from :to to})
+          _ (when truncated?
+              ;; Refused rather than truncated, for the reason
+              ;; `clofin.recon.repository/expectation-cap` gives at the other
+              ;; end: a statement silently missing its tail would produce breaks
+              ;; against movements that are right there in the settlement
+              ;; record, and no caller could tell that from a real disagreement.
+              (err/fail! :unprocessable
+                         (str "This period covers more settled items than one statement "
+                              "may report; generate a shorter period")
+                         {:limit settlement/row-cap :from (str from) :to (str to)}))]
+      (resp/ok (sim-statement/generate {:scheme scheme
+                                        :currency currency
+                                        :period-start from
+                                        :period-end to
+                                        :perturbation class
+                                        :items items})))))
 
 (defn index
   "`GET /settlement-batches` — an organisation's batches, most recent first.
