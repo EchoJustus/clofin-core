@@ -3,13 +3,13 @@
 | Field | Value |
 |---|---|
 | **Increment** | 5v.2 (visual layer, tier 1) — spans `clofin-core` and a **new** repository |
-| **Status** | `IMPLEMENTED` — Worker reported done 2026-08-12, same day as dispatch: part A open as PR #14 (CI green), part B committed in the Worker's session but its push was blocked by repository access; landing route arranged at ingestion. All five objections ruled, see Changelog. *(A3 history: the decision point was held and ruled **proceed, full three scenarios**, on TASK-006 finishing under estimate with zero rework.)* |
+| **Status** | `CLOSED` — part A merged to `clofin-core` `main` in PR #14 (`261c778`); part B merged to `clofin-trace` `main` in its PR #1 (`71cb13f`), both 2026-08-12. All five objections ruled in the Worker's favour, see Changelog; every negative control independently re-run by Master Control before merge. Pages activation is the operator's remaining switch. *(A3 history: the decision point was held and ruled **proceed, full three scenarios**.)* |
 | **Depends on** | TASK-006 ✅ merged (PR #12, `2237a39`); `ADR-0020` ✅ merged (PR #11, `cbbd669`); the `ref-1` tag ✅ (`5c7b4ba`, fixtures are captured from it) — all satisfied at dispatch |
 | **Base branch** | `main` for the harness half. The `clofin-trace` repository **does not exist yet** — the operator creates it at dispatch, deliberately not before (A6) |
 | **Requirements** | Driver D5 |
 | **Controls touched** | None move. The walkthrough enforces nothing and is enforced by nothing |
 | **Scope** | Large — two repositories |
-| **Audit** | Not yet submitted. **`clofin-trace` is permanently outside release-audit scope**; the harness in `clofin-core` is inside it |
+| **Audit** | `007-REQ` filed 2026-08-12 (`docs/audits/007-REQ-clofin-trace.md` on `main`); awaiting the next milestone batch audit. **`clofin-trace` is permanently outside release-audit scope**; the harness in `clofin-core` is inside it |
 
 > Status lifecycle: `READY` → `IN PROGRESS` → `IMPLEMENTED` → `AUDITED` → `CLOSED`.
 > Status is maintained by Master Control on the `meta` branch — see AGENT_HANDOFF §1b.

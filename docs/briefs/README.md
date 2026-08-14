@@ -44,7 +44,7 @@ table and a brief disagree, the brief on `origin/meta` wins.
 | [004 — Settlement simulation](004-TASK-settlement-simulation.md) | 5 | `CLOSED` — merged in PR #7 (`cba31c5`); FEEDBACK-M2 remediation merged in PR #8 (`5d21334`) | 003 ✅, 005 ✅ merged | PRD §5.3 | Large |
 | [005 — Audit coverage completion](005-TASK-audit-coverage-completion.md) | 4 (completion) | `CLOSED` — merged in PR #6 (`2ba977e`); three objections ruled for the Worker | 003 ✅ merged | PR-072, C-05 | Small |
 | [006 — Generated diagrams and CI doc guards](006-TASK-generated-diagrams.md) | 5v.1 | `CLOSED` — merged in PR #12 (`2237a39`); five objections ruled for the Worker, O-1 actioned on `meta` (L-16) | ADR-0020 ✅ | D5, L-4, L-15 | Medium |
-| [007 — `clofin-trace` replay walkthrough](007-TASK-clofin-trace.md) | 5v.2 | `IMPLEMENTED` — part A open as PR #14 (CI green); part B verified in-session, landing arranged; five objections ruled for the Worker (O-1 → tag-form correction) | 006 ✅, ADR-0020 ✅, `ref-1` ✅ | D5, PR-015 | Large |
+| [007 — `clofin-trace` replay walkthrough](007-TASK-clofin-trace.md) | 5v.2 | `CLOSED` — part A merged in PR #14 (`261c778`), part B merged in `clofin-trace` PR #1 (`71cb13f`); five objections ruled for the Worker (O-1 → tag-form correction) | 006 ✅, ADR-0020 ✅, `ref-1` ✅ | D5, PR-015 | Large |
 
 Sequencing follows **product relevance and regulatory risk**, not implementation
 convenience:
@@ -92,3 +92,4 @@ increment was specified, which is as useful as the code that resulted.
 | [005 — Audit coverage completion](005-TASK-audit-coverage-completion.md) | 4 (completion) | PR #6 (`2ba977e`); its post-merge contract fix landed via PR #7 (`b21d4c1`) | Awaiting Milestone 2 batch audit; three brief objections ruled at ingestion; the L-9 tail recorded |
 | [004 — Settlement simulation](004-TASK-settlement-simulation.md) | 5 | PR #7 (`cba31c5`) + remediation PR #8 (`5d21334`) | FEEDBACK-M2 — F-007 blocking + F-008/F-009/F-010, all remediated & verified; three brief objections ruled at ingestion, four remediation divergences ruled accepted |
 | [006 — Generated diagrams and CI doc guards](006-TASK-generated-diagrams.md) | 5v.1 | PR #12 (`2237a39`); the deferred `verify` wiring landed with the O-1 fix sync | Awaiting the next milestone batch audit; five objections ruled at ingestion, all for the Worker; O-1 produced lesson L-16 |
+| [007 — `clofin-trace` replay walkthrough](007-TASK-clofin-trace.md) | 5v.2 | `clofin-core` PR #14 (`261c778`) + `clofin-trace` PR #1 (`71cb13f`) | Awaiting the next milestone batch audit; five objections ruled at ingestion, all for the Worker; O-1 corrected the register's tag-form claims |
