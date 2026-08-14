@@ -3,13 +3,13 @@
 | Field | Value |
 |---|---|
 | **Increment** | 5v.2 (visual layer, tier 1) — spans `clofin-core` and a **new** repository |
-| **Status** | `READY` — **dispatch is gated on the TASK-006 decision point** (amendment A3). Master Control reports elapsed-versus-estimate and recommends proceed / wait / narrow-to-one-scenario before this is handed to anyone |
-| **Depends on** | TASK-006 merged; `ADR-0020` merged to `main`; the `ref-1` tag (fixtures are captured from it) |
+| **Status** | `CLOSED` — part A merged to `clofin-core` `main` in PR #14 (`261c778`); part B merged to `clofin-trace` `main` in its PR #1 (`71cb13f`), both 2026-08-12. All five objections ruled in the Worker's favour, see Changelog; every negative control independently re-run by Master Control before merge. Pages activation is the operator's remaining switch. *(A3 history: the decision point was held and ruled **proceed, full three scenarios**.)* |
+| **Depends on** | TASK-006 ✅ merged (PR #12, `2237a39`); `ADR-0020` ✅ merged (PR #11, `cbbd669`); the `ref-1` tag ✅ (`5c7b4ba`, fixtures are captured from it) — all satisfied at dispatch |
 | **Base branch** | `main` for the harness half. The `clofin-trace` repository **does not exist yet** — the operator creates it at dispatch, deliberately not before (A6) |
 | **Requirements** | Driver D5 |
 | **Controls touched** | None move. The walkthrough enforces nothing and is enforced by nothing |
 | **Scope** | Large — two repositories |
-| **Audit** | Not yet submitted. **`clofin-trace` is permanently outside release-audit scope**; the harness in `clofin-core` is inside it |
+| **Audit** | `007-REQ` filed 2026-08-12 (`docs/audits/007-REQ-clofin-trace.md` on `main`); awaiting the next milestone batch audit. **`clofin-trace` is permanently outside release-audit scope**; the harness in `clofin-core` is inside it |
 
 > Status lifecycle: `READY` → `IN PROGRESS` → `IMPLEMENTED` → `AUDITED` → `CLOSED`.
 > Status is maintained by Master Control on the `meta` branch — see AGENT_HANDOFF §1b.
@@ -191,3 +191,31 @@ owns presentation. That is why the trace repository is outside release-audit
 scope and the harness is inside it. If you find yourself wanting to compute
 something in the trace repository — a total, a percentage, a derived balance —
 that computation belongs in the captured output, or it does not belong.
+
+---
+
+## Changelog — rulings on the `007-REQ` objections (2026-08-12)
+
+*(The REQ is `docs/audits/007-REQ-clofin-trace.md` on PR #14's branch, landing
+on `main` with it — not on `meta`, hence no link.)*
+
+All five ruled the day the REQ was filed; **all five in the Worker's favour**.
+Three trace back to Master Control defects. O-1's tag-kind claim was
+independently reproduced before ruling: `git ls-remote` shows no peeled
+`^{}` line for `refs/tags/ref-1`, and Master Control's local annotated tag
+object — whose push was proxy-blocked on 2026-08-05 — matches the release
+body the Worker mirrored.
+
+| # | Objection | Ruling |
+|---|---|---|
+| O-1 | `ref-1` is a lightweight tag; `docs/audits/README.md` and `docs/ROADMAP.md` say it is annotated and that "the tag annotation says so". The annotation text exists as the GitHub release body. | **Confirmed — Master Control defect, and re-tagging is declined.** The annotated tag was cut locally, its push was blocked, and the release was then published via the web UI, which creates a lightweight tag; Master Control verified the tag's existence and target on the remote but asserted its kind — L-16 applied to a release step. The published tag stays as it is: replacing a published tag object to make a document true mutates the artifact instead of correcting the claim, which is backwards. Both governance sentences corrected on `meta` with dated notes; the Worker's mechanism (prefer a real annotation, fall back to the `docs/releases/` mirror, stamp which source was used, refuse when neither has a `RELEASE AUDIT:` paragraph) is ratified as the standing shape. From `ref-2`: tags pushed annotated via git, kind verified by the peeled `ls-remote` line at publish time. |
+| O-2 | `GET /` returns one `disclaimer` string, not "four scope statements"; no general rule splits it into exactly four. | **Confirmed — brief defect, Master Control's language.** "Four scope statements" originated in the governance decision text and survived into the brief unexamined; the response has always been one string carrying four claims. Rendering it whole and verbatim with a byte-for-byte check is ratified — a hand-tuned split would be a second copy of the wording, which is the drift class this project exists to hunt. The Worker's upstream recommendation (a `scopeStatements` array in the API contract) is recorded as a candidate for a future brief and deliberately not committed to now: it changes the release-audited surface. |
+| O-3 | AC-11 demands "a check" while scope item 7 allows exactly two. | **Confirmed — the fold is ratified.** The coverage qualifier *is* provenance, so AC-11's rule belongs inside `provenance-present`; AC-5 and AC-6 fold in on the same reasoning. AC-11 asked for a check, not a third check — but the brief should have said where it lived, and that is an authoring note against Master Control. Two checks stand. |
+| O-4 | `make capture-trace` cannot run in `clofin-core`'s CI as it stands; its unit tests are in `verify`, the capture itself is not. | **Confirmed — ratified.** An honestly unwired guard beats a wired one that cannot run where it is wired (the 006-REQ O-1 pattern, correctly reused). Capture-in-CI is recorded for the brief that captures `ref-2`, where rewriting fixtures on push can be decided deliberately rather than inherited. |
+| O-5 | The trace repository's first commit said coverage is "read from the tag's own annotation", which per O-1 is not where it is read from; the Worker corrected operator-authored README text. | **Confirmed — the correction stands.** The false sentence was drafted by Master Control (the first-commit contents were supplied at dispatch), so this is the same O-1 defect surfacing in a third document. A repository front door asserting something the harness does not do is exactly what the Worker is instructed not to leave standing. |
+
+**Landing note (2026-08-12).** Part B's push failed from the Worker's session
+(token scoped to `clofin-core`). Master Control's session attached
+`clofin-trace` with push access at ingestion; the verified branch is landed
+from the Worker's session or its bundle, never rebuilt — a re-capture would
+replace the artifact the Worker verified with one nobody has.

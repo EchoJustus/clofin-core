@@ -23,7 +23,7 @@ and this table is stale.
 | 4c | Audit coverage completion (C-05 unqualified) | [TASK-005](briefs/005-TASK-audit-coverage-completion.md) | ✅ `CLOSED` — merged to `main` in PR #6 (`2ba977e`) | green, 2747 assertions |
 | 5 | Settlement simulation | [TASK-004](briefs/004-TASK-settlement-simulation.md) | ✅ `CLOSED` — PR #7 (`cba31c5`) + FEEDBACK-M2 remediation PR #8 (`5d21334`; migration `0010`, ADR-0019) | green, 584 tests / 3638 assertions |
 | 5v.1 | Visual layer — generated diagrams | [TASK-006](briefs/006-TASK-generated-diagrams.md) | ✅ `CLOSED` — merged to `main` in PR #12 (`2237a39`); five objections ruled, O-1 actioned on `meta` | green, 322 tests / 1991 assertions (verify), 640 / 4222 (integration) |
-| 5v.2 | Visual layer — `clofin-trace` replay walkthrough | [TASK-007](briefs/007-TASK-clofin-trace.md) | 📋 `READY`, **dispatch gated** on the TASK-006 decision point (A3) | — |
+| 5v.2 | Visual layer — `clofin-trace` replay walkthrough | [TASK-007](briefs/007-TASK-clofin-trace.md) | ✅ `CLOSED` — harness merged in PR #14 (`261c778`); walkthrough merged in `clofin-trace` PR #1 (`71cb13f`) | green, both repositories |
 | 6–9 | Reconciliation onwards | not yet briefed | 💭 later — starts ~3–4 weeks later than it otherwise would; see below | — |
 
 **Controls now enforced on `main`.** As of 2026-08-04 the increment-3/4 stack is
@@ -56,7 +56,10 @@ is gated by a whole-repo release audit
 **GitHub pre-release** — the accurate machine-readable signal for a
 synthetic-data reference implementation, and now the convention for every
 `ref-<n>`. **Its release audit was partial**: charter items 1–4 of 8 were
-performed, 5–7 were not, and the tag annotation says so. All 19 findings were
+performed, 5–7 were not, and the release annotation says so — published as the
+GitHub **release body** on the tag; the published tag object itself is
+lightweight (007-REQ O-1), and `docs/releases/ref-1.annotation.txt` on `main`
+mirrors the text byte for byte. All 19 findings were
 remediated before the tag. **Uncovered audit scope (items 5–7) carries forward
 as mandatory-first scope for `ref-2`.**
 
