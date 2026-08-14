@@ -18,7 +18,7 @@ flowchart LR
     clofin_ledger["Ledger<br/>clofin.ledger"]
     clofin_organisations["Organisations<br/>clofin.organisations"]
     clofin_payments["Payments<br/>clofin.payments"]
-    clofin_recon["Reconciliation<br/>clofin.recon<br/>(not yet built)"]
+    clofin_recon["Reconciliation<br/>clofin.recon"]
     clofin_settlement["Settlement<br/>clofin.settlement"]
 
     clofin_ledger --> clofin_audit
@@ -26,9 +26,13 @@ flowchart LR
     clofin_payments --> clofin_audit
     clofin_payments --> clofin_authz
     clofin_payments --> clofin_ledger
+    clofin_recon --> clofin_audit
+    clofin_recon --> clofin_authz
+    clofin_recon --> clofin_ledger
     clofin_settlement --> clofin_audit
     clofin_settlement --> clofin_ledger
     clofin_settlement --> clofin_payments
+    clofin_settlement --> clofin_recon
 ```
 
 **Nodes come from the table; arrows come from the code.** `ARCHITECTURE.md` §3

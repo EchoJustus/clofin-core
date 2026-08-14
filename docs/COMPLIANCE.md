@@ -770,6 +770,91 @@ CI is a candidate improvement.)*
 
 ---
 
+### C-13 Reconciliation integrity ✅
+
+**Statement.** Read each sentence with its named set, because each is bounded on
+purpose.
+
+1. **Every line of a statement CloFin applies is either matched to exactly one
+   ledger movement, recording which rule matched, or is a break.** The set is
+   the lines of statements whose `disposition` is `applied`; a refused statement
+   is matched not at all, and says so.
+2. **Every ledger movement in the reconciled set that no line matched is a
+   break.** The reconciled set is the **credit** journal lines on the statement's
+   reconciled account, in the statement's currency, whose entry occurred inside
+   the statement's period and references a payment instruction. Releases
+   (debits), adjustments and entries raised against anything else are outside
+   it, by the definitions in
+   [ADR-0023](ADR/0023-a-clofin-defined-synthetic-statement-format-and-an-ordered-matching-sequence.md).
+3. **Every break has an owner and a derived age, and reaches `resolved` only
+   through a posted adjustment.** The set is every row of
+   `reconciliation_break`. `assignee_id` is `NOT NULL`; the age is computed at
+   read time from `opened_at` and is stored nowhere.
+4. **No reconciliation writes to the journal except by posting a new balanced
+   entry through the ordinary posting path, and none edits one.** The set is
+   every write `clofin.recon.service` performs.
+5. **An adjustment at or above the lowest approval band its organisation has
+   configured for its currency posts only after that band's number of
+   approvals, from actors other than its proposer.** Below that band one actor
+   suffices; with **no** band configured in the currency, no adjustment can be
+   proposed at all.
+6. **A statement that arrives is recorded as having arrived**, applied or
+   refused, and an exact re-delivery performs no work. The set is every
+   syntactically valid statement reaching `POST /reconciliation-statements`; a
+   document CloFin cannot parse is a `400` and earns no receipt, which is
+   stated here rather than left to be discovered.
+
+Two things this control does **not** claim, named in the same breath as the
+claims (standing lesson **L-14**). It does not claim reconciliation covers every
+account — only the account a statement names, which is `1300-IN-TRANSIT` in the
+statement's currency. And it does not claim a matched pair is a *correct* pair:
+matching identifies which movement a line is about, and a wrong identification
+by a rule that the data satisfied is a modelling risk the rule order and the
+"exactly one candidate" requirement bound rather than eliminate.
+
+**Design.** The two sides of every comparison are produced by different things
+and read different tables — the statement from the settlement records by
+`clofin.settlement.statement`, the expectations from the journal by
+`clofin.recon.repository/expectations-for`. Matching is four rules in a
+documented order, first match wins, exactly one candidate or no match, and the
+rule id is written to `reconciliation_match`. Agreement is a separate pass, so a
+pair identified as one movement can still be a break for disagreeing about the
+amount, the date or the direction of travel. The break lifecycle is data, and
+resolution is a new approved entry through
+`clofin.ledger.service/post-entry!` — the same path a release takes.
+
+**Enforcement points.**
+
+| Point | What it makes true |
+|---|---|
+| `clofin.recon.matching/rules` | The sequence is a value, applied in order, first match wins; the rule id it returns is recorded against the match |
+| `recon_match_rule_known` | A rule id the vocabulary does not contain cannot be stored, and `clofin.db.vocabulary-test` compares that constraint with the code's list against the live catalogue |
+| `recon_match_expectation_key` | One ledger movement is claimed by at most one line of a statement, so a second claim becomes a break rather than a second match |
+| `clofin.recon.matching-test` | The documented rule order in `DOMAIN_MODEL.md` §6 and the code's agree, in both directions and in order |
+| `reconciliation_break.assignee_id` `NOT NULL` | A break is never unowned, by any route into the table |
+| `clofin.recon.break-state/transitions` | A break's state moves only along the arrows in that table; the service refuses anything else with a `409`, and the terminal set is derived rather than listed |
+| `clofin.recon.adjustment/approvals-required` | The de-minimis boundary is the organisation's own lowest band, inclusive, and an unconfigured currency refuses rather than defaulting to nobody |
+| `clofin.authz.approval/evaluate` | The proposer of an adjustment cannot approve it, and no approver acts beyond their per-currency limit — the same pure function, the same table and the same refusals payments use |
+| `recon_adjustment_posted_key` | One posted adjustment per break, ever |
+| `recon_statement_replay_key` and `reconciliation_statement.content_digest` | A re-delivery of the same document performs no work and reproduces the original answer; a different document under the same reference is refused |
+| `recon_statement_append_only`, `recon_statement_line_append_only`, `recon_match_append_only` (and their `TRUNCATE` guards) | What arrived, what it carried and what it matched cannot be edited afterwards |
+| `clofin.audit.repository/assert-unit-of-work!` in `clofin.recon.service` | Every reconciliation write and its audit event commit together or not at all |
+
+**Evidence.** `GET /reconciliation-statements/{id}` returns every line, every
+match with the rule that produced it, and every break the statement opened.
+`GET /reconciliation-breaks` lists breaks oldest first with their derived ages.
+`GET /reconciliation-status` reports matched, unmatched and breaks by state for
+an account and period, counted over the rows rather than over a page.
+`GET /audit/evidence/{subjectId}` returns the trail for a statement, a break or
+an adjustment.
+
+**Known limit.** The residual risk in the same place every other append-only
+claim here has it: these triggers bind the application role and not the table's
+owner, and CloFin connects as the owner in the shipped stack. The runtime role
+split is the same open item recorded in §4.
+
+---
+
 ## 3. Regulatory themes considered
 
 These themes informed the control design. They are listed to show what was
@@ -798,7 +883,9 @@ Being explicit about gaps is part of the control design.
 | Runtime role split for append-only enforcement | **Not built.** The append-only triggers on `journal_entry`, `journal_line`, `audit_event` and `approval` refuse `UPDATE`, `DELETE` and `TRUNCATE` — but a trigger cannot bind the table's *owner*, and CloFin connects as the owner (and, in the shipped stack, as a superuser). `DISABLE TRIGGER`, `DROP TRIGGER` and `session_replication_role = 'replica'` all succeed for that role; the last defeats the row-level guards that have existed since migration `0002`, so this residue predates audit finding F-002 rather than being introduced by it. The fix — application role ≠ owner, `TRUNCATE` and DDL revoked — is foreshadowed in `0002`'s own comment and verified to refuse all four attempts. Named here rather than left to be discovered |
 | Automated dependency vulnerability scanning | Candidate for CI |
 | Retention and deletion policy | Not modelled; interacts with C-03 and C-05 immutability and needs a decision |
-| Batch-status-change audit term | **Not built.** A late `timeout-resolution` moves an already-complete batch's derived status and writes no batch-subject event, because `settlement-batch.completed` names the transition *into* completion (C-05, and the paragraph above it). The fix is a distinct vocabulary term, which is vocabulary design and belongs with increment 6's reconciliation work. The exception is stated in C-05's own statement, in `DOMAIN_MODEL.md`'s coverage paragraph and in `api/openapi.yaml`'s Audit tag, so no headline is broader than this row |
+| Linked-retry provenance | **Not built.** [ADR-0019](ADR/0019-a-returned-payment-is-terminal-and-retries-as-a-new-instruction.md) ruled that a reference relating a retry to the payment it replaces belongs to increment 6; TASK-008's scope did not include it and this increment did not build it. What increment 6 *did* deliver is the half that made the gap dangerous in reconciliation: a statement line's end-to-end reference is the **instruction** id, so a line about an original and a line about its retry can never be confused. The remaining work is the provenance column and the exception workflow that reads it. Raised as objection O-1 in `docs/audits/008-REQ-reconciliation.md` |
+| A rejected adjustment | **Not built.** An approver who disagrees with a reconciliation adjustment simply does not approve it: the adjustment stays `proposed`, never posts, and a different one may be raised against the same break. There is no way to record *that* somebody refused it, or why — which is exactly the evidence C-05 keeps for a rejected payment. The mechanism is a third adjustment status, an audit term and an endpoint; it is vocabulary and lifecycle design and belongs in a brief |
+| Batch-status-change audit term | **Not built.** A late `timeout-resolution` moves an already-complete batch's derived status and writes no batch-subject event, because `settlement-batch.completed` names the transition *into* completion (C-05, and the paragraph above it). The fix is a distinct vocabulary term, which is vocabulary design and belongs in a brief. **It was expected to land with increment 6 and did not:** TASK-008's scope named the reconciliation vocabulary and not settlement's, and extending a control-critical enum outside a brief is the divergence AGENT_HANDOFF §1b forbids. Recorded as objection O-2 in `docs/audits/008-REQ-reconciliation.md` so the expectation is corrected rather than left pointing at an increment that has closed. The exception is stated in C-05's own statement, in `DOMAIN_MODEL.md`'s coverage paragraph and in `api/openapi.yaml`'s Audit tag, so no headline is broader than this row |
 | Log sanitiser for exception paths | **Not built. Target: the operational-hardening brief.** C-11 deliberately logs an unexpected throwable in full, and a throwable's message can carry anything the code that threw it put there — which is why C-09 is now scoped to request and configuration logging rather than to every log line. The mechanism is a sanitiser on the defect-logging path (`clofin.http.middleware/wrap-errors`, `clofin.http.server`), with a pattern set and a test that a credential in an exception message does not reach the log either. Audit finding **A-007**; the claim was narrowed at the same time, so nothing is over-stated while the debt is open |
 | Live-schema catalogue hashing | **Not built. Target: the operational-hardening brief.** C-10 covers the migration *history*: the runner hashes indexed SQL files, so a direct `ALTER TABLE` or a dropped trigger leaves every checksum and the reported `schemaVersion` unchanged. The mechanism is a canonical digest over the catalogue — tables, columns, constraints, triggers, functions, indexes, privileges — recorded per environment and comparable between them. Audit finding **A-008**. Partially mitigated today by `clofin.db.vocabulary-test`, which compares every closed vocabulary with the live catalogue on each integration run and would fail if a constraint were widened by hand |
 | Transitive dependency SBOM | **Not built. Target: the operational-hardening brief.** C-12 covers the seven **direct** dependencies in `deps.edn`; nothing here inventories the resolved graph, and ADR-0004's claim to "a short, auditable SBOM" describes a document the repository does not contain. The mechanism is a generated SBOM (CycloneDX or SPDX) produced in CI from the resolved classpath, reviewed on change, with an upstream security process named per component. Audit finding **A-010** |
