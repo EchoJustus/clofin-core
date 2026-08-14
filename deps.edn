@@ -36,6 +36,17 @@
   {:extra-paths ["tools"]
    :main-opts   ["-m" "clofin.tools.diagrams"]}
 
+  ;; Capture the replay bundles `clofin-trace` renders:
+  ;;   clojure -M:capture --ref ref-1 --out target/capture
+  ;; Also on `tools`, and for the same reason: a harness that produces
+  ;; provenance artifacts is documentation machinery, not something a running
+  ;; service should be able to reach. It adds no dependency — the JDK's HTTP
+  ;; client, the PostgreSQL driver already required for persistence, and
+  ;; data.json are enough (ADR-0004).
+  :capture
+  {:extra-paths ["tools"]
+   :main-opts   ["-m" "clofin.tools.capture"]}
+
   ;; Unit + property tests (no database):  clojure -M:test
   :test
   {:extra-paths ["test" "test-resources" "tools"]

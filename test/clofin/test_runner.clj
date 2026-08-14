@@ -41,7 +41,11 @@
     ;; The document-consistency guard, run against documents built to
     ;; contradict each other — including the actual 2026-08-05 contradiction
     ;; that standing lesson L-15 records.
-    clofin.tools.doc-consistency-test])
+    clofin.tools.doc-consistency-test
+    ;; ADR-0020 RULE 2: the capture harness cannot emit an unstamped bundle.
+    ;; Every field of the stamp removed in turn, with the walk itself asserted
+    ;; exhaustive against the requirement list (AC-2, lesson L-13).
+    clofin.tools.capture-test])
 
 (def integration-namespaces
   "Tests that need a reachable PostgreSQL instance."
