@@ -115,6 +115,28 @@
                         (when (contains? granted :settlement/execute) role))
                       model/role-permissions))))))
 
+(deftest reconciliation-execute-is-a-controller-right-and-never-an-approvers
+  (testing "an actor who could propose an adjustment and then approve it would be
+            a maker-checker boundary with one person on both sides (C-01). The
+            permission split is the belt; `clofin.authz.approval/evaluate`
+            refusing :self-approval per adjustment is the brace"
+    (is (= #{:controller}
+           (set (keep (fn [[role granted]]
+                        (when (contains? granted :reconciliation/execute) role))
+                      model/role-permissions))))
+    (doseq [[role granted] model/role-permissions]
+      (is (not (and (contains? granted :reconciliation/execute)
+                    (contains? granted :payment/approve)))
+          (str role " both proposes reconciliation adjustments and approves")))))
+
+(deftest an-approver-can-read-a-reconciliation-break-and-cannot-open-one
+  (testing "a checker who cannot read the adjustment they are being asked to
+            approve is a rubber stamp, which is the control failure the PRD
+            opens with — and reading is not proposing"
+    (let [granted (:approver model/role-permissions)]
+      (is (contains? granted :reconciliation/read))
+      (is (not (contains? granted :reconciliation/execute))))))
+
 (deftest the-auditor-role-is-read-only
   (testing "an auditor who can change the thing being audited is not an auditor"
     ;; Stated as a rule over the permission *name* rather than as a list of the
