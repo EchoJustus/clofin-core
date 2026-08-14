@@ -27,8 +27,20 @@
 
   Every refusal reason is a named keyword, so a caller can branch on it and a
   test can enumerate the set rather than sampling it. `refusal-reasons` below
-  is that set, and it is the same value the HTTP layer maps to status codes —
-  a reason with no mapping is a build failure, not a `500` in production.
+  is that set, and `refusal-status` beside it is how each is reported — a reason
+  with no mapping is a build failure, not a `500` in production.
+
+  ## Two kinds of subject, one control
+
+  `evaluate` decides about a **payment instruction** and, since TASK-008, about
+  a **reconciliation adjustment**. Both are \"a thing with an amount and a
+  creator that somebody other than its creator must agree to\", and both go
+  through this function unchanged: there is one maker–checker control in CloFin
+  and a second implementation of it would be a second thing to keep in step
+  (standing lesson **L-6**). What the caller supplies as `:instruction` is
+  whichever subject it is deciding about; what differs between them — how many
+  approvals an adjustment needs below an organisation's lowest band — belongs to
+  `clofin.recon.adjustment` and never to this function.
 
   Pure: no database, no clock, no identifier generation."
   (:require [clofin.authz.model :as model]
@@ -64,6 +76,57 @@
          :above-actor-limit
          :already-approved
          :no-threshold-configured]))
+
+(def refusal-status
+  "How each refusal reason is reported, as a `clofin.error` category.
+
+  Held **here**, beside the reasons themselves, rather than in one of the
+  services that renders them. It lived in `clofin.payments.approval-service`
+  while payments were the only thing approvals decided about; reconciliation
+  adjustments now go through this same `evaluate`, and a second copy of this map
+  in a second service is precisely the drift standing lesson **L-6** names — the
+  copy the author was looking at stays right and the other goes stale.
+
+  A reason added to `refusal-reasons` without an answer here fails
+  `clofin.authz.approval-test` rather than degrading silently to a generic
+  `403`, which is a refusal a caller cannot branch on.
+
+  The split is ADR-0012's: `403` is \"you may not\", `409` is \"not from
+  here\", `422` is \"understood, and the organisation is not set up for it\"."
+  {:self-approval           :forbidden
+   :not-an-approver         :forbidden
+   :above-actor-limit       :forbidden
+   :already-approved        :conflict
+   :no-threshold-configured :unprocessable})
+
+(def refusal-detail-templates
+  "What a refused caller is told, with `%s` standing for the kind of thing being
+  approved.
+
+  Each names the control it comes from, because a refusal an operator cannot
+  explain to their own auditor is a refusal that gets escalated into a request
+  to disable it.
+
+  Templated rather than fixed because there are now two kinds of subject — a
+  payment instruction and a reconciliation adjustment — and one maker–checker
+  control over both. Writing the prose twice would be two statements of C-01,
+  and the second statement is the one that drifts."
+  {:self-approval
+   "The actor who created this %s may not approve it (segregation of duties)"
+   :not-an-approver
+   "This actor does not hold the permission required to decide on this %s"
+   :above-actor-limit
+   "This %s's amount is above this actor's approval limit"
+   :already-approved
+   "This actor has already recorded a decision on this %s"
+   :no-threshold-configured
+   "No approval threshold is configured for this organisation and currency, so no approval can be evaluated"})
+
+(defn refusal-detail
+  "The prose for a refusal, naming the kind of subject the decision was about."
+  [reason subject]
+  (when-let [template (refusal-detail-templates reason)]
+    (if (str/includes? template "%s") (format template subject) template)))
 
 ;; ---------------------------------------------------------------------------
 ;; Thresholds

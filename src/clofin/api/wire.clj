@@ -242,9 +242,14 @@
    "status"      (name (:status actor))})
 
 (defn approval->wire
+  "One approval decision, whichever kind of subject it is about.
+
+  Exactly one of `instructionId` and `adjustmentId` is present, mirroring the
+  `approval_names_one_subject` constraint. Rendering the absent one as the
+  string `\"null\"` — which `(str nil)` produces — would put a value in a field a
+  consumer would then have to know to ignore."
   [approval]
   (cond-> {"id"            (str (:id approval))
-           "instructionId" (str (:instruction-id approval))
            "actorId"       (str (:actor-id approval))
            "decision"      (name (:decision approval))
            "decidedAt"     (str (:decided-at approval))
@@ -252,6 +257,8 @@
            ;; should not have to infer from an absent field that a decision
            ;; still stands.
            "live"          (nil? (:invalidated-at approval))}
+    (:instruction-id approval) (assoc "instructionId" (str (:instruction-id approval)))
+    (:adjustment-id approval)  (assoc "adjustmentId" (str (:adjustment-id approval)))
     (:reason approval)         (assoc "reason" (:reason approval))
     (:invalidated-at approval) (assoc "invalidatedAt" (str (:invalidated-at approval)))))
 

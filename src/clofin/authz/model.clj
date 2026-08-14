@@ -73,7 +73,23 @@
          ;; assertions: an actor who could approve a payment and then settle it
          ;; is a maker-checker boundary with one person on both sides of the
          ;; last step (C-01, C-08).
-         :settlement/execute]))
+         :settlement/execute
+         ;; Reconciliation (TASK-008). Split into a read and an execute for the
+         ;; reason `:payment/read` and `:payment/approve` are split: reading a
+         ;; break queue and *correcting the books* are different questions with
+         ;; different answers, and an approver who must read an adjustment in
+         ;; order to decide on it should not thereby acquire the right to
+         ;; propose one.
+         ;;
+         ;; **No role holds `:reconciliation/execute` and `:payment/approve`.**
+         ;; Asserted in `clofin.authz.model-test` beside the existing separation
+         ;; assertions: an actor who could propose an adjustment and then
+         ;; approve it would be a maker–checker boundary with one person on both
+         ;; sides — which is the control C-01 exists for, and which
+         ;; `clofin.authz.approval/evaluate` refuses per adjustment as well.
+         ;; The permission split is the belt to that brace.
+         :reconciliation/execute
+         :reconciliation/read]))
 
 (def actor-statuses
   "Every status an actor row may carry.
@@ -139,14 +155,24 @@
   {:operator   #{:payment/create :payment/read :payment/amend :payment/cancel
                  :payment/submit :account/read :entry/read :organisation/read}
    :approver   #{:payment/approve :payment/reject :payment/read
-                 :approval/read :account/read :entry/read :organisation/read}
+                 :approval/read :account/read :entry/read :organisation/read
+                 ;; A checker who cannot read the adjustment they are being
+                 ;; asked to approve is a rubber stamp, which is the control
+                 ;; failure the PRD opens with. It is a **read**: proposing one
+                 ;; is `:reconciliation/execute`, which this role does not hold.
+                 :reconciliation/read}
    :controller #{:account/create :account/read :entry/post :entry/read
                  :payment/read :payment/cancel :approval/read
-                 :settlement/execute :organisation/read}
+                 :settlement/execute :organisation/read
+                 ;; The operational reconciliation role. It lands beside
+                 ;; `:settlement/execute` because it is the same job — the actor
+                 ;; who pushed the money out is the one who reconciles what came
+                 ;; back — and emphatically not beside `:payment/approve`.
+                 :reconciliation/execute :reconciliation/read}
    :compliance #{:payment/read :account/read :entry/read :audit/read
-                 :organisation/read}
+                 :organisation/read :reconciliation/read}
    :auditor    #{:audit/read :payment/read :account/read :entry/read
-                 :organisation/read}})
+                 :organisation/read :reconciliation/read}})
 
 ;; ---------------------------------------------------------------------------
 ;; Actors
