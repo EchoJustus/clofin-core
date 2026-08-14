@@ -164,6 +164,61 @@
     {:batches    (mapv row->batch (take row-cap rows))
      :truncated? (> (count rows) row-cap)}))
 
+(def ^:private resolved-items-sql
+  "Every membership the simulated scheme actually reached an outcome on, in a
+  period, with the amount the instruction carried.
+
+  This is the **scheme's own record of what it did**, and it is what
+  `clofin.settlement.statement` builds a statement from. It deliberately touches
+  no ledger table: the reconciliation this feeds compares it against
+  `journal_line`, and two records that agree because one was derived from the
+  other agree about nothing (standing lesson **L-16**).
+
+  `timed-out` items are absent, and that absence is the product rather than a
+  filter of convenience — see
+  `clofin.settlement.statement/outcome-line-types`.
+
+  Ordered by instruction id so the same period returns the same rows in the same
+  order however the planner feels, which is what lets a generated statement be
+  byte-identical between runs."
+  "select i.batch_id, i.instruction_id, i.outcome, i.resolved_at,
+          p.amount_minor, p.currency
+     from settlement_batch_item i
+     join settlement_batch b on b.id = i.batch_id
+     join payment_instruction p on p.id = i.instruction_id
+    where b.organisation_id = ?
+      and b.scheme = ?
+      and b.currency = ?
+      and i.outcome is not null
+      and i.resolved_at >= ?
+      and i.resolved_at < ?
+    order by i.instruction_id
+    limit ?")
+
+(defn resolved-items-for
+  "The scheme's record of every item it resolved in `[from, to)`, for one scheme
+  and currency.
+
+  Half-open, the same convention every other CloFin period read uses (ADR-0011),
+  so consecutive statements chain exactly rather than double-counting whatever
+  landed on the boundary.
+
+  Returns `{:items […] :truncated? bool}`. A caller that hits the cap is
+  producing a statement over a period longer than one document should cover, and
+  is told so rather than handed a silently short one."
+  [source organisation-id {:keys [scheme currency from to]}]
+  (let [rows (db/query source [resolved-items-sql
+                               organisation-id scheme currency from to (inc row-cap)])]
+    {:truncated? (> (count rows) row-cap)
+     :items (mapv (fn [row]
+                    {:batch-id       (:batch-id row)
+                     :instruction-id (:instruction-id row)
+                     :outcome        (:outcome row)
+                     :resolved-at    (db/->instant (:resolved-at row))
+                     :amount         (money/of (:currency row)
+                                               (db/->long (:amount-minor row)))})
+                  (take row-cap rows))}))
+
 ;; ---------------------------------------------------------------------------
 ;; Locking
 ;; ---------------------------------------------------------------------------
