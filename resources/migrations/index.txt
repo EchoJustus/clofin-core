@@ -15,3 +15,4 @@
 0009-settlement-batches-and-scheme-responses.sql
 0010-settlement-remediation.sql
 0011-purpose-codes-and-line-currency.sql
+0012-reconciliation.sql
