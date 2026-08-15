@@ -3,13 +3,13 @@
 | Field | Value |
 |---|---|
 | **Increment** | 8.2 (cockpit, phase 2) — spans `clofin-core` (CORS + self-identification) and `clofin-cockpit` (connect + seed + bootstrap) |
-| **Status** | `IN PROGRESS` — dispatched 2026-08-15 |
+| **Status** | `CLOSED` — part A merged in PR #23 (`f174116`), part B merged in `clofin-cockpit` PR #2 (`90abb1d`), 2026-08-15; three objections ruled for the Worker, see Changelog |
 | **Depends on** | TASK-011 ✅ closed (PR #21 + cockpit PR #1); the cockpit live on Pages |
 | **Base branch** | `clofin-core` `main` at `f10974c` or later; `clofin-cockpit` `main` at `7b0b8d6` or later |
 | **Requirements** | Driver D5; the cockpit plan (Phase 2, **minus** the Codespaces driver — deliberately deferred, see Out) |
 | **Controls touched** | None move. CORS is a deliberate exposure decision recorded in an ADR, default-closed; it is not a control claim |
 | **Scope** | Large — a middleware change in the release-audit subject, plus the cockpit's first write path |
-| **Audit** | Not yet submitted. **The `clofin-core` half lands inside the scope of the Sol audit scheduled 2026-09-01** — build it as work that is about to be audited, because it is |
+| **Audit** | `012-REQ` filed 2026-08-15 (`docs/audits/012-REQ-cockpit-connect-and-bootstrap.md` on `main`); the `clofin-core` half is inside the 2026-09-01 Sol audit's scope, with N-1 pre-declared as audit input |
 
 > Status lifecycle: `READY` → `IN PROGRESS` → `IMPLEMENTED` → `AUDITED` → `CLOSED`.
 > Status is maintained by Master Control on the `meta` branch — see AGENT_HANDOFF §1b.
@@ -135,3 +135,30 @@ it is the property the audit will attack first.
 **The bootstrap is the cockpit's first write path.** If a step ever feels like
 it should "just fix" something the API refused, stop: the refusal is the
 product. Render it.
+
+---
+
+## Changelog — rulings on the `012-REQ` objections (2026-08-15)
+
+*(The REQ is `docs/audits/012-REQ-cockpit-connect-and-bootstrap.md` on `main`,
+landed by PR #23, `f174116`.)* All three ruled at ingestion; premises
+independently verified first (no actor/role/limit/threshold write endpoint
+exists in the contract or the route table; the `read-key` docstring carries the
+every-mutating-endpoint claim verbatim).
+
+| # | Objection | Ruling |
+|---|---|---|
+| O-1 | The brief's bootstrap sequence names four creations; two of them — actors/roles and approver limits/thresholds — have **no API on purpose** (UAT-005 §2: an actor able to grant itself the approver role makes segregation of duties unenforceable). A literal runner reaches step two of six and stops forever. Adding endpoints was doubly out of scope, and rightly. | **Confirmed — brief defect, Master Control's, with a sharp edge:** the same brief that ordered "discover the header set, do not guess" specified a bootstrap sequence without checking which steps have an API. The Worker's design is **ratified as the standing pattern for every future manual step**: a `manual` step generates exact SQL, is confirmed only through a real API request whose response is shown — never by a button — and must carry a *what this cannot show* list, enforced by test. A green tick never stands for something nobody checked. The suggested brief correction is adopted as this changelog. |
+| O-2 | AC-6's "the bootstrap completes" cannot be true of a browser alone — two steps require SQL the browser must not be able to run. | **Confirmed — follows from O-1.** The four-state step vocabulary (`done` / `already present` / `waiting for you` / `failed`, with `waiting for you` halting exactly as failure does) is ratified: it reports the run's true shape instead of collapsing it. |
+| O-3 | "Refuse any origin that is not an operator-connected instance origin" cannot be expressed in a build-time policy — the connected set exists only after the operator types. | **Confirmed — the brief asked the build for something it cannot know.** The split is ratified: build-time, a bounded set of address *shapes* (loopback, Codespaces forwarded) with the policy's properties asserted so widening `origins.ts` fails the build; runtime, the actually-connected set, cleared with credentials in the same call. Neither half may ever be weakened to compensate for the other. The LAN-address limitation is an accepted, recorded cost. |
+
+**N-1 — pre-declared input to the 2026-09-01 Sol audit.**
+`clofin.idempotency/read-key`'s docstring claims the key is mandatory on
+*every* mutating endpoint (PR-040); three endpoints neither require nor accept
+it. This is the `ref-1` audit's own finding class (one of the nine L-14
+instances), surviving in a **copy the remediation never enumerated** — the
+L-16 shape, in code. Deliberately not fixed here (part A's scope was "nothing
+else"); the audit confirms it independently and it rides the remediation
+batch. **The Worker's post-PR self-review corrections (§7 of the REQ) are
+accepted as filed** — an L-9 statement corrected in the open beats a fix
+folded in silently, and that is the behaviour the lesson exists to produce.
