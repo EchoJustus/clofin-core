@@ -48,6 +48,7 @@ table and a brief disagree, the brief on `origin/meta` wins.
 | [008 — Reconciliation](008-TASK-reconciliation.md) | 6 | `CLOSED` — merged in PR #16 (`a41e69f`); four objections ruled, O-1/O-2 routed to TASK-010 | 004 ✅, 006 ✅ | PR-050…054 | Large |
 | [009 — Trace hardening and cross-links](009-TASK-trace-hardening-and-cross-links.md) | 5v.3 | `CLOSED` — merged in PR #17 (`ddf39c1`) + `clofin-trace` PR #2 (`bc0017c`); duplicate dispatch's PR #3 closed unmerged | 007 ✅ | D5 | Small |
 | [010 — Reconciliation completion](010-TASK-reconciliation-completion.md) | 6c | `CLOSED` — merged in PR #19 (`37d2d02`); two objections ruled for the Worker | 008 ✅ | ADR-0019, C-05, 008-REQ O-1/O-2/N-5 | Medium |
+| [011 — `clofin-cockpit` initialization](011-TASK-cockpit-initialization.md) | 8.1 | `IN PROGRESS` — dispatched 2026-08-15; executes the D1/D2 ruling (three repositories; the cockpit) | cockpit repo ✅ (`13e6435`) | D5, ADR-0026 | Medium |
 
 Sequencing follows **product relevance and regulatory risk**, not implementation
 convenience:
