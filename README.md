@@ -40,6 +40,9 @@ artefacts a product or business-analysis owner would actually be accountable for
 - Acceptance criteria and UAT scripts per feature slice — [`docs/uat/`](docs/uat/)
 - Diagrams **generated from** the code and tables they depict, and failed in CI
   when they drift — [`docs/diagrams/`](docs/diagrams/README.md)
+- A [replay walkthrough of captured output at tag `ref-1`](https://echojustus.github.io/clofin-trace/) —
+  static pages, every figure traced to the fixture it was captured from, with
+  the source commit and that tag's release-audit coverage stated in frame
 
 **Engineering**
 - A double-entry ledger whose balance invariant is enforced by property-based tests
