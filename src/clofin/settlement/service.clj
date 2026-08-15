@@ -44,6 +44,7 @@
   | A batch is submitted, and its members leave `approved` | `settlement-batch.submitted` **and one** `payment.released` **per member** | batch, then each instruction |
   | The scheme answers about one item | `payment.settled` / `payment.returned` | that instruction |
   | The last unresolved item resolves | `settlement-batch.completed` | the batch |
+  | A late answer moves an **already-complete** batch's derived status | `settlement-batch.status-restated` | the batch |
 
   A scheme response *recorded* is not a payment *settled*: a duplicate delivery
   records nothing new and emits nothing, and an `ack` moves no payment at all.
@@ -52,6 +53,13 @@
   complete before this transaction and being complete after it, which is the
   only reading of \"the transition commits here\" that survives a late response
   changing a status that was already terminal.
+
+  That late change is the fifth row, and until this increment it was the one
+  state change in CloFin with no event naming its subject — C-05's single
+  disclosed exception, found by the `ref-1` release audit as **A-004**. It is
+  now `settlement-batch.status-restated`, emitted only where the derived status
+  actually moves; see `batch-status-action` for why it is a second term rather
+  than a second `completed`.
 
   [C-05]: docs/COMPLIANCE.md"
   (:require [clofin.audit :as audit]
@@ -296,22 +304,62 @@
     "returned" :return
     nil))
 
-(defn- complete-batch!
-  "Recompute the batch's derived status and, when this transaction is the one
-  that made it complete, say so once.
+(defn- batch-status-action
+  "Which batch-subject event this recomputation deserves, or nil for none.
 
-  `was-complete?` is passed in from *before* the write, which is what makes the
-  event obey L-7: `settlement-batch.completed` marks the transition into a
-  complete batch, so a late resolution that changes an already-complete batch's
-  status updates the status and emits nothing named `completed`."
+  Two different things can happen to a derived status and they are two different
+  terms — standing lesson **L-7**, and the reason this is a function rather than
+  a `when` inside the writer:
+
+  | Before | After | Term |
+  |---|---|---|
+  | not complete | complete | `settlement-batch.completed` — the transition *into* a complete batch |
+  | complete | complete, different status | `settlement-batch.status-restated` — a late answer corrected the outcome |
+  | complete | complete, same status | none |
+  | not complete | not complete | none |
+
+  The last two rows are the point. A response that resolves one item of ten
+  completes nothing; a late `timeout-resolution` that leaves
+  `partially-settled` where it was changes no batch-level fact. An event in
+  either case would assert a transition that did not occur, with before and
+  after digests that are identical — which is precisely the shape audit finding
+  **F-005** found.
+
+  The third row is the one that did not exist until now, and its absence was
+  C-05's single disclosed exception (release-audit finding **A-004**): the
+  payment's own `settled`/`returned` event was written, the stored batch status
+  was updated, and **no event named the batch**. `status-restated` is that
+  event. It is decided from the two statuses rather than from the response
+  `kind`, because the fact the term is named after is the status moving — a
+  future path that moves it the same way would be the same fact."
+  [{:keys [was-complete? complete? before after]}]
+  (cond
+    (and (not was-complete?) complete?)              "settlement-batch.completed"
+    (and was-complete? (not= before after))          "settlement-batch.status-restated"
+    :else                                            nil))
+
+(defn- complete-batch!
+  "Recompute the batch's derived status and, when this transaction moved a
+  batch-level fact, say so once.
+
+  `was-complete?` is passed in from *before* the write, which is what makes both
+  terms obey L-7: `settlement-batch.completed` marks the transition into a
+  complete batch, and `settlement-batch.status-restated` marks a later
+  correction of an outcome that had already been reached. Which of the two — or
+  neither — is `batch-status-action`'s decision, taken from the statuses
+  themselves."
   [tx {:keys [organisation-id batch-id batch-row was-complete? actor correlation-id]}]
   (let [items   (settlement/items-for tx batch-id)
         status  (batch/derive-status {:submitted? true :items items})
-        updated (settlement/set-batch-status! tx organisation-id batch-id status)]
-    (when (and (not was-complete?) (batch/complete? items))
+        updated (settlement/set-batch-status! tx organisation-id batch-id status)
+        action  (batch-status-action {:was-complete? was-complete?
+                                      :complete?     (batch/complete? items)
+                                      :before        (:status batch-row)
+                                      :after         (:status updated)})]
+    (when action
       (audit-store/record! tx {:organisation-id organisation-id
                                :actor-id        (:id actor)
-                               :action          "settlement-batch.completed"
+                               :action          action
                                :subject-type    "settlement-batch"
                                :subject-id      batch-id
                                :before          (audit/settlement-batch-subject batch-row)

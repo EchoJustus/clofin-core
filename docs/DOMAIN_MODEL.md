@@ -110,6 +110,8 @@ See [ADR-0003](ADR/0003-money-as-integer-minor-units.md).
 | `status` | See §3. ✅ |
 | `created-by`, `created-at` | ✅ `created-by` is caller-asserted until TASK-003 delivers authentication. |
 | `reverses-id` | ✅ Set on an instruction raised to reverse a settled one. |
+| `retries-id` | ✅ Set on an instruction raised to **retry** a returned one, and never afterwards — the database refuses a change to it. The reference ADR-0019 deferred and [ADR-0024](ADR/0024-a-retry-names-the-returned-payment-it-replaces.md) built. It relates the two records and confers nothing: the retry is submitted and approved on its own merits, and carries no value rule against the original, because correcting a beneficiary or an amount is the ordinary reason to retry. Mutually exclusive with `reverses-id`. |
+| `retried-by-ids` | ✅ The other end, **derived at read time** from the retries themselves rather than stored, so the two ends cannot disagree. A list: the link carries no uniqueness rule (ADR-0024), and the ordinary case has one member. |
 | `screening-outcome` | 📋 Reference to the screening decision that permitted approval. Increment 7. |
 
 **IdempotencyKey** ✅ — `(organisation-id, key)`, with the digest of the request
@@ -148,7 +150,7 @@ SettlementBatch 1───* SettlementBatchItem *───1 PaymentInstruction
 | `id`, `organisation-id` | ✅ |
 | `scheme` | ✅ `SIM-RTGS` or `SIM-ACH`. **Simulated only** — the `SIM-` prefix is a database check constraint, so a synthetic record can never name a real network. An operator's routing choice: an instruction carries no scheme attribute. |
 | `currency`, `value-date` | ✅ With `scheme`, the triple that defines a batch. One batch, one triple. |
-| `status` | ✅ `open` → `submitted` → `settled` / `partially-settled` / `failed`. **Derived from the items' outcomes**, never set directly — the same doctrine as a balance deriving from the journal. |
+| `status` | ✅ `open` → `submitted` → `settled` / `partially-settled` / `failed`. **Derived from the items' outcomes**, never set directly — the same doctrine as a balance deriving from the journal. Reaching a terminal value emits `settlement-batch.completed`; a **late** `timeout-resolution` that moves it again emits `settlement-batch.status-restated`, which is a different transition and therefore a different term (§2.6). |
 | `created-by`, `created-at` | ✅ |
 
 **SettlementBatchItem** ✅ — one instruction within a batch, keyed
@@ -177,8 +179,11 @@ a retry is a NEW instruction** — the doctrine `settled` already follows in §3
 rule 4, where a correction is a new reversing instruction rather than a mutation
 of the old one. Migration `0010` tightened the index accordingly. Linked-retry
 provenance — a reference relating the retry to the payment it replaces, and the
-exception workflow around it — is increment 6's, where return-exception handling
-natively lives.
+exception workflow around it — was ADR-0019's named, deferred cost and is
+**built**: `payment_instruction.retries_id`, immutable at the database, visible
+from both ends of the link, carried on the retry's own creation event, and named
+by any reconciliation break on the original
+([ADR-0024](ADR/0024-a-retry-names-the-returned-payment-it-replaces.md)).
 
 **SchemeResponse** ✅ — what a simulated scheme said, stored **verbatim** as a
 **receipt**, kept whether or not it caused work.
@@ -275,7 +280,8 @@ disagreed: a *tracked object* with an owner and an age.
 | `amount`, `direction` | ✅ The direction applies to the **reconciled** account; the suspense leg (`2200-UNAPPLIED`) is always the opposite, so the entry balances by construction. |
 | `narrative` | ✅ Required: an entry between a clearing account and a suspense account that does not say why is the entry an investigation can least read. |
 | `approvals-required` | ✅ Computed from the organisation's own `approval_threshold` bands **at proposal** and stored, so lowering a band later cannot post an adjustment that never cleared the bar it was raised under. |
-| `status`, `entry-id` | ✅ `proposed` → `posted`. At most one posted adjustment per break, by partial unique index. |
+| `status`, `entry-id` | ✅ `proposed` → `posted`, **or** `proposed` → `rejected`. Both endings are terminal and are held as data in `clofin.recon.adjustment/transitions`, with the terminal set derived rather than listed. **Drawn:** [`diagrams/reconciliation-adjustment-lifecycle.md`](diagrams/reconciliation-adjustment-lifecycle.md), generated from that table. At most one *posted* adjustment per break, by partial unique index — a rejected one is outside the predicate, which is why a refused correction does not block a different one. |
+| the refusal | ✅ An approver other than the proposer may **reject** an adjustment, with a mandatory reason. Who, why and when are the `approval` row the decision wrote — the same place, and the only place, a rejected payment keeps them — and the adjustment's own `reconciliation-adjustment.rejected` event marks it terminal. The break is left in the state it was already in, because proposing an adjustment never moved it. |
 
 **Nothing in reconciliation edits a journal entry, ever** (C-03). An adjustment
 is a *new* balanced entry posted through the existing path —
@@ -302,15 +308,22 @@ payment the scheme never answered about is correctly still in that balance
 *and* correctly absent from every statement — that pair is what the model is
 for, not an edge case.
 
-**Linked-retry provenance is still deferred.** [ADR-0019](ADR/0019-a-returned-payment-is-terminal-and-retries-as-a-new-instruction.md)
+**Linked-retry provenance is built, and a break is where it is read.**
+[ADR-0019](ADR/0019-a-returned-payment-is-terminal-and-retries-as-a-new-instruction.md)
 ruled that a reference relating a retry to the payment it replaces belongs to
-this increment; it is **not** built here, and TASK-008's scope did not include
-it. What this increment does deliver is the half that made the gap dangerous:
-because a statement line's `payment-reference` is the *instruction* id, a line
-about the original and a line about its retry can never be confused for one
-another. The provenance link itself is recorded as open debt in
-[`COMPLIANCE.md` §4](COMPLIANCE.md) and as objection O-1 in
-`docs/audits/008-REQ-reconciliation.md`.
+this context, where return-exception handling natively lives; increment 6
+delivered the half that made the gap dangerous — because a statement line's
+`payment-reference` is the *instruction* id, a line about the original and a
+line about its retry can never be confused for one another — and TASK-010
+delivered the reference and the workflow that reads it
+([ADR-0024](ADR/0024-a-retry-names-the-returned-payment-it-replaces.md)).
+
+Every break therefore names, **derived at read time and stored nowhere**, the
+payment instruction it is about and any instruction raised to retry that
+payment. Both come from whichever side of the disagreement the break has: the
+ledger entry's reference, or the statement line's end-to-end reference. An
+investigator holding a break about a payment that came back can see whether it
+was raised again without matching counterparty and amount by eye.
 
 ### 2.5 Compliance context 📋
 
@@ -334,20 +347,27 @@ prefixed with the canonicalisation version that produced it. See
 states what this costs an auditor.
 
 **Coverage.** Every state change the API can perform emits one event: payment
-instructions, approvals, settlement batches, and — since TASK-005 —
-organisation creation, account opening and journal posting. **One qualification
-remains on [C-05](COMPLIANCE.md)**, and it is the same one C-05 itself now
-states: a late `timeout-resolution` recomputes an already-complete batch's
-derived status, and that recomputation emits no batch-subject event, because
-`settlement-batch.completed` marks the transition *into* a complete batch and a
-second move is not one. The instruction's own transition is recorded in that
-transaction. The missing term — a batch-status-change action distinct from
-`completed` — is named debt in [COMPLIANCE §4](COMPLIANCE.md).
+instructions, approvals, settlement batches, reconciliation statements, breaks
+and adjustments, and — since TASK-005 — organisation creation, account opening
+and journal posting. **No qualification remains on [C-05](COMPLIANCE.md)**, and
+this paragraph says so only because the two facts behind it are now true rather
+than because it reads better.
 
-This paragraph said "there is no qualification left on C-05" while the
-qualification was disclosed later in COMPLIANCE itself; the `ref-1` release
-audit recorded that as finding **A-004**, and the headline now agrees with the
-disclosure (standing lesson **L-14**).
+The qualification that stood until TASK-010 was a late `timeout-resolution`
+recomputing an already-complete batch's derived status: the instruction's own
+transition was recorded in that transaction and nothing named the batch. That
+recomputation now emits `settlement-batch.status-restated` — a term distinct
+from `settlement-batch.completed`, because `completed` marks the transition
+*into* a complete batch and a second move is not one — and it is emitted only
+where the derived status actually moves.
+
+**The history is kept rather than tidied away**, because it is the more useful
+half. This paragraph once said "there is no qualification left on C-05" while
+the qualification was disclosed later in COMPLIANCE itself; the `ref-1` release
+audit recorded that as finding **A-004**, the headline was corrected to agree
+with the disclosure (standing lesson **L-14**), and the disclosure has now been
+closed on every copy of it. A reader comparing this document with that audit
+should be able to find all three steps.
 
 **Attribution, including where there is none.** `actor` is null on exactly one
 action, `organisation.created`, because `POST /organisations` is the bootstrap
@@ -494,15 +514,18 @@ Rules that the diagram alone does not carry:
    the instruction is finished, its settlement membership is permanent, and a
    retry is a *new* instruction approved on its own merits. Audit finding
    **F-007** settled this; the schema had advertised a re-batching permission
-   the lifecycle forbade. A structured exception workflow — relating a retry
-   back to the payment it replaces — is increment 6's. 📋
+   the lifecycle forbade. The structured exception workflow — relating a retry
+   back to the payment it replaces — is built: `retries-id` on the new
+   instruction, refused unless its target is `returned` and in the same
+   organisation, immutable once set, and read by any reconciliation break on the
+   original ([ADR-0024](ADR/0024-a-retry-names-the-returned-payment-it-replaces.md)). ✅
 
 Transitions are held as data in `clofin.payments.state`, so the diagram above
 **is** generated from the code — not "can be" — and the lifecycle is tested
 exhaustively rather than sampled: every (state, event) pair is walked, not a
 chosen few.
 
-**Two rules about status are not transitions**, and are held as named sets
+**Three rules about status are not transitions**, and are held as named sets
 beside the table rather than as conditionals in a handler
 ([ADR-0014](ADR/0014-payment-lifecycle-as-data.md)):
 
@@ -515,6 +538,11 @@ beside the table rather than as conditionals in a handler
 - ✅ `reversible-states` — a reversal may be raised only against a `settled`
   instruction, per rule 4. The original is untouched, so this is not a
   transition either.
+- ✅ `retryable-states` — a retry may be raised only against a `returned`
+  instruction, per rule 5. The original is untouched here too, which is why
+  `returned` keeps no outgoing arrow while a retry is nonetheless possible: the
+  two sets are the same doctrine applied to the two terminal outcomes, and they
+  are deliberately disjoint.
 
 **Built so far:** `submit`, `cancel`, `approve`, `reject` and `amend` have
 endpoints. `release`, `settle` and `return` are driven by settlement

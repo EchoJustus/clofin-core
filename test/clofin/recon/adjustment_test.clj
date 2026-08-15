@@ -162,8 +162,80 @@
   (doseq [bad [:sideways "up" nil]]
     (is (thrown? Exception (adjustment/assert-direction! bad)) (pr-str bad))))
 
-(deftest the-status-vocabulary-has-two-terms-and-the-second-is-terminal
-  (is (= #{"proposed" "posted"} (set adjustment/statuses))))
+(deftest the-status-vocabulary-is-derived-from-the-lifecycle-and-is-not-a-second-list
+  (is (= #{:proposed :posted :rejected} (set adjustment/statuses)))
+  (is (= (set (keys adjustment/transitions)) (set adjustment/statuses))
+      "derived from the table rather than declared beside it — a second list is
+       the thing that goes stale while every test that reads it keeps passing"))
+
+;; ---------------------------------------------------------------------------
+;; The lifecycle, by enumeration rather than by sampling (AC-6, AC-7)
+;; ---------------------------------------------------------------------------
+;;
+;; The discipline `clofin.recon.break-state-test` and `clofin.payments.state-test`
+;; keep, applied to the third lifecycle in CloFin: the table is a value, so every
+;; (status, event) pair can be walked and a pair nobody thought to write a case
+;; for is still covered.
+
+(deftest ac-6-every-status-event-pair-is-either-permitted-by-the-table-or-refused
+  (doseq [status adjustment/statuses
+          event  adjustment/events]
+    (testing (str status " / " event)
+      (if (contains? (get adjustment/transitions status) event)
+        (is (= (get-in adjustment/transitions [status event])
+               (adjustment/transition status event))
+            "a permitted pair goes exactly where the table says")
+        (let [t (try (adjustment/transition status event) nil (catch Exception e e))]
+          (is (some? t) (str status " must not permit " event))
+          (is (= :conflict (:clofin/error (ex-data t)))
+              "a refused transition is a conflict, not a validation error")
+          (is (= (name status) (:adjustment-status (ex-data t)))
+              "the refusal names the status the adjustment is actually in")
+          (is (= (mapv name (adjustment/permitted-events status))
+                 (:permitted (ex-data t)))
+              "and what would have been permitted instead — `somebody already
+               posted this` and `somebody already refused this` are very
+               different answers for an approver holding it"))))))
+
+(deftest ac-6-the-terminal-set-is-derived-and-is-not-a-second-list
+  (is (= (into #{} (filter adjustment/terminal?) adjustment/statuses)
+         (set adjustment/terminal-statuses)))
+  (is (= #{:posted :rejected} (set adjustment/terminal-statuses))
+      "both endings are terminal, and neither is named as such anywhere but in
+       the transition table")
+  (is (not (adjustment/terminal? adjustment/initial-status))))
+
+(deftest an-adjustment-begins-proposed-and-nothing-leads-back-to-it
+  (is (= :proposed adjustment/initial-status))
+  (is (empty? (for [[_ events] adjustment/transitions
+                    [_ to]     events
+                    :when (= adjustment/initial-status to)]
+                to))
+      "a posted or rejected adjustment is finished; a break needing another
+       correction gets another adjustment, not this one back"))
+
+(deftest an-unknown-status-is-a-defect-rather-than-a-terminal-one
+  (testing "treating an unrecognised status as terminal would refuse every
+            operation on the row and look, from outside, exactly like a
+            correctly posted adjustment"
+    (doseq [f [#(adjustment/terminal? :vanished)
+               #(adjustment/permitted-events :vanished)
+               #(adjustment/transition :vanished :post)
+               ;; A string is the shape a row carries before `row->adjustment`
+               ;; keywordises it, and it must not silently address the table.
+               #(adjustment/terminal? "posted")]]
+      (let [t (try (f) nil (catch Exception e e))]
+        (is (some? t))
+        (is (= :validation (:clofin/error (ex-data t))))))))
+
+(deftest each-decision-drives-exactly-one-lifecycle-event
+  (is (= #{:approved :rejected} (set (keys adjustment/decision-events)))
+      "the keys are the approval vocabulary itself — one maker–checker control,
+       one set of decisions")
+  (is (= #{:post :reject} (set (vals adjustment/decision-events))))
+  (is (= (set adjustment/events) (set (vals adjustment/decision-events)))
+      "and every arrow in the table has a decision that drives it: an arrow
+       nothing drives is a schema path with no product path behind it (L-10)"))
 
 (deftest both-account-roles-are-named-with-the-codes-domain-model-4-defines
   (is (= "1300-IN-TRANSIT" (:reconciled adjustment/account-roles)))

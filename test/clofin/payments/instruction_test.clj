@@ -125,6 +125,39 @@
   (is (nil? (:reverses-id (errors {:reverses-id (random-uuid)}))))
   (is (= "must be a UUID" (:reverses-id (errors {:reverses-id "not-a-uuid"})))))
 
+(deftest ac-1-retries-id-is-optional-but-must-be-a-uuid-when-present
+  (is (nil? (:retries-id (errors {:retries-id nil}))))
+  (is (nil? (:retries-id (errors {:retries-id (random-uuid)}))))
+  (is (= "must be a UUID" (:retries-id (errors {:retries-id "not-a-uuid"}))))
+  (testing "whether the target is a returned instruction of this organisation is
+            a question about stored state, so it is answered at the persistence
+            seam and not here (ADR-0012)"
+    (is (nil? (:retries-id (errors {:retries-id (random-uuid)}))))))
+
+(deftest ac-1-a-built-instruction-and-a-loaded-row-have-the-same-shape
+  (testing "both link fields are defaulted rather than merely selected: a key
+            absent in one and nil in the other is a difference that only shows
+            up in an equality check nobody expected to fail"
+    (let [built (instruction/draft (valid-candidate) opts)]
+      (is (contains? built :reverses-id))
+      (is (contains? built :retries-id))
+      (is (nil? (:retries-id built)))))
+  (testing "and a retry keeps the link it was given"
+    (let [original (random-uuid)
+          retry    (instruction/draft (assoc (valid-candidate) :retries-id original) opts)]
+      (is (= original (:retries-id retry))))))
+
+(deftest ac-1-neither-link-may-be-amended
+  (testing "a reversal does not stop being one, and nor does a retry stop
+            replacing what it replaces"
+    (doseq [field [:reverses-id :retries-id]]
+      (is (not (contains? instruction/amendable-fields field)) (str field))
+      (let [t (caught #(instruction/amend (instruction/draft (valid-candidate) opts)
+                                          {field (random-uuid)} opts))]
+        (is (some? t) (str field " must not be amendable"))
+        (is (= :field-validation (:clofin/error (ex-data t))))
+        (is (= "cannot be amended" (get (ex-data t) field)))))))
+
 (deftest a-status-outside-the-lifecycle-is-refused
   (is (= "unknown status: :in-flight" (:status (errors {:status :in-flight})))))
 

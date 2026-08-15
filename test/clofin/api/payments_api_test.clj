@@ -753,6 +753,217 @@
     (is (= "draft" (get-in json ["errors" "instruction-status"])))
     (is (= "reverse" (get-in json ["errors" "attempted"])))))
 
+(defn- return!
+  "Walk an instruction to `returned`, one lifecycle event at a time.
+
+  The same walk `settle!` makes, taking the other terminal arrow out of
+  `released`. It still goes through `transition!`, so the fixture cannot reach a
+  state the state machine would not have permitted."
+  [f pi]
+  (doseq [event [:submit :approve :release :return]]
+    (payments/transition! tdb/*pool*
+                          (java.util.UUID/fromString (get-in f [:org "id"]))
+                          (java.util.UUID/fromString (get pi "id"))
+                          event
+                          {:actor {:id (:maker f)}}))
+  pi)
+
+(defn- audit-rows
+  [subject-id]
+  (db/query tdb/*pool*
+            ["select action, before_digest, after_digest from audit_event
+               where subject_id = ? order by occurred_at, id"
+             (java.util.UUID/fromString subject-id)]))
+
+;; ---------------------------------------------------------------------------
+;; TASK-010 AC-1 / AC-2 — linked-retry provenance (ADR-0019, ADR-0024)
+;; ---------------------------------------------------------------------------
+
+(deftest ac-1-a-retry-names-the-returned-instruction-it-replaces
+  (let [f        (setup)
+        original (return! f (new-instruction! f))
+        retry    (created! "/payment-instructions"
+                           (instruction-body f "retriesId" (get original "id")))
+        original-now (:json (call :get (str "/payment-instructions/" (get original "id"))))]
+    (testing "the retry is a NEW instruction pointing back at the original"
+      (is (not= (get original "id") (get retry "id")))
+      (is (= (get original "id") (get retry "retriesId")))
+      (is (= "draft" (get retry "status"))
+          "raised, submitted and approved on its own merits — ADR-0019"))
+
+    (testing "the original is untouched, and terminal still"
+      (is (= "returned" (get original-now "status")))
+      (is (empty? (get original-now "permittedTransitions"))))
+
+    (testing "AC-1 — the linkage is visible from BOTH sides"
+      (is (= [(get retry "id")] (get original-now "retriedByIds"))
+          "the original names its retry, derived from the retry rather than
+           stored twice")
+      (is (not (contains? retry "retriedByIds"))
+          "and a retry nobody has retried carries no empty array"))
+
+    (testing "AC-1 — and it is carried on the retry's own audit event"
+      (let [rows (audit-rows (get retry "id"))]
+        (is (= ["payment.created"] (mapv :action rows))
+            "exactly one event for the creation (AC-8)")
+        (is (nil? (:before-digest (first rows))))
+        (is (some? (:after-digest (first rows)))))
+      (testing "the digest actually covers the link: the same instruction
+                without it digests differently"
+        (let [unlinked (created! "/payment-instructions" (instruction-body f))
+              digest-of (fn [id] (:after-digest (first (audit-rows id))))]
+          (is (not= (digest-of (get retry "id")) (digest-of (get unlinked "id")))
+              "a projection that omitted `retries-id` would give one digest to a
+               retry and to an unlinked payment with the same values"))))
+
+    (testing "AC-1 — the reference is immutable: a PATCH naming it is refused"
+      (let [{:keys [status json]}
+            (call :patch (str "/payment-instructions/" (get retry "id"))
+                  {:idempotency-key (key!)
+                   :body {"organisationId" (get-in f [:org "id"])
+                          "retriesId" (get original "id")}})]
+        (is (= 422 status))
+        (is (= "cannot be amended" (get-in json ["errors" "retriesId"])))))
+
+    (testing "AC-1 — and the database refuses the change to any writer, because
+              provenance an operator can rewrite is provenance an investigation
+              cannot rely on (L-6)"
+      (let [t (try (db/execute! tdb/*pool*
+                                ["update payment_instruction set retries_id = null where id = ?"
+                                 (java.util.UUID/fromString (get retry "id"))])
+                   nil
+                   (catch Exception e e))]
+        (is (some? t) "a raw UPDATE clearing the link must be refused")
+        (is (str/includes? (str (ex-message t)) "never changes"))))))
+
+(deftest ac-2-a-retry-target-that-is-not-returned-is-refused-by-name
+  (let [f (setup)]
+    (doseq [[label target-status build] [["a draft" "draft" (fn [pi] pi)]
+                                         ["a settled instruction" "settled" #(settle! f %)]]]
+      (let [target (build (new-instruction! f))
+            before-instructions (instruction-count)
+            before-audit (:count (db/query-one tdb/*pool*
+                                               ["select count(*) as count from audit_event"]))
+            {:keys [status json]}
+            (call :post "/payment-instructions"
+                  {:idempotency-key (key!)
+                   :body (instruction-body f "retriesId" (get target "id"))})]
+        (is (= 409 status) label)
+        (is (= target-status (get-in json ["errors" "instruction-status"])) label)
+        (is (= "retry" (get-in json ["errors" "attempted"])) label)
+        (is (= ["returned"] (get-in json ["errors" "retryable-in"])) label)
+        (is (str/includes? (str (get json "detail")) "only a returned instruction")
+            "the refusal names the correction rather than only the rule")
+        (testing "AC-8 — a refused creation rolls back, so it leaves no row and
+                  no event"
+          (is (= before-instructions (instruction-count)) label)
+          (is (= before-audit
+                 (:count (db/query-one tdb/*pool*
+                                       ["select count(*) as count from audit_event"])))
+              label))))))
+
+(deftest ac-2-a-retry-target-in-another-organisation-reveals-nothing-about-it
+  (testing "C-08 — saying `another organisation's` would confirm that a guessed
+            UUID names a real payment somewhere else"
+    (let [ours   (setup)
+          theirs (setup)
+          foreign (return! theirs (new-instruction! theirs))
+          _ (reset! current-actor (:maker ours))
+          {:keys [status json]}
+          (call :post "/payment-instructions"
+                {:idempotency-key (key!)
+                 :body (instruction-body ours "retriesId" (get foreign "id"))})]
+      (is (= 422 status)
+          "not 409 — a foreign instruction is reported as not existing, so the
+           answer is the same one a made-up id gets")
+      (is (str/includes? (str (get json "detail")) "does not exist in this organisation"))
+      (is (nil? (get-in json ["errors" "instruction-status"]))
+          "and nothing about the foreign payment's state leaks")
+      (is (= 422 (:status (call :post "/payment-instructions"
+                                {:idempotency-key (key!)
+                                 :body (instruction-body ours "retriesId"
+                                                         (str (random-uuid)))})))
+          "an id that names nothing at all gets the identical answer"))))
+
+(deftest ac-2-an-instruction-cannot-be-both-a-reversal-and-a-retry
+  (testing "opposite statements about opposite terminal outcomes — a record
+            claiming both means nothing"
+    (let [f (setup)
+          settled  (settle! f (new-instruction! f))
+          returned (return! f (new-instruction! f))
+          {:keys [status json]}
+          (call :post "/payment-instructions"
+                {:idempotency-key (key!)
+                 :body (instruction-body f
+                                         "reversesId" (get settled "id")
+                                         "retriesId" (get returned "id"))})]
+      (is (= 422 status))
+      (is (= "cannot be set on a reversal" (get-in json ["errors" "retriesId"])))
+      (is (= "cannot be set on a retry" (get-in json ["errors" "reversesId"]))
+          "both members are named, because a caller that sent both has a bug and
+           needs to be told which half to remove"))))
+
+(deftest ac-2-a-malformed-retries-id-is-reported-with-every-other-failed-field
+  (testing "PR-003 — the parse failure joins the pass rather than aborting it"
+    (let [f (setup)
+          {:keys [status json]}
+          (call :post "/payment-instructions"
+                {:idempotency-key (key!)
+                 :body (instruction-body f "retriesId" "not-a-uuid"
+                                         "purposeCode" "XXXX")})]
+      (is (= 422 status))
+      (is (= "must be a UUID" (get-in json ["errors" "retriesId"])))
+      (is (= "unknown purpose code: XXXX" (get-in json ["errors" "purposeCode"]))))))
+
+(deftest ac-1-a-retry-of-a-retry-is-permitted-and-the-chain-is-not-collapsed
+  (testing "ADR-0019's text says nothing about chains, and refusing one would
+            leave an operator raising an unlinked instruction — losing exactly
+            the provenance the link exists to create (ADR-0024 reading 1)"
+    (let [f        (setup)
+          original (return! f (new-instruction! f))
+          first-retry (return! f (created! "/payment-instructions"
+                                           (instruction-body f "retriesId"
+                                                             (get original "id"))))
+          second-retry (created! "/payment-instructions"
+                                 (instruction-body f "retriesId" (get first-retry "id")))]
+      (is (= (get first-retry "id") (get second-retry "retriesId"))
+          "a retry names the payment it DIRECTLY replaces, not the head of the
+           chain — walking a chain is a read, and storing the head would be a
+           second copy of the relation")
+      (let [original-now (:json (call :get (str "/payment-instructions/"
+                                                (get original "id"))))]
+        (is (= [(get first-retry "id")] (get original-now "retriedByIds"))
+            "and the original still names only what directly retries it")))))
+
+(deftest ac-1-an-original-may-be-retried-more-than-once-over-its-life
+  (testing "the link carries no uniqueness rule: every candidate predicate would
+            encode a second copy of the payment lifecycle in an index, which is
+            the shape F-007 removed from this table (ADR-0024 reading 2)"
+    (let [f        (setup)
+          original (return! f (new-instruction! f))
+          first-retry (created! "/payment-instructions"
+                                (instruction-body f "retriesId" (get original "id")))
+          _ (is (= 200 (:status (call :post (str "/payment-instructions/"
+                                                 (get first-retry "id") "/cancellation")
+                                      {:idempotency-key (key!) :body (action-body f)}))))
+          second-retry (created! "/payment-instructions"
+                                 (instruction-body f "retriesId" (get original "id")))
+          original-now (:json (call :get (str "/payment-instructions/" (get original "id"))))]
+      (is (= #{(get first-retry "id") (get second-retry "id")}
+             (set (get original-now "retriedByIds")))
+          "an operator whose first retry was cancelled is not stranded")
+      (is (= 2 (count (get original-now "retriedByIds")))
+          "and both are named — a scalar column could not have said so"))))
+
+(deftest ac-1-an-ordinary-instruction-carries-neither-member
+  (let [f (setup)
+        pi (new-instruction! f)]
+    (is (not (contains? pi "retriesId")))
+    (is (not (contains? pi "retriedByIds")))
+    (is (not (contains? pi "reversesId"))
+        "an absent link is absent rather than null — the same courtesy
+         `reversesId` has always had")))
+
 ;; ---------------------------------------------------------------------------
 ;; AC-12 is `clofin.contract-test`, which passes unmodified.
 ;; ---------------------------------------------------------------------------

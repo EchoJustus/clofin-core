@@ -25,11 +25,18 @@
 
   Two row types are locked here, and **always in this sequence**:
 
-  1. `payment_instruction` — by `lock-instruction!` and
-     `assert-reversal-target!`
+  1. `payment_instruction` — by `lock-instruction!`, `assert-reversal-target!`
+     and `assert-retry-target!`
   2. `ledger_account` — by `assert-debtor-account!`, and by
      `clofin.ledger.repository/assert-postable!`, which orders by id within
      itself
+
+  The two link targets are the same row type, so a creation naming both would
+  take two locks of one type in an order this namespace does not fix. It cannot:
+  `create-instruction!` refuses an instruction that claims to be a reversal
+  *and* a retry, which is a rule about meaning first — a payment succeeds a
+  settled one or replaces a returned one, never both — and removes the ordering
+  question as a consequence rather than as its reason.
 
   A single order across every caller is what stops two transactions that touch
   the same rows from deadlocking. It is written down because it is invisible at
@@ -56,11 +63,37 @@
 ;; Rows to domain values
 ;; ---------------------------------------------------------------------------
 
+(def ^:private retried-by-column
+  "The other end of the retry link, read at the same time as the row itself.
+
+  A retry names its original in a column; the original names its retries in
+  **no** column, because the relation is stored once (ADR-0024). Deriving the
+  reverse side here is what makes the linkage visible from both ends without a
+  second copy of it that could disagree with the first — the same reasoning that
+  keeps a balance an aggregation over journal lines rather than a column
+  (ADR-0008).
+
+  Ordered by creation so the list is stable between reads, and scoped to the
+  organisation as well as to the id: the foreign key already confines a retry to
+  a real instruction, and the scope confines the *answer* to one tenant even if
+  a future writer forgets.
+
+  Aggregated rather than joined. The normal case is one retry and the join would
+  read identically — but an original whose first retry was cancelled and
+  replaced has two, and a scalar subquery that met the second one would fail the
+  read rather than report it (ADR-0024 explains why that cardinality is not
+  constrained)."
+  "(select coalesce(array_agg(r.id order by r.created_at, r.id), '{}'::uuid[])
+      from payment_instruction r
+     where r.retries_id = payment_instruction.id
+       and r.organisation_id = payment_instruction.organisation_id) as retried_by_ids")
+
 (def ^:private instruction-columns
-  "select id, organisation_id, debtor_account_id, creditor_name, creditor_account,
-          amount_minor, currency, value_date, purpose_code, status,
-          created_by, created_at, reverses_id
-     from payment_instruction ")
+  (str "select id, organisation_id, debtor_account_id, creditor_name, creditor_account,
+               amount_minor, currency, value_date, purpose_code, status,
+               created_by, created_at, reverses_id, retries_id, "
+       retried-by-column
+       " from payment_instruction "))
 
 (defn- row->instruction
   [row]
@@ -76,7 +109,12 @@
      :status            (keyword (:status row))
      :created-by        (:created-by row)
      :created-at        (db/->instant (:created-at row))
-     :reverses-id       (:reverses-id row)}))
+     :reverses-id       (:reverses-id row)
+     ;; The link this instruction carries: the returned instruction it replaces.
+     :retries-id        (:retries-id row)
+     ;; The link others carry to it, derived. Empty for almost every
+     ;; instruction, which is why it is a vector and never nil.
+     :retried-by-ids    (db/->uuids (:retried-by-ids row))}))
 
 ;; ---------------------------------------------------------------------------
 ;; Reading
@@ -155,8 +193,8 @@
              ["insert into payment_instruction
                  (id, organisation_id, debtor_account_id, creditor_name,
                   creditor_account, amount_minor, currency, value_date,
-                  purpose_code, status, created_by, reverses_id)
-               values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                  purpose_code, status, created_by, reverses_id, retries_id)
+               values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                returning created_at"
               (:id instruction) (:organisation-id instruction)
               (:debtor-account-id instruction) (:creditor-name instruction)
@@ -164,8 +202,12 @@
               (:minor-units (:amount instruction)) (:currency (:amount instruction))
               (:value-date instruction) (:purpose-code instruction)
               (name (:status instruction)) (:created-by instruction)
-              (:reverses-id instruction)])]
-    (assoc instruction :created-at (db/->instant (:created-at row)))))
+              (:reverses-id instruction) (:retries-id instruction)])]
+    ;; A brand new instruction is retried by nothing, and says so as an empty
+    ;; vector rather than by omitting the key — the shape a row read back has.
+    (assoc instruction
+           :created-at     (db/->instant (:created-at row))
+           :retried-by-ids [])))
 
 (defn- assert-debtor-account!
   "The debtor account must exist in this organisation, accept postings, and
@@ -242,27 +284,94 @@
                   :reversal-currency (:currency amount)}))
     original))
 
+(defn- assert-retry-target!
+  "A retry must name a **returned** instruction in the same organisation.
+
+  [ADR-0019](../../../docs/ADR/0019-a-returned-payment-is-terminal-and-retries-as-a-new-instruction.md)
+  ruled that `returned` is terminal and that a second attempt is a *new*
+  instruction, raised, submitted and approved on its own merits — and named the
+  cost it accepted: nothing in the record related the retry to the payment it
+  replaced. This is the check behind that reference.
+
+  Two rules and no more, which is the whole of ADR-0024's decision:
+
+  - **The target is `returned`.** Not `settled` (that is a reversal), not
+    `failed`, not still in flight. Read from
+    `clofin.payments.state/retryable-states`, so the answer lives beside every
+    other rule about status rather than as an `=` written here.
+  - **The target is in this organisation.** An instruction in another
+    organisation is reported as *not existing*, exactly as
+    `assert-debtor-account!` reports a foreign account: saying \"another
+    organisation's\" would confirm that a guessed UUID names a real payment
+    somewhere else, which is a tenancy disclosure (C-08).
+
+  Deliberately no rule about the amount, the currency, the beneficiary or the
+  value date. A return is **new information** — a closed account, a rejected
+  beneficiary — and correcting one of those is the ordinary reason to retry; a
+  link that only accepted an identical payment would refuse exactly the retries
+  that matter. ADR-0024 states that rather than leaving it to be inferred from
+  the absence of a check.
+
+  Read `for update` for the reason `assert-reversal-target!` gives: a link
+  raised against a state that changed underneath it is validate-then-write, and
+  that is a race (standing lesson **L-8**). `returned` is terminal today, so the
+  status cannot move; the lock is what keeps that true if a later increment
+  gives it an arrow."
+  [tx {:keys [organisation-id retries-id]}]
+  (let [original (or (row->instruction
+                      (db/query-one tx [(str instruction-columns
+                                             "where organisation_id = ? and id = ? for update")
+                                        organisation-id retries-id]))
+                     (err/fail! :unprocessable
+                                "The instruction being retried does not exist in this organisation"
+                                {:retries-id (str retries-id)}))]
+    (state/assert-retryable! (:status original))
+    original))
+
+(defn- assert-one-linkage!
+  "An instruction succeeds a settled payment or replaces a returned one, never
+  both.
+
+  A reversal and a retry are opposite statements about opposite terminal
+  outcomes — one says *that payment happened and is being undone*, the other
+  says *that payment did not happen and is being attempted again* — so a record
+  claiming both is a record that means nothing. Refused as a field failure
+  naming both members rather than silently preferring one, because a caller that
+  sent both has a bug and needs to be told which half to remove."
+  [{:keys [reverses-id retries-id]}]
+  (when (and reverses-id retries-id)
+    (err/fail! :field-validation "Request failed validation"
+               (array-map :retries-id  "cannot be set on a reversal"
+                          :reverses-id "cannot be set on a retry"))))
+
 (defn create-instruction!
   "Persist a new instruction in `draft`. Returns it as stored.
 
   A caller cannot choose the status: an instruction that arrived already
   approved would be an approval nobody gave. `candidate` carries the id, the
   creating actor and — when this is a reversal — the settled instruction being
-  reversed."
+  reversed, or — when it is a retry — the returned instruction it replaces."
   [source candidate opts]
   (let [drafted (instruction/draft candidate opts)]
+    (assert-one-linkage! drafted)
     (db/transactionally
      source
      (fn [tx]
-       ;; Reversal target first, debtor account second — the lock order this
-       ;; namespace's docstring fixes. `assert-reversal-target!` locks a
-       ;; `payment_instruction` row and `assert-debtor-account!` a
-       ;; `ledger_account` row; `amend!` takes the same two in the same
-       ;; sequence. Taken in opposite orders by two concurrent callers, these
-       ;; deadlock — which is why F-004's `for update` could not simply be added
-       ;; without also fixing the order here.
+       ;; Link target first, debtor account second — the lock order this
+       ;; namespace's docstring fixes. `assert-reversal-target!` and
+       ;; `assert-retry-target!` lock a `payment_instruction` row and
+       ;; `assert-debtor-account!` a `ledger_account` row; `amend!` takes the
+       ;; same two in the same sequence. Taken in opposite orders by two
+       ;; concurrent callers, these deadlock — which is why F-004's `for update`
+       ;; could not simply be added without also fixing the order here.
+       ;;
+       ;; At most one of the two runs: `assert-one-linkage!` above has already
+       ;; refused an instruction claiming to be both, so this never takes two
+       ;; locks of one row type in an unfixed order.
        (when (:reverses-id drafted)
          (assert-reversal-target! tx drafted))
+       (when (:retries-id drafted)
+         (assert-retry-target! tx drafted))
        (assert-debtor-account! tx drafted)
        (try
          (insert! tx drafted)

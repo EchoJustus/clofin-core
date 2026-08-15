@@ -228,8 +228,8 @@
 
    {:method :post :path "/reconciliation-adjustments/:id/approvals"
     :operation-id "approveReconciliationAdjustment"
-    :handler (reconciliation/approve-adjustment pool)
-    :summary "Approve a reconciliation adjustment, posting it when complete"}
+    :handler (reconciliation/decide-adjustment pool)
+    :summary "Decide a reconciliation adjustment, posting or refusing it"}
 
    {:method :get :path "/reconciliation-status"
     :operation-id "getReconciliationStatus"

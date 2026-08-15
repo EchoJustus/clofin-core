@@ -226,7 +226,17 @@
     (:created-at pi)  (assoc "createdAt" (str (:created-at pi)))
     ;; Present only on a reversal, where it names the settled instruction this
     ;; one was raised against.
-    (:reverses-id pi) (assoc "reversesId" (str (:reverses-id pi)))))
+    (:reverses-id pi) (assoc "reversesId" (str (:reverses-id pi)))
+    ;; Present only on a retry, where it names the returned instruction this one
+    ;; was raised to replace (ADR-0019, ADR-0024).
+    (:retries-id pi)  (assoc "retriesId" (str (:retries-id pi)))
+    ;; The other end of the same link, derived rather than stored. Rendered only
+    ;; when there is one, so an ordinary instruction carries no empty array — and
+    ;; a returned instruction that *has* been retried says so from its own
+    ;; resource, which is what makes the provenance answerable without knowing
+    ;; the retry's id first.
+    (seq (:retried-by-ids pi))
+    (assoc "retriedByIds" (mapv str (:retried-by-ids pi)))))
 
 (defn actor->wire
   "An actor, as much of one as any caller needs to see.

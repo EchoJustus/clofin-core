@@ -115,6 +115,27 @@
          ;; item of ten completes nothing, and a batch with unresolved items is
          ;; not completed however many responses have arrived.
          "settlement-batch.completed"
+         ;; The **second** move of a derived status that had already reached a
+         ;; terminal value: a late `timeout-resolution` says what really happened
+         ;; to an item the sweep had given up on, and a batch that derived to
+         ;; `failed` becomes `settled` or `partially-settled`. That is a real
+         ;; change to a real column with a real actor behind it, and until this
+         ;; term it left no event whose subject was the batch — the one disclosed
+         ;; exception on C-05, found by the `ref-1` release audit as **A-004**
+         ;; and carried as named debt through two increments.
+         ;;
+         ;; `restated` rather than a second `completed`, and the distinction is
+         ;; L-7's: `completed` names the transition *into* a complete batch, and
+         ;; that transition happened earlier, under a different actor and a
+         ;; different correlation id. Two `completed` events for one batch would
+         ;; be F-005's mislabelling with a new name. "Restated" is what a set of
+         ;; books calls a figure that later information corrected, which is
+         ;; exactly what a late answer does to a batch's outcome.
+         ;;
+         ;; Emitted only where the derived status actually moves. A late
+         ;; resolution that leaves `partially-settled` where it was changes no
+         ;; batch-level fact and must leave no event saying it did.
+         "settlement-batch.status-restated"
          ;; The sweep is a state change to the items it marks, caused by the
          ;; passage of time rather than by a scheme. Its own term, because
          ;; "we stopped waiting" is not "the scheme answered".
@@ -151,7 +172,19 @@
          ;; when the approvals it needs exist. Collapsing them would make a
          ;; count of postings a count of proposals, which is F-005's shape.
          "reconciliation-adjustment.proposed"
-         "reconciliation-adjustment.posted"]))
+         "reconciliation-adjustment.posted"
+         ;; The third thing that can happen to a proposal, and the one that left
+         ;; no evidence at all until TASK-010: an approver refused it, with a
+         ;; reason. Its own term beside `posted` because they are two different
+         ;; endings of one lifecycle and counting either as the other would tell
+         ;; an auditor a correction was made when one was declined.
+         ;;
+         ;; Emitted **only** in the transaction where the adjustment reaches
+         ;; `rejected`, which is L-7's requirement of a term named after a
+         ;; transition. The decision itself is `approval.recorded`, as it is for
+         ;; every other decision in CloFin — one refusal, two events, because a
+         ;; decision being taken and a subject becoming terminal are two facts.
+         "reconciliation-adjustment.rejected"]))
 
 (def subject-types
   "Every kind of thing an audit event may be about.
@@ -366,9 +399,27 @@
   so that a digest distinguishes a submission from an amendment from a
   cancellation. Deliberately explicit rather than \"the whole map\": a value
   read back from a row and one built in memory differ in incidental keys, and a
-  digest that changed depending on which one it was handed would prove nothing."
+  digest that changed depending on which one it was handed would prove nothing.
+
+  **`:retries-id` is here because the linkage is an audited fact, not a
+  convenience column** (ADR-0024). A retry's `payment.created` event therefore
+  carries, in its after digest, which returned payment this one replaces — so
+  the relation is provable from the trail and not only from the row, and a
+  linkage altered afterwards would no longer match the digest the creation left
+  behind. `:reverses-id` has been in this projection for the same reason since
+  the field existed.
+
+  **`:retried-by-ids` is deliberately absent, and its absence is load-bearing.**
+  It is derived at read time from other rows, so a projection carrying it would
+  give one instruction two different digests before and after somebody else
+  raised a retry against it — a before/after pair that differed for a reason
+  that is not a change to this record. That is the same reasoning that keeps
+  `age-seconds` out of `reconciliation-break-fields` and a balance out of
+  `account-fields`. The retry's own creation event is where that fact is
+  recorded."
   [:id :organisation-id :debtor-account-id :creditor-name :creditor-account
-   :amount :value-date :purpose-code :status :created-by :reverses-id])
+   :amount :value-date :purpose-code :status :created-by :reverses-id
+   :retries-id])
 
 (defn instruction-subject
   "The projection of an instruction that its audit digests are taken over."

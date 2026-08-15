@@ -65,6 +65,8 @@
     :read #(java.util.UUID/fromString %) :unreadable "must be a UUID"}
    {:key :reverses-id       :wire "reversesId"
     :read #(java.util.UUID/fromString %) :unreadable "must be a UUID"}
+   {:key :retries-id        :wire "retriesId"
+    :read #(java.util.UUID/fromString %) :unreadable "must be a UUID"}
    {:key :creditor-name     :wire "creditorName"}
    {:key :creditor-account  :wire "creditorAccount"}
    {:key :purpose-code      :wire "purposeCode"}
@@ -269,6 +271,18 @@
   A reversal is an ordinary creation carrying `reversesId` (PR-043). It is a
   **new** instruction — the settled one it names is not touched, because a
   settled payment is never mutated (`DOMAIN_MODEL.md` §3 rule 4).
+
+  **A retry is an ordinary creation carrying `retriesId`** (ADR-0019,
+  ADR-0024), and it is a new instruction for the same reason with a different
+  terminal outcome behind it: the `returned` one it names is not touched, and
+  the retry is submitted and approved entirely on its own merits. The two
+  members are mutually exclusive — a payment succeeds a settled one or replaces
+  a returned one, never both — and sending both is a `422` naming both.
+
+  Neither link may be amended afterwards. `retriesId` in particular is refused
+  by the database as well (`payment_instruction_retry_link_immutable`), because
+  provenance an operator can rewrite is provenance an investigation cannot rely
+  on.
 
   `createdBy` is the authenticated actor. It is now evidence of who raised the
   payment, which is what makes it usable as the maker side of C-01 — and a

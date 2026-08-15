@@ -31,6 +31,7 @@
 
   Run it: `make diagrams` to write, `make diagrams-check` to verify."
   (:require [clofin.payments.state :as state]
+            [clofin.recon.adjustment :as adjustment]
             [clofin.recon.break-state :as break-state]
             [clofin.tools.markdown :as md]
             [clofin.tools.mermaid :as mmd]
@@ -91,6 +92,28 @@
                                         (keys break-state/transitions))))
    :edges    (vec (sort-by (juxt (comp name first) (comp name second))
                            (for [[from events] break-state/transitions
+                                 [event to]    events]
+                             [from event to])))})
+
+(defn adjustment-lifecycle
+  "The reconciliation adjustment lifecycle as diagram-shaped data, read from
+  `clofin.recon.adjustment/transitions`.
+
+  The **third** reader of this shape and the third user of one emitter, for the
+  reason `break-lifecycle` gives: three drawings from three tables through one
+  renderer is three chances for a table to be misdrawn; three renderers would be
+  three chances for a renderer to be wrong as well.
+
+  It exists at all because the adjustment acquired a second ending. While
+  `proposed → posted` was the only move, the statuses were a set and there was
+  nothing to draw; a refusal is a move, so there is (ADR-0025)."
+  []
+  {:states   (vec (sort-by name (keys adjustment/transitions)))
+   :initial  adjustment/initial-status
+   :terminal (vec (sort-by name (filter adjustment/terminal?
+                                        (keys adjustment/transitions))))
+   :edges    (vec (sort-by (juxt (comp name first) (comp name second))
+                           (for [[from events] adjustment/transitions
                                  [event to]    events]
                              [from event to])))})
 
@@ -449,6 +472,7 @@
   (let [life       (lifecycle)
         life-block (lifecycle-mermaid life)
         break-life (break-lifecycle)
+        adj-life   (adjustment-lifecycle)
         topo       (topology root)
         ctrls      (controls root)
         legend     (status-legend root)]
@@ -465,6 +489,7 @@
           "|---|---|\n"
           "| [Payment instruction lifecycle](payment-lifecycle.md) | `clofin.payments.state/transitions` |\n"
           "| [Reconciliation break lifecycle](reconciliation-break-lifecycle.md) | `clofin.recon.break-state/transitions` |\n"
+          "| [Reconciliation adjustment lifecycle](reconciliation-adjustment-lifecycle.md) | `clofin.recon.adjustment/transitions` |\n"
           "| [Bounded-context topology](context-topology.md) | [`ARCHITECTURE.md` §3](../../ARCHITECTURE.md) and the `ns` forms under `src/` |\n"
           "| [Control map](control-map.md) | [`COMPLIANCE.md` §2](../COMPLIANCE.md) |\n\n"
           "To change a diagram, change its source and run `make diagrams`.\n")
@@ -505,6 +530,32 @@
                   "state with no driver is a promise the product does not keep.\n\n"
                   "A break's **age** is derived from its `openedAt` whenever it is read and is\n"
                   "stored nowhere, so it is not a state and appears on no diagram.\n")})
+
+     "docs/diagrams/reconciliation-adjustment-lifecycle.md"
+     (document
+      {:title "Reconciliation adjustment lifecycle"
+       :source-prose "`clofin.recon.adjustment/transitions`"
+       :body (str (lifecycle-mermaid adj-life) "\n\n"
+                  "Every status, every event and every permitted pair above is read from that\n"
+                  "table. The terminal statuses — the ones with an arrow to `[*]` — are\n"
+                  "**derived** through `clofin.recon.adjustment/terminal?` rather than listed, so\n"
+                  "a status that gains an outgoing transition stops being drawn as terminal in\n"
+                  "the same commit that gives it one.\n\n"
+                  "**Both endings are terminal, and they are not the same ending.** `post` puts a\n"
+                  "balanced entry in the journal through the ordinary posting path and resolves\n"
+                  "the break; `reject` records that an approver refused the correction, with a\n"
+                  "reason, and leaves the break exactly where it was — so a different adjustment\n"
+                  "may be raised against it. Counting one as the other would tell a reader that a\n"
+                  "correction was made when one was declined.\n\n"
+                  "**Each arrow has a driver.** `post` is driven by the transaction in which the\n"
+                  "approvals an adjustment needs first exist, and `reject` by a `rejected`\n"
+                  "decision on `POST /reconciliation-adjustments/{id}/approvals`. Until\n"
+                  "[ADR-0025](../ADR/0025-two-audit-terms-for-changes-the-trail-did-not-carry.md)\n"
+                  "the second arrow had no driver, so there was no status at the end of it: a\n"
+                  "status nothing can reach is worse than an absent one.\n\n"
+                  "How many approvals an adjustment needs is **not** on this diagram. It is a\n"
+                  "number stored on the row at proposal, not a state, and\n"
+                  "[`DOMAIN_MODEL.md` §2.4](../DOMAIN_MODEL.md) states it beside this drawing.\n")})
 
      "docs/diagrams/context-topology.md"
      (document

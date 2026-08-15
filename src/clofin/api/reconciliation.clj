@@ -23,19 +23,21 @@
     one.
   - `401` / `403` — no actor, or an actor without the permission. Reads need
     `:reconciliation/read`; ingesting, assigning and proposing need
-    `:reconciliation/execute`. Approving an adjustment names **no** permission
+    `:reconciliation/execute`. Deciding on an adjustment names **no** permission
     at the boundary, for the reason `clofin.api.principal/authenticated-for`
-    gives: `evaluate` ranks its refusals deliberately, and a boundary check
-    would tell a proposer that fixing their permissions would help when the
-    reason that governs is segregation of duties.
+    gives: `evaluate` ranks its refusals deliberately — and checks
+    `:payment/approve` or `:payment/reject` according to the decision — and a
+    boundary check would tell a proposer that fixing their permissions would
+    help when the reason that governs is segregation of duties.
   - `409` — a statement reference already names a different document, a break is
-    not in a state that permits this, or an adjustment has already posted. On
-    `ingestReconciliationStatement` this status is rendered **after** the
-    transaction commits, so the refused statement's receipt survives its own
-    refusal (audit finding **F-008**, standing lesson **L-11**).
+    not in a state that permits this, or an adjustment has already reached a
+    terminal status. On `ingestReconciliationStatement` this status is rendered
+    **after** the transaction commits, so the refused statement's receipt
+    survives its own refusal (audit finding **F-008**, standing lesson **L-11**).
   - `422` — understood, and the organisation is not set up for it: no
     `1300-IN-TRANSIT` in the statement's currency, no `2200-UNAPPLIED` to post
-    an adjustment to, no approval band configured.
+    an adjustment to, no approval band configured — or a rejection sent with no
+    reason.
 
   **No `Idempotency-Key` header**, and that is a decision rather than an
   omission. Replay protection here is the statement's own identity — its
@@ -52,6 +54,7 @@
   all (C-05, I9)."
   (:require [clofin.api.principal :as principal]
             [clofin.api.wire :as wire]
+            [clofin.authz.approval :as approval]
             [clofin.db.core :as db]
             [clofin.error :as err]
             [clofin.http.response :as resp]
@@ -98,7 +101,15 @@
   age is wrong the moment it is written. It is rendered on every break because
   age is half of what makes a break workable: a queue that shows what is wrong
   and not how long it has been wrong is a queue that ages quietly, which is the
-  failure PR-052 exists to prevent."
+  failure PR-052 exists to prevent.
+
+  `instructionId` and `retriedByInstructionIds` are derived the same way and
+  answer the question an investigator holding a break about a **returned**
+  payment asks first: which payment is this, and has it been raised again?
+  Before ADR-0024 the answer was reachable only by matching counterparty and
+  amount by eye. `retriedByInstructionIds` is a list because the linkage
+  deliberately carries no uniqueness rule — see ADR-0024 — and is rendered only
+  when there is something in it, so an ordinary break carries no empty array."
   [brk]
   (cond-> {"id"          (str (:id brk))
            "statementId" (str (:statement-id brk))
@@ -117,19 +128,30 @@
     (:entry-id brk)         (assoc "entryId" (str (:entry-id brk)))
     (:statement-amount brk) (assoc "statementAmount" (money/->wire (:statement-amount brk)))
     (:ledger-amount brk)    (assoc "ledgerAmount" (money/->wire (:ledger-amount brk)))
-    (:resolved-at brk)      (assoc "resolvedAt" (str (:resolved-at brk)))))
+    (:resolved-at brk)      (assoc "resolvedAt" (str (:resolved-at brk)))
+    (:instruction-id brk)   (assoc "instructionId" (str (:instruction-id brk)))
+    (seq (:retried-by-ids brk))
+    (assoc "retriedByInstructionIds" (mapv str (:retried-by-ids brk)))))
 
 (defn- adjustment->wire
+  "One adjustment, with the moves its status still allows.
+
+  `permittedTransitions` is derived from `clofin.recon.adjustment/transitions`,
+  so the API cannot advertise a decision the lifecycle would refuse — the same
+  courtesy `instruction->wire` and `break->wire` extend (ADR-0014). It is what
+  tells a caller holding a `proposed` adjustment that both `post` and `reject`
+  are open to it, and a caller holding a `rejected` one that nothing is."
   [adj]
   (cond-> {"id"                 (str (:id adj))
            "breakId"            (str (:break-id adj))
            "amount"             (money/->wire (:amount adj))
            "direction"          (name (:direction adj))
            "narrative"          (:narrative adj)
-           "status"             (:status adj)
+           "status"             (name (:status adj))
            "approvalsRequired"  (:approvals-required adj)
            "createdBy"          (str (:created-by adj))
-           "createdAt"          (str (:created-at adj))}
+           "createdAt"          (str (:created-at adj))
+           "permittedTransitions" (mapv name (adjustment/permitted-events (:status adj)))}
     (:entry-id adj)  (assoc "entryId" (str (:entry-id adj)))
     (:posted-at adj) (assoc "postedAt" (str (:posted-at adj)))))
 
@@ -378,16 +400,30 @@
                            "posted" (boolean (:posted? result))
                            "break"  (break->wire (:break result)))))))
 
-(defn approve-adjustment
+(defn decide-adjustment
   "`POST /reconciliation-adjustments/:id/approvals` — a second, different actor
-  agrees (PR-053, C-01, C-02).
+  agrees, or refuses (PR-053, C-01, C-02, C-05).
+
+  `decision` is `approved` or `rejected` and defaults to `approved`, which is
+  the member and the default `POST /payment-instructions/{id}/approvals` already
+  uses. One vocabulary for one maker–checker control: an approver deciding about
+  an adjustment sends what they would send about a payment, and a `reason` is
+  **required** when they refuse — a rejection whose reason is retained is the
+  difference between a trail that explains a refused correction and one that
+  merely records that somebody refused it.
+
+  A rejection is terminal for the adjustment and leaves the break exactly where
+  it was, so a different adjustment may be raised against it. Before ADR-0025
+  there was no way to say no at all: an approver who disagreed simply did not
+  answer, the proposal sat `proposed` for ever, and nothing recorded that
+  anybody had considered it.
 
   No permission is checked at this boundary. `clofin.authz.approval/evaluate`
-  checks `:payment/approve` **and** the maker, the limit and the count, and it
-  ranks those reasons deliberately — segregation of duties first, because it is
-  the only refusal that can never be resolved. A boundary check would pre-empt
-  that ranking and tell the adjustment's own proposer that fixing their
-  permissions would help.
+  checks `:payment/approve` — or `:payment/reject` — **and** the maker, the
+  limit and the count, and it ranks those reasons deliberately — segregation of
+  duties first, because it is the only refusal that can never be resolved. A
+  boundary check would pre-empt that ranking and tell the adjustment's own
+  proposer that fixing their permissions would help.
 
   The adjustment posts in the same transaction as the approval that completes
   its requirement, so an approved-but-unposted adjustment is not a state that
@@ -397,14 +433,22 @@
     (let [body (optional-object request)
           [actor organisation-id] (principal/authenticated-for pool request body)
           id (wire/read-uuid (get-in request [:path-params :id]) "id")
+          ;; Absent means `approved`: this endpoint accepted no decision at all
+          ;; before ADR-0025, and every caller written against it sends a body
+          ;; with no `decision` member — or no body. A default that changed
+          ;; their meaning would be a contract break dressed as a feature.
+          decision (if (contains? body "decision")
+                     (wire/read-enum (get body "decision") "decision" approval/decisions)
+                     :approved)
           reason (let [r (get body "reason")]
                    (when (and (string? r) (not (str/blank? r))) (str/trim r)))
           result (db/with-transaction [tx pool]
-                   (service/approve-adjustment!
+                   (service/decide-adjustment!
                     tx {:organisation-id organisation-id
                         :adjustment-id   id
                         :approval-id     (random-uuid)
                         :actor           actor
+                        :decision        decision
                         :reason          reason
                         :correlation-id  (:correlation-id request)
                         :entry-id        (random-uuid)
@@ -414,6 +458,7 @@
                      "adjustment"         (adjustment->wire (:adjustment result))
                      "break"              (break->wire (:break result))
                      "posted"             (boolean (:posted? result))
+                     "rejected"           (boolean (:rejected? result))
                      "approvalsHeld"      (:approvals-held result)
                      "approvalsRequired"  (:approvals-required result)}))))
 

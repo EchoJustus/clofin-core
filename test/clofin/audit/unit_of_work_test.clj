@@ -281,11 +281,23 @@
                      :occurred-at (Instant/parse "2026-08-04T09:00:00Z")}))}
 
    {:ns 'clofin.recon.service
-    :label "approve-adjustment!"
+    :label "decide-adjustment!"
     :call (fn [source {:keys [org actor]}]
-            (recon-service/approve-adjustment!
+            (recon-service/decide-adjustment!
              source {:organisation-id org :adjustment-id (random-uuid)
                      :approval-id (random-uuid) :actor {:id actor}
+                     :decision :approved
+                     :correlation-id "corr-f-011"
+                     :entry-id (random-uuid)
+                     :occurred-at (Instant/parse "2026-08-04T09:00:00Z")}))}
+
+   {:ns 'clofin.recon.service
+    :label "decide-adjustment! (rejecting)"
+    :call (fn [source {:keys [org actor]}]
+            (recon-service/decide-adjustment!
+             source {:organisation-id org :adjustment-id (random-uuid)
+                     :approval-id (random-uuid) :actor {:id actor}
+                     :decision :rejected :reason "the scheme was right"
                      :correlation-id "corr-f-011"
                      :entry-id (random-uuid)
                      :occurred-at (Instant/parse "2026-08-04T09:00:00Z")}))}])
