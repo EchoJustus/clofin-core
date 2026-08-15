@@ -186,6 +186,15 @@ visitor behind a shared address can therefore find the release list unavailable.
 including that the cockpit "holds no token to raise it — by design", rather than
 rendering an empty list that would read as "there are no releases".
 
+**N-4a — `clofin-cockpit` is a private repository, which the Pages step will
+notice before the missing setting does.** GitHub Pages from a private repository
+requires a plan that supports it; on a free plan the `pages.yml` deploy will
+fail regardless of the Pages source setting. Publishing therefore needs a
+decision the operator owns: make the repository public — which its README,
+written to be public from its first commit, clearly anticipates — or use a plan
+that publishes from private sources. Named here because §7 would otherwise
+attribute a future Pages failure entirely to the unset source.
+
 **N-5 — Three of the words this repository checks for are now reserved in its
 own shipped text.** Because the deployed JavaScript keeps its comments,
 `no-unqualified-audited` reads them too. Three comments I wrote during this
@@ -299,6 +308,20 @@ guard can state without qualification.
   `api.github.com` URLs.
 - The three negative controls in §5, each run and recorded verbatim.
 
+**One thing I did *not* verify, stated rather than implied.** Every request out
+of this session — `curl` and the browser alike — traverses the environment's
+agent proxy, which authenticates them: the rate-limit header came back as
+`15000` in both, where an anonymous caller would see `60`. **The anonymous read
+path was therefore never exercised here.** What is established is narrower than
+"unauthenticated reads work": the cockpit *sends* no credential (`credentials:
+"omit"`, no authorisation header, and `tools/guard-network.mjs` fails the build
+if either appears), `clofin-core` is a public repository, and
+`access-control-allow-origin: *` was observed on the responses. Anonymous access
+should therefore work in production, but that specific expectation is an
+inference from those facts and not something this session measured. The first
+real evidence will be the deployed page, which is another reason not to treat
+the Pages deploy as a formality.
+
 **A defect this found that nothing else would have.** The first browser run
 failed with an opaque *"Failed to fetch"*. The cause was mine: `src/net.ts` sent
 an `X-GitHub-Api-Version` header, which is not CORS-safelisted, so the browser
@@ -314,23 +337,30 @@ outstanding.** I have finished verifying.
 
 **Two things are still running or not yet runnable, and neither is mine:**
 
-1. **CI on both pull requests.** `clofin-core` #21 and `clofin-cockpit` #1 were
-   pushed and their workflows trigger on these branches. Their results are not
-   in hand at the time of writing.
+1. **CI.** `clofin-cockpit` #1 — **green**: both the push and the pull-request
+   runs of *Build and check* completed `success`, and `pages.yml` correctly did
+   **not** run, which is AC-8's "on `main` only" observed rather than asserted.
+   `clofin-core` #21 — its checks are still settling at the time of writing and
+   are not in hand; the same `make verify` was run locally on the pushed commit
+   and is quoted above.
 2. **The Pages deployment has not run and cannot yet.** `pages.yml` triggers on
-   `main` only, by design, so the first deploy happens after #1 merges. It will
-   additionally fail until an operator sets the repository's Pages source to
-   **GitHub Actions** (Settings → Pages). That is deliberate and follows
-   `clofin-trace`'s precedent: `ci.yml` builds the site and runs both checks
-   independently, so a missing repository setting never looks like a broken
-   build. **No cockpit URL is claimed to be live in this REQ**, because none is.
+   `main` only, by design, so the first deploy happens after #1 merges. Two
+   things must be true before it can succeed: the repository's Pages source set
+   to **GitHub Actions** (Settings → Pages), and the visibility question in
+   **N-4a** resolved. Neither is mine. The separation follows `clofin-trace`'s
+   precedent — `ci.yml` builds the site and runs both checks independently, so a
+   missing repository setting never looks like a broken build. **No cockpit URL
+   is claimed to be live in this REQ**, because none is.
 
 ## 8. What the next session should pick up
 
 - Master Control: rule on **O-1** (brief correction naming the Tags API) and
   **O-2** (the tense of README rule 3); update the ROADMAP bullet noted in
   **N-2**; decide on **N-3**.
-- Set the `clofin-cockpit` Pages source to GitHub Actions so the first `main`
-  build publishes.
+- Resolve **N-4a** (the repository is private; Pages needs it public or a plan
+  that publishes from private sources) and set the `clofin-cockpit` Pages source
+  to GitHub Actions, so the first `main` build publishes.
+- Confirm on the deployed page that anonymous reads of `clofin-core`'s releases
+  work, which §7 records as inferred rather than measured.
 - Phase 2 remains blocked on `ref-2` and on the CORS decision in `clofin-core`.
   ADR-0026 states explicitly that it pre-approves neither.
