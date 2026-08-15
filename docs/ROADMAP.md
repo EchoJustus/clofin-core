@@ -27,7 +27,8 @@ and this table is stale.
 | 5v.3 | Visual layer — trace hardening and cross-links | [TASK-009](briefs/009-TASK-trace-hardening-and-cross-links.md) | ✅ `CLOSED` — merged in PR #17 (`ddf39c1`) + `clofin-trace` PR #2 (`bc0017c`) | green, both repositories |
 | 6 | Reconciliation | [TASK-008](briefs/008-TASK-reconciliation.md) | ✅ `CLOSED` — merged in PR #16 (`a41e69f`); O-1/O-2 routed to TASK-010 | green, 808 tests / 5864 assertions |
 | 6c | Reconciliation completion (the three disclosed gaps) | [TASK-010](briefs/010-TASK-reconciliation-completion.md) | ✅ `CLOSED` — merged in PR #19 (`37d2d02`); C-05's disclosed exception closed on every copy | green, 841 tests / 6324 assertions |
-| 7–9 | Financial crime onwards | not yet briefed | 💭 later | — |
+| 8.1 | Cockpit — ADR-0026, scaffold, release browser, honesty layer | [TASK-011](briefs/011-TASK-cockpit-initialization.md) | ✅ `CLOSED` — PR #21 (`eb3a561`) + `clofin-cockpit` PR #1 (`f20f4a6`) | green, both repositories |
+| 7, 9 | Financial crime; programmable settlement | not yet briefed | 💭 later | — |
 
 **Controls now enforced on `main`.** As of 2026-08-04 the increment-3/4 stack is
 merged (PR #4 `31306dd`, PR #5 `5ff00eb`): C-06 (idempotency), C-01 (segregation
@@ -79,11 +80,15 @@ versioned documents alone; documents make the system auditable, not visible.
 Reconciliation is unchanged in content and position; it starts later by that
 amount. A delay discovered afterwards is worse than one stated in advance.
 
-**Increment 8 (operator console) does not move**, in `clofin-core`, for the
-reason this roadmap already gives. When it arrives it brings an npm toolchain
-into a repository with a stated minimal-dependency doctrine — that needs its own
-ADR at increment 8, qualifying ADR-0004 and NFR-007. Recorded now so it is not
-discovered late.
+**Increment 8 (operator console) relocated — ruled 2026-08-15 (D1/D2).** CloFin
+becomes **three repositories**: the operator interface is built in
+**`clofin-cockpit`** rather than inside `clofin-core`, which keeps the frontend
+toolchain out of a repository with a stated minimal-dependency doctrine and
+keeps the release-audit subject clean — the same reasoning ADR-0020 applied to
+the walkthrough, now applied consistently. ADR-0026 records the amendment
+(TASK-011); ADR-0004 and NFR-007 continue to govern `clofin-core` unqualified.
+*(This paragraph previously said increment 8 "does not move"; the D1 ruling
+supersedes that, and ADR-0020 gains a dated amendment section.)*
 
 ---
 
@@ -216,9 +221,9 @@ to rediscover them:
 - Rule-based fraud scoring with explainable contributing reasons
 - Case management and disposition with retained rationale
 
-## Increment 8 — Operator interface 💭
+## Increment 8 — Operator interface 💭 *(relocating to `clofin-cockpit` — D1 ruling 2026-08-15, ADR-0026; phase 8.1 in flight as [TASK-011](briefs/011-TASK-cockpit-initialization.md))*
 
-- React/TypeScript console: instruction capture, approval queue, break workbench
+- Operator console: instruction capture, approval queue, break workbench *(toolchain is `clofin-cockpit`'s own decision — its ADR-0001 chose TypeScript with no framework, rejecting React; this line previously predicted "React/TypeScript" and is corrected per 011-REQ)*
 - Chosen deliberately late: the API contract and controls are the substance,
   and a UI built before them would encode the wrong model.
 
