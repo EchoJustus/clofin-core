@@ -12,7 +12,7 @@
 | **Model** | `claude-opus-5` |
 | **Reasoning effort** | High — extended thinking enabled throughout. The harness does not expose a numeric setting to the session, so this is reported as the mode, not as a measured value |
 | **Date** | 2026-08-15 |
-| **Verification still in flight** | **See [§8](#8-verification-l-9).** CI on both pull requests, and the Pages deployment, which cannot run before merge |
+| **Verification still in flight** | **See [§8](#8-verification-l-9).** CI is green on both pull requests at the commits they carried when §8 was written; the commit carrying §8 re-triggers it. The Pages deployment runs on merge — 011-REQ's N-4a is now closed |
 
 ---
 
@@ -637,6 +637,27 @@ to be verified in a real browser, and it is verified for Chromium; the interface
 states the limitation for any other plain-`http` address rather than letting a
 blocked request fail opaquely.
 
+### The deployment shape — served from a subpath, as Pages serves it
+
+GitHub Pages serves this repository at `…/clofin-cockpit/`, not at a root. Every
+asset the page loads is relative, and phase 2 added something phase 1 did not
+have: **profiles fetched at runtime**. Whether a relative fetch resolves
+correctly under a subpath, with a hash route in the address bar, is a
+deployment-shape question that only a subpath can answer — and getting it wrong
+would produce a cockpit that works locally and cannot load a profile once
+published.
+
+Checked: the built site was staged under `/clofin-cockpit/`, served over `https`,
+and driven at `…/clofin-cockpit/#/instances`.
+
+```
+profile card rendered : yes
+profile fetched from  : https://127.0.0.1:4444/clofin-cockpit/profiles/uat-standard.json
+stylesheet/module     : https://127.0.0.1:4444/clofin-cockpit/styles.css,
+                        https://127.0.0.1:4444/clofin-cockpit/js/main.js
+console errors        : none
+```
+
 ## 7. A defect this found that nothing else would have
 
 The first full browser run rendered, beside a commit that **is** `ref-1`'s:
@@ -734,30 +755,48 @@ afterwards with the same results. **Nothing of mine is now outstanding.** The
 earlier version of this sentence claimed that before the review had happened;
 the correction is in §7 rather than removed.
 
-**Three things are still running or not yet runnable, and none is mine:**
+**Four things are still running or outside this session's reach, and none is
+mine:**
 
-1. **CI on `clofin-core` #23 and `clofin-cockpit` #2.** `clofin-cockpit` #2's
-   *Build the cockpit and check it* completed **success** on both its push and
-   pull-request runs, and `pages.yml` correctly did not run. `clofin-core` #23
-   at `159e1bc`: all **six** check runs completed **success** — *Unit, property
-   and contract tests*, *Database integration tests* and *Compose stack smoke
-   test*, once for the push event and once for the pull-request event. The
-   Compose smoke job is one this session could not run — there is no Docker
-   daemon in this environment — so CI is its first execution, and it passed.
+1. **CI, green on both, at the last commit each carried when this was written.**
+   `clofin-cockpit` #2 at `78b5df6`: *Build the cockpit and check it* completed
+   **success** on both its push and pull-request runs, and `pages.yml` correctly
+   did **not** run — AC-8's "on `main` only" observed rather than asserted.
+   `clofin-core` #23 at `7c68ae0`: all **six** check runs completed **success** —
+   *Unit, property and contract tests*, *Database integration tests* and
+   *Compose stack smoke test*, once for the push event and once for the
+   pull-request event. The Compose smoke job is one this session could not run —
+   there is no Docker daemon here — so CI is its first execution, and it passed.
 
-   The caveat is the same one 011-REQ recorded and it is unavoidable: **the
-   commit carrying this paragraph re-triggers both**, and its result cannot be
-   known from inside the document that causes it. That commit also carries the
-   two §7 fixes, so it is not documentation-only; its runs are named in the
-   completion report rather than pre-declared green here.
-2. **The Pages deployment has not run and cannot yet.** `pages.yml` triggers on
-   `main` only, by design, so the first deploy happens after `clofin-cockpit` #2
-   merges. 011-REQ's **N-4a** is unresolved as far as this session can tell:
-   Pages from a private repository needs a plan that supports it, and the Pages
-   source must be set to **GitHub Actions**. Neither is mine. **No cockpit URL is
-   claimed to be live in this REQ**, because none is.
-3. **Nothing else.** The local PostgreSQL instance, the four HTTP servers and the
-   two `clofin-core` processes this session started for the browser evidence are
+   Two things about that, stated rather than smoothed over. An intermediate
+   commit's *Database integration tests* show as **cancelled**: `ci.yml` sets
+   `cancel-in-progress`, so pushing again superseded a run that was still going.
+   That is the workflow behaving as configured, not a failure. And the caveat
+   011-REQ recorded is unavoidable: **the commit carrying this paragraph
+   re-triggers CI**, and its result cannot be known from inside the document
+   that causes it. It is documentation-only, so the expectation is that it
+   matches — but that is an expectation, and the run is named in the completion
+   report rather than pre-declared green here.
+
+2. **The Pages deployment — 011-REQ's N-4a is resolved, and this is the first
+   session that can say so.** `clofin-cockpit` is a **public** repository and its
+   Pages source is set: `pages.yml` has already run twice on `main`, both
+   **success**, and the phase 1 site is live and serving the scope statement as
+   static markup in the document. The deploy for this increment therefore happens
+   when #2 merges, into a configuration known to work rather than one never
+   tried. It has **not** run for this increment's commit, because `pages.yml` is
+   `main`-only by design, so **no claim is made here about a deployed phase 2
+   page** — only that the mechanism is no longer blocked. The subpath check in §6
+   is the part of that risk this session could retire without a deploy.
+
+3. **The anonymous read path is still inferred**, for the second increment
+   running, and cannot be measured from here: this environment's egress is
+   authenticated wherever the page is hosted, so serving it from Pages does not
+   change what this session can observe. It remains the one thing a person with
+   an ordinary browser can check in seconds and this session cannot check at all.
+
+4. **Nothing else.** The local PostgreSQL instance, the HTTP servers and the
+   `clofin-core` processes this session started for the browser evidence are
    scratch infrastructure in an ephemeral container and hold nothing anyone
    needs. Named for completeness so that "what is still running" is a complete
    answer rather than a convenient one.
@@ -783,10 +822,12 @@ the correction is in §7 rather than removed.
 - Decide what to do about **N-1** before the Sol audit on 2026-09-01 — a
   docstring in the release-audit subject claims a header is mandatory on every
   mutating endpoint, and three of them do not require it.
-- Resolve 011-REQ **N-4a** (repository visibility and the Pages source), which
-  still blocks the first deploy, and confirm on the deployed page that anonymous
-  reads work — which §8 records as inferred rather than measured, for the second
-  increment running.
+- Confirm on the deployed page that anonymous reads of `clofin-core`'s releases
+  work — §8 records it as inferred rather than measured, for the second
+  increment running, and it is the one check this session could not make and a
+  person with a browser can make in seconds. 011-REQ's **N-4a** itself is
+  **closed**: the repository is public, the Pages source is set, and `pages.yml`
+  has deployed twice.
 - Update the ROADMAP bullet noted in **N-6**.
 - Phase 3 — the operation flows — now has what it needs: an instance the cockpit
   can reach, a seeded organisation, and a runner that halts honestly.
