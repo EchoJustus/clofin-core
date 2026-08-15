@@ -3,13 +3,13 @@
 | Field | Value |
 |---|---|
 | **Increment** | 8.4 (cockpit, phase 4) — **`clofin-cockpit` only; `clofin-core` remains frozen** |
-| **Status** | `IN PROGRESS` — dispatched 2026-08-15 |
+| **Status** | `CLOSED` — cockpit PR #4 merged (`9283dbf`), REQ-only core PR #27 merged (`ea428a3`), and the hosted dispatch against `ref-1` run and verified (run #1, success) — the merge-then-verify ruling completed, see Changelog |
 | **Depends on** | TASK-013 ✅ closed — the flow documents and the runner this reuses |
 | **Base branch** | `clofin-cockpit` `main` at `7ee7e28` or later; `clofin-core` at `f533897` is **cloned and driven inside the workflow, never edited** — its only change is the `014-REQ` file |
 | **Requirements** | Driver D5; the cockpit plan (Phase 4, in the PAT-free form ruled at dispatch) |
 | **Controls touched** | None |
 | **Scope** | Medium–Large |
-| **Audit** | Not yet submitted. Cockpit outside release-audit scope; the REQ-only core PR adds no code to the audit subject |
+| **Audit** | `014-REQ` filed 2026-08-15; its O-1 joins the post-audit backlog beside 013's O-1/O-2 |
 
 > Status lifecycle: `READY` → `IN PROGRESS` → `IMPLEMENTED` → `AUDITED` → `CLOSED`.
 > Status is maintained by Master Control on the `meta` branch — see AGENT_HANDOFF §1b.
@@ -106,3 +106,49 @@ decision.
 - [ ] Cockpit ADR-0004 records the headless differences and their reasons
 - [ ] Two PRs, cross-referenced; the core PR is the REQ alone
 - [ ] REQ filed as `014-REQ-…` with provenance header, objections, and the L-9 statement
+
+---
+
+## Changelog — rulings and the hosted-run verification (2026-08-15)
+
+*(The REQ is `docs/audits/014-REQ-cockpit-scenario-runner.md` on `main`, landed
+alone in PR #27, `ea428a3` — one file, verified at ingestion.)*
+
+**The dispatch chicken-and-egg, ruled at the Worker's stop-point:**
+merge-then-verify, the Pages precedent. GitHub registers a `workflow_dispatch`
+only on the default branch — checked by the Worker two ways (a parsed-valid
+workflow absent from the registered list) rather than inferred from the `404`.
+Master Control's own dispatch-note workaround was wrong on this point and the
+record says so.
+
+**O-1 (an organisation cannot be found by short name; a batch run therefore
+requires a fresh database): confirmed, disposition ratified.** The remedy is an
+**authenticated** lookup, not an enriched unauthenticated `409` — the id in a
+`409` served to an anonymous caller is a disclosure decision, and the Worker
+called it one. Routed to the post-audit backlog beside 013's O-1/O-2.
+
+**The provenance row's recorded absence is accepted.** The Worker's session
+rule keeps its model identifier out of repository artifacts; writing "known and
+withheld, and why" beats both silent omission and breaking the session's rule.
+The REQ series' provenance convention now admits that form.
+
+**The hosted run — dispatched and verified by Master Control:**
+run #1, <https://github.com/EchoJustus/clofin-cockpit/actions/runs/31903726901>,
+`workflow_dispatch` with `ref-1` / `scheme-play` / `uat-standard`, conclusion
+**success** in 51s. Verified from the run's own logs: the ref resolved to
+`5c7b4badced5e807e1022fce44cbcad38c6d2095` in full; **all 27 steps `done` in
+the expected order** — the creator's `403`, the contradiction's `409`, silence
+sending nothing, the sweep, the late answer — ending `every document finished
+and every figure is the instance's own`, which is the figures re-check passing
+(the job fails otherwise); **`make up` ran the composed stack**, building
+`infra/Dockerfile` on the hosted runner (§6c item 2, previously unexercised in
+every sandbox); **`anonymous: releases 200, tags 200`** — the coverage line was
+computed from the published release body (§6c item 4, the one criterion whose
+evidence only the hosted run could produce); and **`anonymous read probe:
+200 OK … no credential of any kind`** — the anonymous GitHub read path,
+inferred-but-unverified since TASK-011, is now settled by the run itself.
+One residual is the operator's single glance: the rendered summary page (the
+literal `PARTIAL — charter items 1-4 of 8` line and the balance table) is
+rendered HTML the API does not serve; `summary.test.ts` pins the rendering
+against the recorded release body, and the live read succeeded, so the residual
+is presentational, not evidentiary.

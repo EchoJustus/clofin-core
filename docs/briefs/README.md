@@ -51,7 +51,7 @@ table and a brief disagree, the brief on `origin/meta` wins.
 | [011 — `clofin-cockpit` initialization](011-TASK-cockpit-initialization.md) | 8.1 | `CLOSED` — PR #21 (`eb3a561`) + `clofin-cockpit` PR #1 (`f20f4a6`); two objections ruled for the Worker | cockpit repo ✅ | D5, ADR-0026 | Medium |
 | [012 — Cockpit connect and bootstrap](012-TASK-cockpit-connect-and-bootstrap.md) | 8.2 | `CLOSED` — PR #23 (`f174116`) + `clofin-cockpit` PR #2 (`90abb1d`); three objections ruled for the Worker; N-1 pre-declared to the Sol audit | 011 ✅ | D5, ADR-0027 | Large |
 | [013 — Cockpit operations and scheme simulation](013-TASK-cockpit-operations-and-scheme-simulation.md) | 8.3 | `CLOSED` — cockpit PR #3 (`7ee7e28`) + REQ-only core PR #25 (`b962d7f`); frozen core held; two objections ruled for the Worker, both pre-declared to the Sol audit | 012 ✅ | D5, UAT-004…007 | Large |
-| [014 — Cockpit scenario runner](014-TASK-cockpit-scenario-runner.md) | 8.4 | `IN PROGRESS` — dispatched 2026-08-15; PAT-free form; core frozen, REQ-only | 013 ✅ | D5 | Medium–Large |
+| [014 — Cockpit scenario runner](014-TASK-cockpit-scenario-runner.md) | 8.4 | `CLOSED` — cockpit PR #4 (`9283dbf`) + REQ-only core PR #27 (`ea428a3`); hosted run #1 against `ref-1` verified; one objection ruled for the Worker | 013 ✅ | D5 | Medium–Large |
 
 Sequencing follows **product relevance and regulatory risk**, not implementation
 convenience:
