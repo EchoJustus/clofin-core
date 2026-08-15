@@ -3,13 +3,13 @@
 | Field | Value |
 |---|---|
 | **Increment** | 8.1 (cockpit, phase 1) — spans `clofin-core` (one ADR) and `clofin-cockpit` (everything else) |
-| **Status** | `IN PROGRESS` — dispatched 2026-08-15 |
+| **Status** | `IMPLEMENTED` — Worker reported done 2026-08-15: part A (ADR-0026) **merged** in PR #21 (`eb3a561`); part B open as `clofin-cockpit` PR #1 (CI green), **merge held** pending two operator settings (visibility → public, Pages → GitHub Actions; observation N-4a). Both objections ruled, see Changelog |
 | **Depends on** | The operator's D1/D2 ruling of 2026-08-15 (recorded below and in the audits register); the `clofin-cockpit` repository ✅ created with its first-commit README and EPL-2.0 licence (`13e6435`) |
 | **Base branch** | `clofin-core` `main` at `812f732` or later; `clofin-cockpit` `main` at `13e6435` or later |
 | **Requirements** | Driver D5; the cockpit plan of 2026-08-15 (Phase 0 + Phase 1, minus everything `ref-2`- or API-gated) |
 | **Controls touched** | None. The cockpit enforces nothing; `clofin-core` gains one ADR and no code |
 | **Scope** | Medium |
-| **Audit** | Not yet submitted. `clofin-cockpit` is outside release-audit scope; the one `clofin-core` artifact (ADR-0026) is inside it |
+| **Audit** | `011-REQ` filed 2026-08-15 (`docs/audits/011-REQ-cockpit-initialization.md` on `main`); ADR-0026 joins the deferred Sol audit's scope; `clofin-cockpit` itself is outside release-audit scope |
 
 > Status lifecycle: `READY` → `IN PROGRESS` → `IMPLEMENTED` → `AUDITED` → `CLOSED`.
 > Status is maintained by Master Control on the `meta` branch — see AGENT_HANDOFF §1b.
@@ -133,3 +133,34 @@ later phase inherits it. If it is wrong, every later phase amplifies it.
 **The cockpit may never claim.** Any sentence about what a CloFin control
 guarantees is a verbatim quotation from `clofin-core`'s audited documents,
 attributed and linked — RULE 3 governs here exactly as it governs the trace.
+
+---
+
+## Changelog — rulings on the `011-REQ` objections (2026-08-15)
+
+*(The REQ is `docs/audits/011-REQ-cockpit-initialization.md` on `main`, landed
+by PR #21, `eb3a561`.)* Both premises independently verified before ruling:
+Master Control queried the live Releases API and got `target_commitish:
+"main"` — a branch name — while the Tags API dereferences `ref-1` to
+`5c7b4bad…`; and the cockpit repository's `private: true` flag was confirmed
+directly.
+
+| # | Objection | Ruling |
+|---|---|---|
+| O-1 | AC-2 says the commit SHA is "parsed from the release" — but the Releases API does not return a tag's commit; it returns `target_commitish`, usually the literal string `"main"`. Implementing literally would render a branch name labelled "commit" inside the frame whose whole promise is a checkable commit. The Worker read the SHA from the Tags API and never falls back. | **Confirmed — brief defect, Master Control's.** The brief asserted where a value lives without checking the API that serves it — the L-3 class (validate the interface before dispatch) on a REST surface instead of DDL. The Tags-API resolution with no fallback is ratified: a provenance value that cannot be resolved is refused, not approximated, which is the same fail-closed rule the coverage parser follows. |
+| O-2 | "Everything else in the README stands" preserves rule 3's present-tense sentence about GitHub-token handling in an increment that handles no token. The Worker did not edit the protected section and referred the tense here. | **Confirmed — the referral was correct, and the fix is Master Control's to make** (the README was drafted by Master Control at creation). Ruling: rule 3 becomes explicitly forward-tensed — a standing policy for the phase that introduces a token, not a description of a capability that exists. Master Control applies the one-sentence edit directly to `clofin-cockpit` `main` after PR #1 merges, recorded in the commit message as this ruling's execution. |
+
+**Observations, dispositioned.** **N-4a** (the cockpit repository is
+**private**, so Pages cannot deploy on the current plan and anonymous API
+reads are untestable): confirmed live; the fix is the operator's — flip
+visibility to public, then set Pages → Source: GitHub Actions, in that order,
+**before** PR #1 merges, so the main-only `pages.yml` first fires into a
+working configuration. The unverified-anonymous-path statement is accepted as
+exactly the right shape of honesty: what is established is that the cockpit
+sends no credential and `clofin-core` is public; the anonymous rate-limit
+path is exercised the first time a visitor loads the deployed site from
+outside the proxy. The stale ROADMAP "React/TypeScript console" line is
+corrected on `meta` in this commit. The browser-only CORS-preflight discovery
+(`X-GitHub-Api-Version` → `OPTIONS` → 405) is noted as evidence for the
+standing practice the Worker followed: a feature that lives in a browser is
+verified in one.
