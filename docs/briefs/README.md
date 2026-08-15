@@ -50,6 +50,7 @@ table and a brief disagree, the brief on `origin/meta` wins.
 | [010 — Reconciliation completion](010-TASK-reconciliation-completion.md) | 6c | `CLOSED` — merged in PR #19 (`37d2d02`); two objections ruled for the Worker | 008 ✅ | ADR-0019, C-05, 008-REQ O-1/O-2/N-5 | Medium |
 | [011 — `clofin-cockpit` initialization](011-TASK-cockpit-initialization.md) | 8.1 | `CLOSED` — PR #21 (`eb3a561`) + `clofin-cockpit` PR #1 (`f20f4a6`); two objections ruled for the Worker | cockpit repo ✅ | D5, ADR-0026 | Medium |
 | [012 — Cockpit connect and bootstrap](012-TASK-cockpit-connect-and-bootstrap.md) | 8.2 | `CLOSED` — PR #23 (`f174116`) + `clofin-cockpit` PR #2 (`90abb1d`); three objections ruled for the Worker; N-1 pre-declared to the Sol audit | 011 ✅ | D5, ADR-0027 | Large |
+| [013 — Cockpit operations and scheme simulation](013-TASK-cockpit-operations-and-scheme-simulation.md) | 8.3 | `IN PROGRESS` — dispatched 2026-08-15 **over the hold-until-audit recommendation, by operator decision**; core frozen, cockpit-only | 012 ✅ | D5, UAT-004…007 | Large |
 
 Sequencing follows **product relevance and regulatory risk**, not implementation
 convenience:
