@@ -12,6 +12,27 @@
 Append-only. A later change appends a new dated block; an existing block is
 never edited — the record of what was decided, and when, is the point.
 
+**2026-08-14 — Milestone-3 batch audit deferred, by operator decision.**
+TASK-006 (5v.1) and TASK-007 (5v.2) are merged and `CLOSED` with their REQ
+objections ruled, but **neither has received an independent audit**, and their
+register rows stay open until one does. Deferral is not waiver: the next
+commissioned audit — Milestone 3 or the `ref-2` release audit, whichever comes
+first — takes both increments as scope, plus TASK-009 if closed by then, and
+inherits this note. Until then, every claim about the visual layer's assurance
+is bounded by "objection-ruled and Master-Control-verified, not independently
+audited", and nothing may describe it more generously (L-14, L-15).
+
+**2026-08-15 — the deferred debt now spans four increments, and its tier is
+set.** TASK-008 (increment 6, reconciliation) and TASK-009 (5v.3) merged under
+the same deferral. TASK-008 **modifies enforcement code in the authorisation
+domain** (the `approval` table gained a second subject kind; the refusal
+vocabulary moved into `clofin.authz.approval`) and adds migration `0012`, so
+under amendment A1 the deferred audit runs at the **Sol tier**, not Terra. The
+scope when commissioned: TASK-006, 007, 008, 009, TASK-010 if closed by then,
+release-audit charter items 5–7 (carried from `ref-1`), and both deferral
+notes. The longer this runs unaudited, the more the next audit gates — recorded
+so the accumulation is a visible choice, not a drift.
+
 **2026-08-04 — Tiered assurance with a terminal release gate.** Proposed by
 Master Control; **ruled approved by the operator the same day, with amendments
 A1 and A2**, both applied below and in [*Release audits*](#release-audits).

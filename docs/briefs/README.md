@@ -45,6 +45,9 @@ table and a brief disagree, the brief on `origin/meta` wins.
 | [005 — Audit coverage completion](005-TASK-audit-coverage-completion.md) | 4 (completion) | `CLOSED` — merged in PR #6 (`2ba977e`); three objections ruled for the Worker | 003 ✅ merged | PR-072, C-05 | Small |
 | [006 — Generated diagrams and CI doc guards](006-TASK-generated-diagrams.md) | 5v.1 | `CLOSED` — merged in PR #12 (`2237a39`); five objections ruled for the Worker, O-1 actioned on `meta` (L-16) | ADR-0020 ✅ | D5, L-4, L-15 | Medium |
 | [007 — `clofin-trace` replay walkthrough](007-TASK-clofin-trace.md) | 5v.2 | `CLOSED` — part A merged in PR #14 (`261c778`), part B merged in `clofin-trace` PR #1 (`71cb13f`); five objections ruled for the Worker (O-1 → tag-form correction) | 006 ✅, ADR-0020 ✅, `ref-1` ✅ | D5, PR-015 | Large |
+| [008 — Reconciliation](008-TASK-reconciliation.md) | 6 | `CLOSED` — merged in PR #16 (`a41e69f`); four objections ruled, O-1/O-2 routed to TASK-010 | 004 ✅, 006 ✅ | PR-050…054 | Large |
+| [009 — Trace hardening and cross-links](009-TASK-trace-hardening-and-cross-links.md) | 5v.3 | `CLOSED` — merged in PR #17 (`ddf39c1`) + `clofin-trace` PR #2 (`bc0017c`); duplicate dispatch's PR #3 closed unmerged | 007 ✅ | D5 | Small |
+| [010 — Reconciliation completion](010-TASK-reconciliation-completion.md) | 6c | `READY` — the three gaps 008's rulings routed forward | 008 ✅ | ADR-0019, C-05, 008-REQ O-1/O-2/N-5 | Medium |
 
 Sequencing follows **product relevance and regulatory risk**, not implementation
 convenience:
@@ -71,6 +74,10 @@ flight — but do not merge out of order.
 Control sequences dispatch; whichever lands second rebases over a one-line
 conflict. 005 is a single sitting — dispatching it first is the default.
 
+**008 and 009 share no files and may run in parallel, in separate Worker
+sessions.** 009's only `clofin-core` change is one README line; 008 does not
+touch the README. Neither waits on the other.
+
 ## Writing a new brief
 
 Template and rules: [`../AGENT_HANDOFF.md`](../AGENT_HANDOFF.md) §4.
@@ -92,4 +99,6 @@ increment was specified, which is as useful as the code that resulted.
 | [005 — Audit coverage completion](005-TASK-audit-coverage-completion.md) | 4 (completion) | PR #6 (`2ba977e`); its post-merge contract fix landed via PR #7 (`b21d4c1`) | Awaiting Milestone 2 batch audit; three brief objections ruled at ingestion; the L-9 tail recorded |
 | [004 — Settlement simulation](004-TASK-settlement-simulation.md) | 5 | PR #7 (`cba31c5`) + remediation PR #8 (`5d21334`) | FEEDBACK-M2 — F-007 blocking + F-008/F-009/F-010, all remediated & verified; three brief objections ruled at ingestion, four remediation divergences ruled accepted |
 | [006 — Generated diagrams and CI doc guards](006-TASK-generated-diagrams.md) | 5v.1 | PR #12 (`2237a39`); the deferred `verify` wiring landed with the O-1 fix sync | Awaiting the next milestone batch audit; five objections ruled at ingestion, all for the Worker; O-1 produced lesson L-16 |
+| [008 — Reconciliation](008-TASK-reconciliation.md) | 6 | PR #16 (`a41e69f`) | Awaiting the deferred batch audit at the **Sol** tier (A1: authz enforcement code + migration); four objections ruled at ingestion, O-1/O-2 → TASK-010, O-3 ratified, O-4 confirmed |
+| [009 — Trace hardening and cross-links](009-TASK-trace-hardening-and-cross-links.md) | 5v.3 | PR #17 (`ddf39c1`) + `clofin-trace` PR #2 (`bc0017c`) | Awaiting the deferred batch audit; no objections |
 | [007 — `clofin-trace` replay walkthrough](007-TASK-clofin-trace.md) | 5v.2 | `clofin-core` PR #14 (`261c778`) + `clofin-trace` PR #1 (`71cb13f`) | Awaiting the next milestone batch audit; five objections ruled at ingestion, all for the Worker; O-1 corrected the register's tag-form claims |
