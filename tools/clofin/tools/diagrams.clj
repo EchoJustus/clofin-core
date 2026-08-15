@@ -8,11 +8,12 @@
   criterion, a transition table and an ASCII drawing in `DOMAIN_MODEL.md` §3
   disagreeing three ways, mitigated by a note asking a human to compare them.
 
-  Three diagrams, three sources:
+  Four diagrams, four sources:
 
   | Diagram | Source of truth |
   |---|---|
   | Payment instruction lifecycle | `clofin.payments.state/transitions` |
+  | Reconciliation break lifecycle | `clofin.recon.break-state/transitions` |
   | Bounded-context topology | `ARCHITECTURE.md` §3's table, plus the `ns` forms under `src/` |
   | Control map | `COMPLIANCE.md` §2 |
 
@@ -30,6 +31,7 @@
 
   Run it: `make diagrams` to write, `make diagrams-check` to verify."
   (:require [clofin.payments.state :as state]
+            [clofin.recon.break-state :as break-state]
             [clofin.tools.markdown :as md]
             [clofin.tools.mermaid :as mmd]
             [clojure.java.io :as io]
@@ -64,6 +66,31 @@
    :terminal (vec (sort-by name (filter state/terminal? (keys state/transitions))))
    :edges    (vec (sort-by (juxt (comp name first) (comp name second))
                            (for [[from events] state/transitions
+                                 [event to]    events]
+                             [from event to])))})
+
+(defn break-lifecycle
+  "The reconciliation break lifecycle as diagram-shaped data, read from
+  `clofin.recon.break-state/transitions`.
+
+  The **same** function shape as `lifecycle` above, and rendered by the **same**
+  emitter, because the two lifecycles are the same kind of thing: a table of
+  arrows with a derived terminal set. Writing a second emitter would be a second
+  place for a drawing to disagree with its table, which is what RULE 1 exists to
+  prevent — and the terminal set here is derived through
+  `break-state/terminal?` for the same reason it is there.
+
+  Not spliced into any prose document. `DOMAIN_MODEL.md` §2.4 links to the
+  standalone artifact instead: the payment lifecycle earned an embedded block
+  because §3 is *about* it, and a link is enough where the drawing is not the
+  section's subject."
+  []
+  {:states   (vec (sort-by name (keys break-state/transitions)))
+   :initial  break-state/initial-state
+   :terminal (vec (sort-by name (filter break-state/terminal?
+                                        (keys break-state/transitions))))
+   :edges    (vec (sort-by (juxt (comp name first) (comp name second))
+                           (for [[from events] break-state/transitions
                                  [event to]    events]
                              [from event to])))})
 
@@ -421,6 +448,7 @@
   [root]
   (let [life       (lifecycle)
         life-block (lifecycle-mermaid life)
+        break-life (break-lifecycle)
         topo       (topology root)
         ctrls      (controls root)
         legend     (status-legend root)]
@@ -436,6 +464,7 @@
           "| Diagram | Source of truth |\n"
           "|---|---|\n"
           "| [Payment instruction lifecycle](payment-lifecycle.md) | `clofin.payments.state/transitions` |\n"
+          "| [Reconciliation break lifecycle](reconciliation-break-lifecycle.md) | `clofin.recon.break-state/transitions` |\n"
           "| [Bounded-context topology](context-topology.md) | [`ARCHITECTURE.md` §3](../../ARCHITECTURE.md) and the `ns` forms under `src/` |\n"
           "| [Control map](control-map.md) | [`COMPLIANCE.md` §2](../COMPLIANCE.md) |\n\n"
           "To change a diagram, change its source and run `make diagrams`.\n")
@@ -454,6 +483,28 @@
                   "and `creator-only-events` — govern operations that leave the status where it\n"
                   "was, so they are no arrow on any diagram. They are stated in\n"
                   "[`DOMAIN_MODEL.md` §3](../DOMAIN_MODEL.md) beside this drawing.\n")})
+
+     "docs/diagrams/reconciliation-break-lifecycle.md"
+     (document
+      {:title "Reconciliation break lifecycle"
+       :source-prose "`clofin.recon.break-state/transitions`"
+       :body (str (lifecycle-mermaid break-life) "\n\n"
+                  "Every state, every event and every permitted pair above is read from that\n"
+                  "table. The terminal state — the one with an arrow to `[*]` — is **derived**\n"
+                  "through `clofin.recon.break-state/terminal?` rather than listed, so a state\n"
+                  "that gains an outgoing transition stops being drawn as terminal in the same\n"
+                  "commit that gives it one.\n\n"
+                  "**Assignment is the transition.** A break becomes `investigating` by somebody\n"
+                  "taking it on, so `assign` is one arrow rather than an ownership change beside a\n"
+                  "state change. *Re*-assigning an already-investigating break leaves the state\n"
+                  "where it is and is therefore no arrow at all: it is governed by\n"
+                  "`reconciliation_break`'s `reassignable-states`, the same way `mutable-states`\n"
+                  "governs amending a draft payment.\n\n"
+                  "**`resolve` is driven by a posted adjustment and by nothing else.** There is no\n"
+                  "written-off state, because nothing in this increment could drive one — and a\n"
+                  "state with no driver is a promise the product does not keep.\n\n"
+                  "A break's **age** is derived from its `openedAt` whenever it is read and is\n"
+                  "stored nowhere, so it is not a state and appears on no diagram.\n")})
 
      "docs/diagrams/context-topology.md"
      (document

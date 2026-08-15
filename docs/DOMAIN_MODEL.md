@@ -33,7 +33,12 @@ Legend: **✅ built** · **🔨 in progress** · **📋 specified, not built**
 | **Settlement** | Irrevocable transfer of value through a scheme. | Clearing, which is the exchange of instructions preceding it. |
 | **Reversal** | A new entry mirroring an original, leaving both visible. | Deletion, amendment, or "cancellation" of a posted entry — none of which exist. |
 | **Return** | A payment sent back by the receiving institution after settlement. | A Refund, which CloFin's own user initiates. |
+| **Statement** | A **simulated** scheme's account of what it did over a period, in CloFin's own versioned format. | A real bank statement format. CloFin reads no camt.053, MT940 or BAI2, and connects to nothing. |
+| **Statement Line** | One movement a statement reports: a settlement or a return, with a reference, an amount and a value date. | A journal line. A statement line is somebody else's claim; a journal line is CloFin's record. |
+| **Expected Movement** | What CloFin's **own journal** records on the reconciled account for the period — the other side of a reconciliation. | A statement line. They are compared precisely because different things produced them. |
+| **Match** | A statement line bound to one expected movement, recording **which rule** bound them. | Agreement. A match says the two records are about the same movement; whether they *agree* is a separate question, and a matched pair that disagrees is a break. |
 | **Break** | A reconciliation item that did not match, with an age and an owner. | A discrepancy that someone will look at later. A break is a tracked object. |
+| **Adjustment** | A new, balanced, approved journal entry that resolves a break. | An edit. Nothing in CloFin edits a posted entry, ever. |
 | **Idempotency Key** | A caller-supplied identifier making a retry safe. | A payment reference. |
 | **Audit Event** | An append-only record of a state change: who, what, when, before/after **as digests**. | An application log line. Also not a copy of the record — a digest proves a value, it does not carry one. |
 | **Actor** | A person or system able to act within one organisation, holding roles and per-currency approval limits. | An Organisation, which is the tenant the actor acts within. |
@@ -207,13 +212,105 @@ world this simulates, not an edge case; so is **partial batch failure**.
 - A genuinely **new response for an item that already has an outcome** is a
   conflict — and its receipt is kept.
 
-### 2.4 Reconciliation context 📋
+### 2.4 Reconciliation context ✅
 
-**StatementLine** — an ingested synthetic bank statement line.
-**Match** — a StatementLine bound to expected movements, recording *which rule*
-matched, so a match can be explained.
-**Break** — an unmatched line or movement, with an age, an owner and a
-resolution. Resolution by adjustment posts an entry and may require approval.
+```
+ReconciliationStatement 1───* StatementLine 1───0..1 Match ───1 JournalEntry
+        │                            │
+        └──────* Break *─────────────┘
+                  │
+                  └──* Adjustment ───0..1 JournalEntry
+```
+
+**ReconciliationStatement** ✅ — one arrival of one synthetic statement, kept
+whether or not CloFin could process it.
+
+| Field | Notes |
+|---|---|
+| `format`, `format-version` | ✅ `SIM-CLOFIN-RECON-STATEMENT`, version 1. **CloFin's own format, and deliberately not any real one** — not camt.053, MT940, BAI2 or any scheme's or bank's schema. A synthetic-data project parsing a real bank format would be fidelity theatre. See [ADR-0023](ADR/0023-a-clofin-defined-synthetic-statement-format-and-an-ordered-matching-sequence.md). |
+| `scheme`, `currency` | ✅ `SIM-` prefixed, from the same vocabulary a settlement batch uses. The scheme is **provenance, not a selector**: the account reconciled is `1300-IN-TRANSIT` in the currency, whichever simulated scheme sent the statement. |
+| `statement-reference` | ✅ The delivery's **identity** within an organisation. Two deliveries carrying it are two deliveries of one document. |
+| `content-digest` | ✅ Version-tagged canonical digest of the **complete semantic content** — scheme, currency, period and every line. It says whether two deliveries under one identity are the same *message*. Same canonicaliser and same posture as `idempotency_key` and `scheme_response` ([ADR-0013](ADR/0013-canonical-request-digest-for-idempotency.md), lessons L-2 and L-12). |
+| `period-start`, `period-end` | ✅ Half-open `[start, end)`, so consecutive statements chain exactly. |
+| `disposition` | ✅ `applied` or `refused` — what CloFin did about the arrival, machine-readable. |
+| `disposition-reason` | ✅ Required on a refusal, absent otherwise: `no-reconciled-account`, `too-many-ledger-movements`. |
+| `reconciled-account-id` | ✅ Null exactly when the statement was refused for want of one. |
+
+**Receipt and disposition are separate facts** (standing lesson **L-11**). A
+statement CloFin cannot process is recorded as having arrived, with a
+machine-readable reason, and the caller's refusal is rendered only after that
+receipt commits. Append-only against all three destructive verbs.
+
+**StatementLine** ✅ — one movement the simulated scheme reports, addressed by
+`(statement, position)` and having no identity of its own.
+
+| Field | Notes |
+|---|---|
+| `line-no` | ✅ Assigned by CloFin from 1 on arrival, never read from the document: position is how a break addresses a line. |
+| `scheme-reference` | ✅ The scheme's own reference for the line. |
+| `payment-reference` | ✅ The end-to-end reference the scheme echoed back — CloFin's instruction id. **Null is a real case**, not missing data: an untagged line is matched on its attributes instead, by rule R4. |
+| `line-type` | ✅ `settlement` or `return`. There is deliberately **no release line**: a release is CloFin telling the scheme something. |
+| `amount`, `value-date` | ✅ The value date is the day the scheme dates the movement to. |
+
+**Match** ✅ — one line bound to one journal entry, recording **which rule**
+bound them (PR-051). One movement is claimed by at most one line, which is a
+unique index rather than a check in application code — and it is why a second
+claim becomes a break rather than a second match. The rule sequence is §6.
+
+**Break** ✅ — a reconciliation item that did not match, or matched and
+disagreed: a *tracked object* with an owner and an age.
+
+| Field | Notes |
+|---|---|
+| `kind` | ✅ One of six, covering **both directions** and the three ways a matched pair can still disagree — see §6. |
+| `state` | ✅ `open` → `investigating` → `resolved`. Held as data in `clofin.recon.break-state`, enforced at the service boundary; an illegal transition is a `409` naming what would have been permitted. **Drawn:** [`diagrams/reconciliation-break-lifecycle.md`](diagrams/reconciliation-break-lifecycle.md), generated from that table. |
+| `assignee` | ✅ **A break is never unowned.** It opens assigned to the actor whose ingestion discovered it, and may be reassigned while it is open or investigating. Assigning an `open` break *is* the move to `investigating`. |
+| `age` | ✅ **Derived from `opened-at` at read time and stored nowhere.** A stored age is wrong the moment it is written, for the same reason a stored balance is (ADR-0008). |
+| `detail` | ✅ What disagreed, in words: the two amounts, the two dates, or the movement the other side does not have. |
+
+**Adjustment** ✅ — the only way a disagreement changes the books.
+
+| Field | Notes |
+|---|---|
+| `amount`, `direction` | ✅ The direction applies to the **reconciled** account; the suspense leg (`2200-UNAPPLIED`) is always the opposite, so the entry balances by construction. |
+| `narrative` | ✅ Required: an entry between a clearing account and a suspense account that does not say why is the entry an investigation can least read. |
+| `approvals-required` | ✅ Computed from the organisation's own `approval_threshold` bands **at proposal** and stored, so lowering a band later cannot post an adjustment that never cleared the bar it was raised under. |
+| `status`, `entry-id` | ✅ `proposed` → `posted`. At most one posted adjustment per break, by partial unique index. |
+
+**Nothing in reconciliation edits a journal entry, ever** (C-03). An adjustment
+is a *new* balanced entry posted through the existing path —
+`clofin.ledger.service/post-entry!`, with the same zero-sum check, the same
+account lock, the same deferred trigger and the same `journal-entry.posted`
+event. Above the lowest band an organisation configured for the currency it
+needs that band's approvals from actors who are **not** its proposer, through
+`clofin.authz.approval/evaluate` and the same `approval` table a payment uses;
+below it one actor suffices; and an organisation with **no** band in the
+currency cannot adjust at all, because treating "unconfigured" as "needs
+nobody" is how a control silently weakens.
+
+**What the two sides are, and why they are produced by different things.** The
+statement is the *scheme's* account of what it did, generated by
+`clofin.settlement.statement` from the settlement records. The expectations are
+*CloFin's*, read by `clofin.recon.repository/expectations-for` from the
+**journal** — the posted amount, the entry's occurrence date, and the
+counter-account that says whether a movement was a settlement or a return.
+Nothing they agree about was derived from the other (standing lesson **L-16**).
+
+**The clearing account is the point.** `1300-IN-TRANSIT` holds, at any instant,
+the value CloFin has released and does not yet know the fate of (ADR-0018). A
+payment the scheme never answered about is correctly still in that balance
+*and* correctly absent from every statement — that pair is what the model is
+for, not an edge case.
+
+**Linked-retry provenance is still deferred.** [ADR-0019](ADR/0019-a-returned-payment-is-terminal-and-retries-as-a-new-instruction.md)
+ruled that a reference relating a retry to the payment it replaces belongs to
+this increment; it is **not** built here, and TASK-008's scope did not include
+it. What this increment does deliver is the half that made the gap dangerous:
+because a statement line's `payment-reference` is the *instruction* id, a line
+about the original and a line about its retry can never be confused for one
+another. The provenance link itself is recorded as open debt in
+[`COMPLIANCE.md` §4](COMPLIANCE.md) and as objection O-1 in
+`docs/audits/008-REQ-reconciliation.md`.
 
 ### 2.5 Compliance context 📋
 
@@ -502,3 +599,56 @@ enforcement point is named — an invariant with no enforcement is a wish.
 | I10 | A replayed idempotency key never performs work twice. | Primary key `(organisation_id, key)` plus the stored response, written in the same transaction as the effect ✅ |
 | I11 | A committed journal entry has at least two lines. | Deferred constraint trigger `journal_entry_must_be_complete` on `journal_entry` (migration `0008`). I1's trigger fires on `journal_line`, so an entry with no lines never fired it — audit finding **F-003** ✅ |
 | I12 | An account's status is read under a lock by the transaction that writes against it. | `select … for update` in `clofin.ledger.repository/assert-postable!` and `clofin.payments.repository/assert-debtor-account!`. Reading a status and then writing on it is a race under `READ COMMITTED` (standing lesson **L-8**) — audit finding **F-004** ✅ |
+
+---
+
+## 6. Reconciliation matching
+
+### 6.1 The rule sequence
+
+Rules are applied **in this order**, and the order is the specification rather
+than an implementation detail: the first rule that matches a line wins, and the
+id of the rule that matched is recorded against the match (**PR-051**). A rule
+matches only when it identifies **exactly one** unmatched expectation — two
+candidates is not a match, because a guessed match is worse than a break: a
+break is visible and a wrong match is not.
+
+They are tried **rule-major**: every line is offered rule 1 before any line is
+offered rule 2, so the strongest available evidence claims a movement first. The
+alternative would make the outcome depend on the order the scheme happened to
+list its lines, which is not a fact about the money.
+
+| Order | Rule id | Matches when |
+|---|---|---|
+| 1 | `R1-reference-amount-and-value-date` | The end-to-end reference, the amount and the value date all agree. |
+| 2 | `R2-reference-and-amount` | The reference and the amount agree and the value dates differ. The movement is identified; the date disagreement becomes a break. |
+| 3 | `R3-reference-only` | The reference agrees and the amount does not — the scheme and CloFin are talking about the same payment and disagree about how much moved. |
+| 4 | `R4-amount-and-value-date` | The line carries no end-to-end reference, and exactly one unmatched movement has its amount and value date. Last, because it identifies a movement by its attributes rather than by its name. |
+
+This table is the **source** the guard in `clofin.recon.matching-test` compares
+`clofin.recon.matching/rules` against — in both directions and in order. A rule
+added to one and not the other fails the build rather than an audit (standing
+lesson **L-6**).
+
+### 6.2 Agreement, and the breaks it produces
+
+Matching decides *which movement a line is about*; agreement decides *whether
+the two records say the same thing*. Every matched pair is compared on amount,
+value date and line type, and each disagreement is its own break — a line with
+the wrong amount **and** the wrong date is two facts an investigator needs.
+
+| Break kind | Raised when |
+|---|---|
+| `statement-line-unmatched` | The scheme reports money CloFin's ledger does not record on this account for this period. |
+| `expectation-unmatched` | CloFin's ledger records a movement the statement does not report. |
+| `duplicate-statement-line` | A second line claims a payment reference another line has already matched. |
+| `amount-mismatch` | Matched on identity, and the amounts differ. |
+| `value-date-mismatch` | Matched, and the dates differ. |
+| `line-type-mismatch` | Matched, and the scheme calls the movement a settlement where the entry's counter-account says return, or the reverse. |
+
+An expectation whose type could not be derived — a movement on the reconciled
+account whose counter-account is neither `2100-CLIENT-PAYABLE` nor
+`1100-CLIENT-FUNDS` — agrees with every line type. Reporting a mismatch there
+would be asserting a disagreement out of an absence, which is the overstatement
+standing lesson **L-14** names.
+

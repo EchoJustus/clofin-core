@@ -100,14 +100,22 @@
 ;; ---------------------------------------------------------------------------
 
 (def ^:private approval-columns
-  "select id, instruction_id, actor_id, decision, reason, decided_at, invalidated_at
+  "select id, instruction_id, adjustment_id, actor_id, decision, reason,
+          decided_at, invalidated_at
      from approval ")
 
 (defn- row->approval
   [row]
   (when row
     {:id             (:id row)
+     ;; Exactly one of these is set — `approval_names_one_subject`, migration
+     ;; `0012`. An approval is one actor's decision about one thing, and since
+     ;; TASK-008 that thing may be a payment instruction or a reconciliation
+     ;; adjustment. One table, one no-delete guarantee, one invalidation
+     ;; semantic: a second approvals table would be a second maker–checker
+     ;; control to keep in step (standing lesson **L-6**).
      :instruction-id (:instruction-id row)
+     :adjustment-id  (:adjustment-id row)
      :actor-id       (:actor-id row)
      :decision       (keyword (:decision row))
      :reason         (:reason row)
@@ -147,41 +155,68 @@
          (map row->approval)
          (group-by :instruction-id))))
 
+(defn approvals-for-adjustment
+  "Every approval recorded against a reconciliation adjustment, oldest first —
+  **including invalidated ones**, for the reason `approvals-for` gives.
+
+  A separate function rather than a subject parameter because the two are
+  different columns with different foreign keys, and a query that took the
+  column name from its caller would be a query no index could be reasoned about
+  from."
+  [source adjustment-id]
+  (mapv row->approval
+        (db/query source [(str approval-columns
+                               "where adjustment_id = ? order by decided_at, id")
+                          adjustment-id])))
+
 (defn find-approval
   "One approval by id, or nil."
   [source id]
   (row->approval (db/query-one source [(str approval-columns "where id = ?") id])))
 
 (defn record-approval!
-  "Write one approval decision. Returns it as stored.
+  "Write one approval decision, about a payment instruction **or** a
+  reconciliation adjustment. Returns it as stored.
 
-  The partial unique index `approval_actor_live_key` is the guarantee that an
-  actor cannot hold two live approvals on one instruction, not the
-  `:already-approved` check in `evaluate`. That check is an optimisation and a
-  better error message; delete it and the guarantee is unchanged. Two concurrent
-  approvals by one actor contend on the index, and the loser is refused by the
-  database rather than by luck — a read-then-write in application code is a
-  race, and here a race is an approval counted twice toward a threshold."
-  [source {:keys [id instruction-id actor-id decision reason]}]
+  Exactly one of `:instruction-id` and `:adjustment-id` is required, and that is
+  asserted here as well as by `approval_names_one_subject`: a decision about
+  nothing, or about two things, is a row an auditor cannot read.
+
+  The partial unique indexes `approval_actor_live_key` and
+  `approval_actor_live_adjustment_key` are the guarantee that an actor cannot
+  hold two live approvals on one subject, not the `:already-approved` check in
+  `evaluate`. That check is an optimisation and a better error message; delete
+  it and the guarantee is unchanged. Two concurrent approvals by one actor
+  contend on the index, and the loser is refused by the database rather than by
+  luck — a read-then-write in application code is a race, and here a race is an
+  approval counted twice toward a threshold."
+  [source {:keys [id instruction-id adjustment-id actor-id decision reason]}]
   (when-not (#{:approved :rejected} decision)
     (err/invalid! (str "Unknown approval decision: " decision)
                   {:decision (str decision) :known ["approved" "rejected"]}))
+  (when-not (= 1 (count (filter some? [instruction-id adjustment-id])))
+    (err/invalid! "An approval is about exactly one payment instruction or one adjustment"
+                  {:instruction-id (some-> instruction-id str)
+                   :adjustment-id  (some-> adjustment-id str)}))
   (try
     (let [row (db/insert-returning!
                source
-               ["insert into approval (id, instruction_id, actor_id, decision, reason)
-                 values (?, ?, ?, ?, ?)
+               ["insert into approval
+                   (id, instruction_id, adjustment_id, actor_id, decision, reason)
+                 values (?, ?, ?, ?, ?, ?)
                  returning decided_at"
-                id instruction-id actor-id (name decision) reason])]
-      {:id id :instruction-id instruction-id :actor-id actor-id
-       :decision decision :reason reason
+                id instruction-id adjustment-id actor-id (name decision) reason])]
+      {:id id :instruction-id instruction-id :adjustment-id adjustment-id
+       :actor-id actor-id :decision decision :reason reason
        :decided-at (db/->instant (:decided-at row)) :invalidated-at nil})
     (catch Exception t
       (let [{:keys [sql-state constraint]} (db/violation t)]
         (if (= sql-state (:unique-violation db/sql-states))
-          (err/conflict! "This actor already holds a live decision on this instruction"
-                         {:instruction-id (str instruction-id)
-                          :clofin/constraint constraint})
+          (err/conflict! (str "This actor already holds a live decision on this "
+                              (if adjustment-id "adjustment" "instruction"))
+                         (cond-> {:clofin/constraint constraint}
+                           instruction-id (assoc :instruction-id (str instruction-id))
+                           adjustment-id  (assoc :adjustment-id (str adjustment-id))))
           (throw t))))))
 
 (defn invalidate-approval!

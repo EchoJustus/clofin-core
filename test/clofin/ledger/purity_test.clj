@@ -51,7 +51,19 @@
    ;; `clofin.idempotency.repository`, and for the same reason: the digest that
    ;; decides whether two deliveries are one message stays a pure function of
    ;; one argument, testable without a database (F-009, lesson L-12).
-   'clofin.settlement.response            "src/clofin/settlement/response.clj"})
+   'clofin.settlement.response            "src/clofin/settlement/response.clj"
+   ;; The simulated scheme's statement generator. Pure for the same reason the
+   ;; adapter beside it is: it decides what a *simulated* scheme would say, and
+   ;; a simulator that could reach a socket is one nobody can prove never did.
+   'clofin.settlement.statement           "src/clofin/settlement/statement.clj"
+   ;; Reconciliation's four domain namespaces (TASK-008). The statement format
+   ;; and its digest, the matching rules, the break lifecycle and what an
+   ;; adjustment is — none of which may reach a database, because each is a rule
+   ;; an auditor must be able to replay against the values it was decided on.
+   'clofin.recon.statement                "src/clofin/recon/statement.clj"
+   'clofin.recon.matching                 "src/clofin/recon/matching.clj"
+   'clofin.recon.break-state              "src/clofin/recon/break_state.clj"
+   'clofin.recon.adjustment               "src/clofin/recon/adjustment.clj"})
 
 (def forbidden-prefixes
   ["clofin.db." "clofin.http." "clofin.api."])
@@ -94,7 +106,8 @@
                   "src/clofin/idempotency/repository.clj"
                   "src/clofin/authz/repository.clj"
                   "src/clofin/audit/repository.clj"
-                  "src/clofin/settlement/repository.clj"]]
+                  "src/clofin/settlement/repository.clj"
+                  "src/clofin/recon/repository.clj"]]
       (is (some #(str/starts-with? % "clofin.db.")
                 (required-namespaces (ns-form path)))
           (str path " is named `repository` but requires no persistence — "
@@ -124,7 +137,12 @@
    ;; connection of its own would do the most damage: a finality posting
    ;; committed apart from the outcome that caused it is a payment the ledger
    ;; says settled and the batch says did not.
-   'clofin.settlement.service        "src/clofin/settlement/service.clj"})
+   'clofin.settlement.service        "src/clofin/settlement/service.clj"
+   ;; TASK-008. Reconciliation composes a receipt, its matches, its breaks and
+   ;; every audit event describing them into one unit of work — and, when an
+   ;; adjustment posts, a journal entry too. A connection of its own here would
+   ;; be a break opened against a statement whose receipt did not commit.
+   'clofin.recon.service             "src/clofin/recon/service.clj"})
 
 (deftest a-service-cannot-open-its-own-transaction
   (doseq [[namespace-sym path] service-namespaces]

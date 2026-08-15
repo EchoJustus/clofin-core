@@ -50,36 +50,29 @@
 ;; Refusals
 ;; ---------------------------------------------------------------------------
 
+(def subject-noun
+  "What this service's approvals are about, as it appears in a refusal.
+
+  The refusal prose is templated on the subject because `evaluate` now decides
+  about reconciliation adjustments as well as payment instructions, and one
+  maker–checker control must not be stated twice (standing lesson **L-6**)."
+  "payment instruction")
+
 (def refusal-status
   "How each refusal reason is reported over HTTP.
 
-  Held as data beside the reasons themselves so that a reason added to
-  `clofin.authz.approval/refusal-reasons` without an answer here fails
-  `clofin.authz.approval-test` rather than becoming a `500` the first time a
-  caller hits it.
-
-  The split is ADR-0012's: `403` is \"you may not\", `409` is \"not from here\",
-  `422` is \"understood, and the organisation is not set up for it\"."
-  {:self-approval           :forbidden
-   :not-an-approver         :forbidden
-   :above-actor-limit       :forbidden
-   :already-approved        :conflict
-   :no-threshold-configured :unprocessable})
+  **The map itself now lives in `clofin.authz.approval`**, beside the reasons it
+  answers, because reconciliation adjustments go through the same `evaluate` and
+  a second copy in a second service is the drift L-6 names. This name is kept so
+  that a reader of this namespace still finds the answer where the docstrings
+  and `clofin.authz.approval-test` have always pointed."
+  approval/refusal-status)
 
 (def ^:private refusal-detail
-  "What a refused caller is told. Each names the control it comes from, because
-  a refusal an operator cannot explain to their own auditor is a refusal that
-  gets escalated into a request to disable it."
-  {:self-approval
-   "The actor who created this payment instruction may not approve it (segregation of duties)"
-   :not-an-approver
-   "This actor does not hold the permission required to decide on this payment instruction"
-   :above-actor-limit
-   "This payment instruction's amount is above this actor's approval limit"
-   :already-approved
-   "This actor has already recorded a decision on this payment instruction"
-   :no-threshold-configured
-   "No approval threshold is configured for this organisation and currency, so no approval can be evaluated"})
+  "What a refused caller is told, as templates. See
+  `clofin.authz.approval/refusal-detail-templates`; `subject-noun` fills them in
+  for this service."
+  approval/refusal-detail-templates)
 
 (defn- refuse!
   "Turn a refused decision into the domain error the HTTP layer renders.
@@ -91,7 +84,7 @@
                  ;; Unreachable while the test above passes; if it ever is
                  ;; reached, a named 403 is a safer answer than a 500.
                  :forbidden)
-             (or (refusal-detail reason) "This approval was refused")
+             (or (approval/refusal-detail reason subject-noun) "This approval was refused")
              (-> decision
                  (dissoc :decision)
                  (assoc :reason (name reason)))))

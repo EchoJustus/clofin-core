@@ -41,6 +41,10 @@
             [clofin.organisations.organisation :as organisation]
             [clofin.payments.instruction :as instruction]
             [clofin.payments.state :as state]
+            [clofin.recon.adjustment :as adjustment]
+            [clofin.recon.break-state :as break-state]
+            [clofin.recon.matching :as matching]
+            [clofin.recon.statement :as recon-statement]
             [clofin.settlement.batch :as batch]
             [clofin.settlement.response :as response]
             [clofin.test-db :as tdb]
@@ -128,7 +132,21 @@
    "settlement_outcome_known"           #'batch/item-outcomes
    "scheme_response_kind_known"         #'response/kinds
    "scheme_response_outcome_known"      #'response/response-outcomes
-   "scheme_response_disposition_known"  #'response/dispositions})
+   "scheme_response_disposition_known"  #'response/dispositions
+   ;; Reconciliation (migration `0012`). Every closed vocabulary the module adds
+   ;; is owned here, including the two that are the *same* vocabulary as one
+   ;; settlement already had: `recon_statement_scheme_known` is compared with
+   ;; `clofin.settlement.batch/schemes`, so a scheme added to one constraint and
+   ;; not the other fails here rather than in production.
+   "recon_statement_scheme_known"       #'batch/schemes
+   "recon_statement_disposition_known"  #'recon-statement/dispositions
+   "recon_statement_refusal_reason_known" #'recon-statement/stored-refusal-reasons
+   "recon_statement_line_type_known"    #'recon-statement/line-types
+   "recon_match_rule_known"             #'matching/rule-ids
+   "recon_break_kind_known"             #'matching/break-kinds
+   "recon_break_state_known"            #'break-state/states
+   "recon_adjustment_status_known"      #'adjustment/statuses
+   "recon_adjustment_direction_known"   #'adjustment/directions})
 
 ;; ---------------------------------------------------------------------------
 ;; The comparison

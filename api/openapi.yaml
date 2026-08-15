@@ -104,6 +104,64 @@ tags:
       instruction**, approved on its own merits. That is a database constraint,
       not a check in a handler.
 
+  - name: Reconciliation
+    description: |
+      Comparing what CloFin believes happened with a second, independent account
+      of the same events — and turning every disagreement into a tracked, owned,
+      ageing fact.
+
+      **The statement format is CloFin's own.** `SIM-CLOFIN-RECON-STATEMENT`,
+      versioned, `SIM-` prefixed, and deliberately **not** camt.053, MT940,
+      BAI2 or any real scheme's or bank's schema. CloFin is a synthetic-data
+      reference implementation connected to nothing; parsing a real bank format
+      would be fidelity theatre, and naming one would invite exactly the
+      misreading the scope statements exist to prevent. The only producer of a
+      statement is CloFin's own simulator at `GET /settlement-statements`.
+
+      **The two sides are produced by different things, on purpose.** The
+      simulator builds a statement from the settlement records — what the
+      scheme did, when it resolved each item, and the amount the instruction
+      carried. The matcher compares it against the **journal**: posted amounts,
+      entry occurrence dates, and the counter-account that says whether a
+      movement was a settlement or a return. Nothing they agree about was
+      derived from the other, which is the only arrangement under which
+      agreement means anything.
+
+      **Matching is deterministic, ordered and explainable.** Four rules, tried
+      in a fixed sequence, first match wins, and every match records the rule
+      that produced it. No scoring, no probabilities, no learning: a match
+      nobody can re-derive is a match nobody can defend to an auditor. The rule
+      order is published in `DOMAIN_MODEL.md` §6 and a guard compares that list
+      with the code's in both directions.
+
+      **The account being reconciled is `1300-IN-TRANSIT`**, CloFin's clearing
+      account: at any instant it holds the value CloFin has released and does
+      not yet know the fate of. A payment the scheme never answered about is
+      correctly still in that balance *and* correctly absent from the statement
+      — that pair is the case the whole model exists to show, not an edge case.
+
+      **A break is a tracked object, not a discrepancy somebody will look at
+      later.** It has a kind, an owner, a state (`open` → `investigating` →
+      `resolved`) and an **age derived at read time** — never stored, because a
+      stored age is wrong the moment it is written. Illegal transitions are
+      refused with `409` naming what would have been permitted.
+
+      **Nothing here edits a journal entry, ever.** The only way a disagreement
+      changes the books is a new, balanced, approved entry posted through the
+      same path a release takes. Above the lowest approval band the
+      organisation configured for the currency it needs approvals from actors
+      who are **not** the proposer; below it, one actor suffices, and an
+      organisation that has configured no band in the currency cannot adjust at
+      all — because treating "unconfigured" as "needs nobody" is how a control
+      silently weakens.
+
+      **No `Idempotency-Key`.** Replay protection here is the statement's own
+      reference plus a canonical digest of every effect-bearing field it
+      carries, which is stronger than a caller-chosen header: two callers
+      delivering the same document under different keys are still one delivery.
+      An exact re-delivery replays the original outcome; a different document
+      under the same reference is `409`.
+
   - name: Audit
     description: |
       The audit trail, and evidence extraction from it.
@@ -1570,6 +1628,565 @@ paths:
               schema:
                 $ref: "#/components/schemas/Problem"
 
+  /settlement-statements:
+    get:
+      tags: [Settlement]
+      operationId: generateSimulatedStatement
+      summary: Produce the simulated scheme's statement for a period
+      description: |
+        **The simulated scheme's own account statement**, computed from the
+        settlement records of what it did. It writes nothing; the document it
+        returns can be posted straight back to `POST /reconciliation-statements`,
+        which is the whole walk a reviewer needs.
+
+        The format is CloFin's own — `SIM-CLOFIN-RECON-STATEMENT`, versioned,
+        `SIM-` prefixed — and is deliberately not camt.053, MT940, BAI2 or any
+        real scheme's schema.
+
+        A statement reports the outcomes the scheme actually **reached**:
+        settlements and returns. A payment the scheme never answered about
+        produces no line at all, which is the point rather than an omission —
+        its value is still in `1300-IN-TRANSIT` on CloFin's books and correctly
+        absent here.
+
+        `perturbation` names one way the statement can be wrong. A generator
+        that could only produce agreement could not test disagreement, and a
+        *named* class lets a reviewer predict the break before running
+        anything. Two identical requests produce byte-identical documents,
+        including the `statementReference`, so re-ingesting one is a replay
+        rather than a second document.
+
+        Requires `payment/read`: a statement is a fact about payments that were
+        settled, so whoever may read those may read this.
+      parameters:
+        - name: scheme
+          in: query
+          required: true
+          description: The simulated scheme whose statement this is.
+          schema:
+            type: string
+            enum: [SIM-RTGS, SIM-ACH]
+        - name: currency
+          in: query
+          required: true
+          schema:
+            $ref: "#/components/schemas/CurrencyCode"
+        - name: from
+          in: query
+          required: true
+          description: Start of the period, inclusive.
+          schema: { type: string, format: date-time }
+        - name: to
+          in: query
+          required: true
+          description: End of the period, exclusive.
+          schema: { type: string, format: date-time }
+        - name: perturbation
+          in: query
+          required: false
+          description: |
+            How to make the statement wrong. Defaults to `none`, which is the
+            statement the simulation would really send.
+          schema:
+            $ref: "#/components/schemas/PerturbationClass"
+        - $ref: "#/components/parameters/ActorId"
+        - $ref: "#/components/parameters/OptionalOrganisationId"
+      responses:
+        "200":
+          description: The statement the simulated scheme would send.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SimulatedStatement"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          description: |
+            The period covers more settled items than one statement may report.
+            Refused rather than truncated: a statement silently missing its tail
+            would produce breaks against movements that are right there in the
+            settlement record, and no caller could tell that from a real
+            disagreement.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+
+  /reconciliation-statements:
+    post:
+      tags: [Reconciliation]
+      operationId: ingestReconciliationStatement
+      summary: Receive a synthetic statement and match it against the ledger
+      description: |
+        Receives one statement in CloFin's own format, matches every line
+        against the movements CloFin's **journal** records on the reconciled
+        account for the statement's period, and opens a break for every
+        disagreement. Matching runs synchronously: this codebase has no job
+        runner, and a background matcher is operational machinery with no driver
+        yet.
+
+        The account reconciled is `1300-IN-TRANSIT` in the statement's
+        currency. An organisation without one is `422` — **and the statement is
+        still recorded as having arrived**, with a machine-readable
+        `dispositionReason`. Receipt and disposition are separate facts: a
+        receipt destroyed by its own processing failure is not a receipt, and
+        the refusal is rendered only after that receipt has committed.
+
+        **Replay.** The statement's own `statementReference` is the delivery's
+        identity within an organisation, and a canonical digest of every
+        effect-bearing field it carries — scheme, currency, period and every
+        line — says whether two deliveries under that identity are the same
+        document. An exact re-delivery is `200` with `replayed: true` and does
+        no work at all: no second match, no second break, no second audit event,
+        and the body is the original answer. A *different* document under the
+        same reference is `409` and is never called a replay.
+
+        There is no `Idempotency-Key` header here, and that is deliberate: the
+        document's own identity plus its digest is a stronger guarantee than a
+        caller-chosen key, because two callers delivering the same document
+        under different keys are still one delivery.
+
+        Requires `reconciliation/execute`, which `controller` holds and no role
+        holding `payment/approve` does.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/IngestStatementRequest"
+      parameters:
+        - $ref: "#/components/parameters/ActorId"
+      responses:
+        "200":
+          description: |
+            The statement was received and matched. `replayed` is true when this
+            exact document had already been delivered, in which case nothing was
+            re-run and the answer is the original one.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReconciliationStatement"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          description: |
+            This organisation and statement reference already name a different
+            document. The first receipt stands; nothing was written.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: |
+            The statement arrived and could not be processed — no
+            `1300-IN-TRANSIT` account in its currency, or a period covering more
+            ledger movements than one run may cover. **The receipt exists**;
+            `errors.dispositionReason` says which.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+
+  /reconciliation-statements/{id}:
+    get:
+      tags: [Reconciliation]
+      operationId: getReconciliationStatement
+      summary: Retrieve a received statement with its matches and breaks
+      description: |
+        The statement as received, its lines, every match with **the rule that
+        produced it**, and the breaks it opened. Requires
+        `reconciliation/read`.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: "#/components/parameters/ActorId"
+        - $ref: "#/components/parameters/OptionalOrganisationId"
+      responses:
+        "200":
+          description: The received statement.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReconciliationStatement"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /reconciliation-breaks:
+    get:
+      tags: [Reconciliation]
+      operationId: listReconciliationBreaks
+      summary: List reconciliation breaks, oldest first
+      description: |
+        **Oldest first** — the only list in this API ordered that way, and it is
+        the product point rather than a preference: a break found in March may
+        have originated in January, and a queue that buries the oldest item on
+        page four is the spreadsheet this module replaces.
+
+        Narrowed by state, kind, account or assignee. Capped rather than
+        paginated, with the cap and a `truncated` flag on every response.
+        Requires `reconciliation/read`.
+      parameters:
+        - name: state
+          in: query
+          required: false
+          schema:
+            $ref: "#/components/schemas/BreakState"
+        - name: kind
+          in: query
+          required: false
+          schema:
+            $ref: "#/components/schemas/BreakKind"
+        - name: accountId
+          in: query
+          required: false
+          description: Restrict to breaks on one reconciled account.
+          schema: { type: string, format: uuid }
+        - name: assigneeId
+          in: query
+          required: false
+          description: Restrict to breaks owned by one actor.
+          schema: { type: string, format: uuid }
+        - $ref: "#/components/parameters/ActorId"
+        - $ref: "#/components/parameters/OptionalOrganisationId"
+      responses:
+        "200":
+          description: The organisation's reconciliation breaks.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReconciliationBreakList"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /reconciliation-breaks/{id}:
+    get:
+      tags: [Reconciliation]
+      operationId: getReconciliationBreak
+      summary: Retrieve a reconciliation break with its adjustments
+      description: |
+        One break — what disagreed, by how much, who owns it, how long it has
+        been open — and every adjustment raised against it. Requires
+        `reconciliation/read`, which `approver` holds: a checker who cannot read
+        the adjustment they are being asked to approve is a rubber stamp.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: "#/components/parameters/ActorId"
+        - $ref: "#/components/parameters/OptionalOrganisationId"
+      responses:
+        "200":
+          description: The break and its adjustments.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReconciliationBreakDetail"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /reconciliation-breaks/{id}/assignment:
+    post:
+      tags: [Reconciliation]
+      operationId: assignReconciliationBreak
+      summary: Assign a reconciliation break to an actor
+      description: |
+        Gives a break an owner. Assigning an `open` break **is** the transition
+        to `investigating` — a break becomes investigated by somebody taking it
+        on, so ownership and state move together and leave one audit event.
+        Assigning one that is already `investigating` is a reassignment and
+        leaves the state where it is. A `resolved` break is `409`: who resolved
+        what is history, and history is not reassigned.
+
+        A break is never unowned. It opens assigned to the actor whose
+        ingestion discovered it. Requires `reconciliation/execute`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AssignBreakRequest"
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: "#/components/parameters/ActorId"
+      responses:
+        "200":
+          description: The break, with its new owner and state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReconciliationBreak"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: |
+            The break is not in a state that may be assigned. The problem names
+            the state it is in and the transitions that would have been
+            permitted.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: No such actor in this organisation to assign the break to.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+
+  /reconciliation-breaks/{id}/adjustments:
+    post:
+      tags: [Reconciliation]
+      operationId: proposeReconciliationAdjustment
+      summary: Propose an adjustment that resolves a reconciliation break
+      description: |
+        **Nothing in CloFin edits a journal entry, ever.** A disagreement
+        changes the books through one route only: a new, balanced entry between
+        the reconciled account (`1300-IN-TRANSIT`) and the suspense account
+        (`2200-UNAPPLIED`), posted through the same path a release takes — the
+        same zero-sum check, the same account lock, the same deferred database
+        trigger, the same `journal-entry.posted` event.
+
+        `direction` is the direction applied to the **reconciled** account; the
+        suspense leg is always the opposite, so the entry balances by
+        construction rather than by the caller getting it right. `narrative` is
+        required: an entry that moves money between a clearing account and a
+        suspense account without saying why is the entry an investigation will
+        be least able to explain.
+
+        **How many approvals it needs comes from the organisation's own
+        `approval_threshold` bands** — the same table, per currency, that
+        governs payments. Below the lowest band configured for the currency the
+        proposer alone may post, and the adjustment posts in this call
+        (`posted: true`). At or above it — the boundary is inclusive — the
+        adjustment waits for that band's number of approvals from actors who are
+        **not** its proposer. An organisation with no band in the currency is
+        `422`: an unconfigured currency is not an unsupervised one.
+
+        Requires `reconciliation/execute`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProposeAdjustmentRequest"
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: "#/components/parameters/ActorId"
+      responses:
+        "201":
+          description: |
+            The adjustment. `posted` says whether it also moved the books in
+            this call, which happens exactly when it needed no approvals.
+          headers:
+            Location:
+              description: URI of the break the adjustment resolves.
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReconciliationAdjustment"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: The break is already resolved, or already has a posted adjustment.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: |
+            Understood, and the organisation is not set up for it: no approval
+            band in the currency, no `2200-UNAPPLIED` account to post to, a
+            currency that is not the break's, or a rejected field.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+
+  /reconciliation-adjustments/{id}/approvals:
+    post:
+      tags: [Reconciliation]
+      operationId: approveReconciliationAdjustment
+      summary: Approve a reconciliation adjustment, posting it when complete
+      description: |
+        A second, **different** actor agrees. This is the *same* maker–checker
+        control that governs payment approvals — the same pure decision
+        function, the same `approval` table, the same per-currency approver
+        limits, the same refusal vocabulary — applied to a different subject.
+        There is no second approval mechanism in CloFin.
+
+        The adjustment's proposer may not approve it, and that refusal is
+        evaluated **first** and is never waivable: an actor may be granted a
+        role or a larger limit, but the maker never becomes a valid checker for
+        their own correction.
+
+        The number of approvals required is the one recorded on the adjustment
+        **when it was proposed**, not the one the bands would give today. An
+        organisation cannot lower a band and thereby post an adjustment that
+        never cleared the bar it was raised under.
+
+        When this approval completes the requirement, the entry posts and the
+        break resolves **in the same transaction** — an approved-but-unposted
+        adjustment is not a state that exists.
+
+        No permission is checked at this boundary. The decision function checks
+        `payment/approve` *and* the maker, the limit and the count, and it ranks
+        those reasons deliberately: a boundary check would tell the adjustment's
+        own proposer that fixing their permissions would help.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ApproveAdjustmentRequest"
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: "#/components/parameters/ActorId"
+      responses:
+        "201":
+          description: |
+            The decision, and what it did. `posted` is true when this approval
+            completed the requirement and the entry was posted.
+          headers:
+            Location:
+              description: URI of the adjustment decided on.
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdjustmentApprovalOutcome"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          description: |
+            Refused by the maker–checker control. `errors.reason` is one of
+            `self-approval`, `not-an-approver` or `above-actor-limit`.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: |
+            This actor has already decided on this adjustment, or the adjustment
+            has already been posted.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: |
+            No approval band is configured for this organisation and currency,
+            or the organisation has no account to post the adjustment to.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+
+  /reconciliation-status:
+    get:
+      tags: [Reconciliation]
+      operationId: getReconciliationStatus
+      summary: Report reconciliation status for an account and period
+      description: |
+        Matched, unmatched and breaks by state, for one account over one period
+        (PR-054).
+
+        The period is half-open, `[from, to)`, and a statement belongs to it
+        when **its own period lies inside** the requested one: a statement
+        covering the last week of July and the first of August is not an August
+        statement, and counting half of it would produce a figure that agrees
+        with no document.
+
+        Every figure is counted by the database over the rows themselves rather
+        than assembled from a capped list, so the answer stays correct for a
+        period whose breaks would not fit in one page. Every rule and every
+        break kind appears with a zero rather than being absent, so a consumer
+        reads "none of this kind" rather than having to distinguish that from
+        "this build does not know this kind".
+
+        `oldestUnresolvedAgeSeconds` is derived at read time and is null when
+        nothing is outstanding — which is a different statement from zero.
+        Requires `reconciliation/read`.
+      parameters:
+        - name: accountId
+          in: query
+          required: true
+          description: The reconciled account — in practice `1300-IN-TRANSIT`.
+          schema: { type: string, format: uuid }
+        - name: from
+          in: query
+          required: true
+          description: Start of the period, inclusive.
+          schema: { type: string, format: date-time }
+        - name: to
+          in: query
+          required: true
+          description: End of the period, exclusive.
+          schema: { type: string, format: date-time }
+        - $ref: "#/components/parameters/ActorId"
+        - $ref: "#/components/parameters/OptionalOrganisationId"
+      responses:
+        "200":
+          description: Reconciliation status for the account and period.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReconciliationStatus"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
   /audit/events:
     get:
       tags: [Audit]
@@ -2402,15 +3019,34 @@ components:
     Approval:
       type: object
       description: |
-        One actor's decision on one payment instruction.
+        One actor's decision on one **payment instruction or one reconciliation
+        adjustment**. Exactly one of `instructionId` and `adjustmentId` is
+        present, mirroring the database constraint that a decision is about one
+        thing.
+
+        There is one maker–checker control in CloFin and this is its record: one
+        table, one no-delete guarantee, one invalidation semantic, one pure
+        decision function. A second approvals mechanism for adjustments would
+        have been a second copy of all four.
 
         A decision is never deleted — the database refuses it. An approval that
         stops standing, because the instruction was amended or because its
         actor withdrew it, keeps its row and gains an `invalidatedAt`.
-      required: [id, instructionId, actorId, decision, decidedAt, live]
+      required: [id, actorId, decision, decidedAt, live]
       properties:
         id: { type: string, format: uuid }
-        instructionId: { type: string, format: uuid }
+        instructionId:
+          type: string
+          format: uuid
+          description: |
+            The payment instruction decided on. Absent when the decision is
+            about a reconciliation adjustment.
+        adjustmentId:
+          type: string
+          format: uuid
+          description: |
+            The reconciliation adjustment decided on. Absent when the decision
+            is about a payment instruction.
         actorId:
           type: string
           format: uuid
@@ -2864,6 +3500,573 @@ components:
             on. Defaults to one hour. Measured from the batch's creation,
             because the schema records no submission time.
 
+    StatementFormat:
+      type: string
+      description: |
+        CloFin's own statement format. One value, and it is deliberately not any
+        real one: not camt.053, not MT940, not BAI2, not any scheme's or bank's
+        schema. A synthetic-data reference implementation parsing a real bank
+        format would be fidelity theatre, and naming one would invite exactly
+        the misreading this contract's scope statement exists to prevent.
+      enum: [SIM-CLOFIN-RECON-STATEMENT]
+
+    StatementLineType:
+      type: string
+      description: |
+        What a statement line reports. Two, and deliberately only two: these are
+        the outcomes a scheme *reaches*. A release is CloFin telling the scheme
+        something, not the scheme telling CloFin, and a payment the scheme never
+        answered about produces no line at all — its value sits in
+        `1300-IN-TRANSIT` and its absence here is correct.
+      enum: [settlement, return]
+
+    MatchingRule:
+      type: string
+      description: |
+        Which rule matched a line to a ledger movement. Applied in this order,
+        first match wins, and recorded on every match — a match nobody can
+        re-derive is a match nobody can defend to an auditor.
+
+        * `R1-reference-amount-and-value-date` — reference, amount and value
+          date all agree.
+        * `R2-reference-and-amount` — reference and amount agree, value dates
+          differ. The movement is identified and the date disagreement is a
+          break.
+        * `R3-reference-only` — the reference agrees and the amount does not.
+          The two records are about the same payment and disagree about how much
+          moved.
+        * `R4-amount-and-value-date` — the line carries no end-to-end reference,
+          and exactly one unmatched movement has its amount and value date.
+          Last, because it identifies a movement by its attributes rather than
+          by its name.
+
+        A rule matches only when exactly one unmatched movement satisfies it.
+        Two candidates is not a match: a guessed match is worse than a break,
+        because a break is visible and a wrong match is not.
+
+        The same list is published in `DOMAIN_MODEL.md` §6 and a guard compares
+        the two with the code's sequence, in both directions and in order.
+      enum:
+        - R1-reference-amount-and-value-date
+        - R2-reference-and-amount
+        - R3-reference-only
+        - R4-amount-and-value-date
+
+    BreakKind:
+      type: string
+      description: |
+        What disagreed. The check runs **both directions**: a statement line
+        with no ledger counterpart is a break, and a ledger movement with no
+        statement line is also one — and the second is the more interesting,
+        because it is CloFin claiming a movement the scheme does not report.
+
+        * `statement-line-unmatched` — the scheme reports money CloFin's ledger
+          does not record on this account for this period.
+        * `expectation-unmatched` — CloFin's ledger records a movement the
+          statement does not report.
+        * `duplicate-statement-line` — a second line claiming a payment
+          reference another line has already matched.
+        * `amount-mismatch` — matched on identity, and the two amounts differ.
+        * `value-date-mismatch` — matched, and the two dates differ.
+        * `line-type-mismatch` — matched, and the scheme calls the movement a
+          settlement where the ledger's counter-account says return, or vice
+          versa.
+      enum:
+        - statement-line-unmatched
+        - expectation-unmatched
+        - duplicate-statement-line
+        - amount-mismatch
+        - value-date-mismatch
+        - line-type-mismatch
+
+    BreakState:
+      type: string
+      description: |
+        `open` → `investigating` → `resolved`. Held as data and enforced at the
+        service boundary: a transition the table does not contain is `409`
+        naming what would have been permitted, never applied silently. The
+        terminal set is derived from the table rather than listed, so a state
+        that gains an outgoing arrow stops being terminal in the same commit.
+
+        Assigning an `open` break **is** the move to `investigating`.
+        `resolved` is reached only by a posted adjustment.
+      enum: [open, investigating, resolved]
+
+    AdjustmentStatus:
+      type: string
+      description: |
+        `proposed` until the approvals it needs exist; `posted` once its entry
+        is in the journal, which happens in the same transaction as the approval
+        that completed the requirement.
+
+        There is deliberately no `rejected`: an approver who disagrees simply
+        does not approve, the adjustment never posts, and a different one may be
+        raised against the same break.
+      enum: [proposed, posted]
+
+    StatementRefusalReason:
+      type: string
+      description: |
+        Why an arriving statement was refused, as a stable code. **Every code a
+        caller may receive is here**, including the one that is never stored.
+      enum: [no-reconciled-account, too-many-ledger-movements, replay-key-conflict]
+
+    StoredStatementRefusalReason:
+      type: string
+      description: |
+        The narrower set that can reach a stored receipt's `dispositionReason`.
+
+        `replay-key-conflict` is outside it, and the asymmetry is a fact rather
+        than an omission: that refusal happens **because** a receipt for the
+        identity already exists, and writing a second row would defeat the
+        replay key that produced the refusal. The first receipt is the evidence;
+        the conflict is an answer to the caller and nothing else.
+      enum: [no-reconciled-account, too-many-ledger-movements]
+
+    PerturbationClass:
+      type: string
+      description: |
+        How to make a generated statement wrong. A generator that could only
+        produce agreement could not test disagreement; a *named* class lets a
+        reviewer predict the break before running anything. Each is applied
+        deterministically to the first line in the statement's canonical order,
+        or appends one.
+
+        * `none` — the statement the simulation would really send.
+        * `missing-line` — drops a line, so the ledger records a movement the
+          statement does not report.
+        * `amount-mismatch` — increases a line's amount.
+        * `unknown-line` — appends a line carrying a payment reference CloFin
+          has never issued.
+        * `duplicate-line` — repeats a line under a second line reference.
+        * `shifted-value-date` — moves a line's value date later.
+        * `flipped-line-type` — reports a settlement as a return, or a return as
+          a settlement.
+        * `reference-stripped` — removes a line's end-to-end reference. It still
+          matches, by the weakest rule, and the match records that.
+      enum:
+        - none
+        - missing-line
+        - amount-mismatch
+        - unknown-line
+        - duplicate-line
+        - shifted-value-date
+        - flipped-line-type
+        - reference-stripped
+
+    StatementLine:
+      type: object
+      description: One movement the simulated scheme reports.
+      required: [lineNo, schemeReference, lineType, amount, valueDate]
+      properties:
+        lineNo:
+          type: integer
+          description: |
+            Position in the document, from 1, assigned by CloFin on arrival
+            rather than read from it: a line's position is how a break addresses
+            it, and two lines claiming one number would be two breaks claiming
+            one identity.
+        schemeReference:
+          type: string
+          description: The scheme's own reference for this line.
+        paymentReference:
+          type: string
+          description: |
+            The end-to-end reference the scheme echoed back — CloFin's payment
+            instruction id. Absent when the scheme did not tag the line, which
+            is a real case rather than missing data: such a line is matched on
+            its attributes instead.
+        lineType:
+          $ref: "#/components/schemas/StatementLineType"
+        amount:
+          $ref: "#/components/schemas/Money"
+        valueDate:
+          type: string
+          format: date
+          description: |
+            The day the scheme dates this movement to. CloFin dates the same
+            movement by the day of its journal entry; the two agreeing is what
+            a reconciliation is checking.
+
+    SimulatedStatement:
+      type: object
+      description: |
+        A statement as the simulated scheme would send it, in CloFin's own
+        format. Postable straight back to `POST /reconciliation-statements`.
+      required: [format, formatVersion, simulated, scheme, currency,
+                 statementReference, periodStart, periodEnd, lines]
+      properties:
+        format:
+          $ref: "#/components/schemas/StatementFormat"
+        formatVersion:
+          type: integer
+          examples: [1]
+        simulated:
+          type: boolean
+          description: |
+            Always true, and stated in the document rather than only in this
+            contract: a statement saved to a file and read a year later must
+            still say what it is.
+          enum: [true]
+        scheme:
+          type: string
+          enum: [SIM-RTGS, SIM-ACH]
+        currency:
+          $ref: "#/components/schemas/CurrencyCode"
+        statementReference:
+          type: string
+          description: |
+            The delivery's identity. Derived from what the statement is a
+            statement *of*, so asking for the same statement twice produces the
+            same reference and the second ingestion is a replay.
+        periodStart: { type: string, format: date-time }
+        periodEnd: { type: string, format: date-time }
+        perturbation:
+          $ref: "#/components/schemas/PerturbationClass"
+        lines:
+          type: array
+          items:
+            $ref: "#/components/schemas/StatementLine"
+
+    IngestStatementRequest:
+      type: object
+      description: |
+        A statement document, plus the organisation the caller believes it is
+        acting for. The document is exactly what
+        `GET /settlement-statements` returns.
+      required: [format, formatVersion, scheme, currency, statementReference,
+                 periodStart, periodEnd, lines]
+      properties:
+        organisationId:
+          type: string
+          format: uuid
+          description: |
+            Optional, and **verified** against the authenticated actor's
+            organisation rather than trusted.
+        format:
+          $ref: "#/components/schemas/StatementFormat"
+        formatVersion: { type: integer, examples: [1] }
+        scheme:
+          type: string
+          enum: [SIM-RTGS, SIM-ACH]
+        currency:
+          $ref: "#/components/schemas/CurrencyCode"
+        statementReference: { type: string }
+        periodStart: { type: string, format: date-time }
+        periodEnd: { type: string, format: date-time }
+        simulated: { type: boolean }
+        perturbation:
+          $ref: "#/components/schemas/PerturbationClass"
+        lines:
+          type: array
+          maxItems: 500
+          items:
+            $ref: "#/components/schemas/StatementLine"
+
+    ReconciliationMatch:
+      type: object
+      description: One statement line bound to one ledger movement.
+      required: [lineNo, entryId, rule, matchedAt]
+      properties:
+        lineNo: { type: integer }
+        entryId:
+          type: string
+          format: uuid
+          description: The journal entry the line was matched to.
+        rule:
+          $ref: "#/components/schemas/MatchingRule"
+        matchedAt: { type: string, format: date-time }
+
+    ReconciliationBreak:
+      type: object
+      description: |
+        A tracked, owned, ageing disagreement — not a discrepancy somebody will
+        look at later.
+      required: [id, statementId, accountId, kind, state, detail, assigneeId,
+                 openedAt, ageSeconds, permittedTransitions]
+      properties:
+        id: { type: string, format: uuid }
+        statementId: { type: string, format: uuid }
+        accountId:
+          type: string
+          format: uuid
+          description: The account being reconciled — in practice `1300-IN-TRANSIT`.
+        kind:
+          $ref: "#/components/schemas/BreakKind"
+        state:
+          $ref: "#/components/schemas/BreakState"
+        lineNo:
+          type: integer
+          description: The statement line, when the break has one.
+        entryId:
+          type: string
+          format: uuid
+          description: The ledger movement, when the break has one.
+        statementAmount:
+          $ref: "#/components/schemas/Money"
+        ledgerAmount:
+          $ref: "#/components/schemas/Money"
+        detail:
+          type: string
+          description: What disagreed, in words an operator can act on.
+        assigneeId:
+          type: string
+          format: uuid
+          description: |
+            A break is never unowned. It opens assigned to the actor whose
+            ingestion discovered it.
+        openedAt: { type: string, format: date-time }
+        resolvedAt: { type: string, format: date-time }
+        ageSeconds:
+          type: integer
+          format: int64
+          description: |
+            **Derived at read time and stored nowhere.** A stored age is wrong
+            the moment it is written, for the same reason a stored balance is.
+        permittedTransitions:
+          type: array
+          description: |
+            What the lifecycle allows from this state, read from the transition
+            table — so this API cannot advertise an operation the state machine
+            would refuse.
+          items:
+            type: string
+            enum: [assign, resolve]
+
+    ReconciliationBreakDetail:
+      allOf:
+        - $ref: "#/components/schemas/ReconciliationBreak"
+        - type: object
+          required: [adjustments]
+          properties:
+            adjustments:
+              type: array
+              items:
+                $ref: "#/components/schemas/ReconciliationAdjustment"
+
+    ReconciliationBreakList:
+      type: object
+      required: [reconciliationBreaks, count, limit, truncated, kinds, states]
+      properties:
+        reconciliationBreaks:
+          type: array
+          items:
+            $ref: "#/components/schemas/ReconciliationBreak"
+        count: { type: integer }
+        limit: { type: integer, examples: [500] }
+        truncated:
+          type: boolean
+          description: |
+            Stated on every response, not only when true: a consumer should not
+            have to infer from the absence of a field that nothing was left out.
+        kinds:
+          type: array
+          description: Every break kind this build can open, so a client can render a filter.
+          items:
+            $ref: "#/components/schemas/BreakKind"
+        states:
+          type: array
+          items:
+            $ref: "#/components/schemas/BreakState"
+
+    ReconciliationStatement:
+      type: object
+      description: |
+        A statement as received, with what CloFin did about it, its lines, its
+        matches and the breaks it opened.
+      required: [id, organisationId, scheme, currency, statementReference,
+                 format, formatVersion, periodStart, periodEnd, disposition,
+                 receivedAt, receivedBy, simulated, lines, matches, breaks]
+      properties:
+        id: { type: string, format: uuid }
+        organisationId: { type: string, format: uuid }
+        scheme:
+          type: string
+          enum: [SIM-RTGS, SIM-ACH]
+        currency:
+          $ref: "#/components/schemas/CurrencyCode"
+        statementReference: { type: string }
+        format:
+          $ref: "#/components/schemas/StatementFormat"
+        formatVersion: { type: integer }
+        periodStart: { type: string, format: date-time }
+        periodEnd: { type: string, format: date-time }
+        disposition:
+          type: string
+          description: |
+            What CloFin did about the arrival. `refused` rows exist and are
+            kept: a receipt destroyed by its own processing failure is not a
+            receipt.
+          enum: [applied, refused]
+        dispositionReason:
+          $ref: "#/components/schemas/StoredStatementRefusalReason"
+        reconciledAccountId:
+          type: string
+          format: uuid
+          description: |
+            The account this statement was compared against. Absent exactly when
+            the statement was refused for want of one.
+        receivedAt: { type: string, format: date-time }
+        receivedBy: { type: string, format: uuid }
+        simulated:
+          type: boolean
+          enum: [true]
+        replayed:
+          type: boolean
+          description: |
+            True when this exact document had already been delivered. Nothing
+            was re-run and this is the original answer.
+        lines:
+          type: array
+          items:
+            $ref: "#/components/schemas/StatementLine"
+        matches:
+          type: array
+          items:
+            $ref: "#/components/schemas/ReconciliationMatch"
+        breaks:
+          type: array
+          items:
+            $ref: "#/components/schemas/ReconciliationBreak"
+
+    AssignBreakRequest:
+      type: object
+      required: [assigneeId]
+      properties:
+        organisationId: { type: string, format: uuid }
+        assigneeId:
+          type: string
+          format: uuid
+          description: An actor in this organisation. A break is never unowned.
+
+    ProposeAdjustmentRequest:
+      type: object
+      required: [amount, direction, narrative]
+      properties:
+        organisationId: { type: string, format: uuid }
+        amount:
+          $ref: "#/components/schemas/Money"
+        direction:
+          type: string
+          description: |
+            The direction applied to the **reconciled** account. The suspense leg
+            (`2200-UNAPPLIED`) is always the opposite, so the entry balances by
+            construction.
+          enum: [debit, credit]
+        narrative:
+          type: string
+          maxLength: 500
+          description: |
+            Why the books are moving. Required: an entry between a clearing
+            account and a suspense account with no explanation is the entry an
+            investigation will be least able to read.
+
+    ApproveAdjustmentRequest:
+      type: object
+      properties:
+        organisationId: { type: string, format: uuid }
+        reason:
+          type: string
+          description: Optional note retained with the decision.
+
+    ReconciliationAdjustment:
+      type: object
+      required: [id, breakId, amount, direction, narrative, status,
+                 approvalsRequired, createdBy, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        breakId: { type: string, format: uuid }
+        amount:
+          $ref: "#/components/schemas/Money"
+        direction:
+          type: string
+          enum: [debit, credit]
+        narrative: { type: string }
+        status:
+          $ref: "#/components/schemas/AdjustmentStatus"
+        approvalsRequired:
+          type: integer
+          description: |
+            Computed from the organisation's bands **at proposal** and stored,
+            so lowering a band later cannot post an adjustment that never
+            cleared the bar it was raised under. Zero means the proposer alone
+            could post it.
+        entryId:
+          type: string
+          format: uuid
+          description: The journal entry it posted. Present exactly when `status` is `posted`.
+        postedAt: { type: string, format: date-time }
+        createdBy: { type: string, format: uuid }
+        createdAt: { type: string, format: date-time }
+        posted:
+          type: boolean
+          description: |
+            Present on the proposal response: whether this call also moved the
+            books, which happens exactly when the adjustment needed no
+            approvals.
+        break:
+          $ref: "#/components/schemas/ReconciliationBreak"
+
+    AdjustmentApprovalOutcome:
+      type: object
+      required: [approval, adjustment, break, posted, approvalsHeld, approvalsRequired]
+      properties:
+        approval:
+          $ref: "#/components/schemas/Approval"
+        adjustment:
+          $ref: "#/components/schemas/ReconciliationAdjustment"
+        break:
+          $ref: "#/components/schemas/ReconciliationBreak"
+        posted:
+          type: boolean
+          description: True when this approval completed the requirement and the entry posted.
+        approvalsHeld: { type: integer }
+        approvalsRequired: { type: integer }
+
+    ReconciliationStatus:
+      type: object
+      description: |
+        Matched, unmatched and breaks by state, for one account over one period.
+      required: [accountId, from, to, statements, lines, matchesByRule,
+                 breaksByState, breaksByKind]
+      properties:
+        accountId: { type: string, format: uuid }
+        from: { type: string, format: date-time }
+        to: { type: string, format: date-time }
+        statements:
+          type: object
+          required: [received, applied, refused]
+          properties:
+            received: { type: integer }
+            applied: { type: integer }
+            refused: { type: integer }
+        lines:
+          type: object
+          required: [total, matched, unmatched]
+          properties:
+            total: { type: integer }
+            matched: { type: integer }
+            unmatched: { type: integer }
+        matchesByRule:
+          type: object
+          description: |
+            One entry per rule, including the rules that matched nothing — a
+            consumer reads "no matches under this rule" rather than having to
+            distinguish that from "this build does not know this rule".
+          additionalProperties: { type: integer }
+        breaksByState:
+          type: object
+          additionalProperties: { type: integer }
+        breaksByKind:
+          type: object
+          additionalProperties: { type: integer }
+        oldestUnresolvedAgeSeconds:
+          type: [integer, "null"]
+          format: int64
+          description: |
+            Derived at read time. Null when nothing is outstanding, which is a
+            different statement from zero.
+
     AuditAction:
       type: string
       description: |
@@ -2891,6 +4094,19 @@ components:
         journal entry is never drafted and never amended — posting is the only
         transition it has, and a correction is a separate reversing entry with
         its own event.
+
+        **A statement arriving is one event whether or not CloFin could process
+        it.** `reconciliation-statement.received` is written for a refused
+        arrival too — receipt and disposition are separate facts, and the
+        disposition travels in the subject digest rather than in a second term.
+        A *replayed* delivery creates no row and emits nothing: the trail
+        records arrivals, not requests.
+
+        **`reconciliation-break.assigned` is the transition.** A break becomes
+        `investigating` by somebody taking it on, so ownership and state move
+        together and leave one event. Re-assigning an already-investigating
+        break emits the same term with a state that did not move, and the before
+        and after digests differ in the assignee alone.
 
         **`payment.failed` is reserved and has no producer.** The payment
         lifecycle carries a `fail` arrow out of `released`, and nothing in
@@ -2924,6 +4140,12 @@ components:
         - settlement-batch.submitted
         - settlement-batch.completed
         - settlement-batch.timeout-swept
+        - reconciliation-statement.received
+        - reconciliation-break.opened
+        - reconciliation-break.assigned
+        - reconciliation-break.resolved
+        - reconciliation-adjustment.proposed
+        - reconciliation-adjustment.posted
 
     AuditEvent:
       type: object
@@ -2955,7 +4177,9 @@ components:
           $ref: "#/components/schemas/AuditAction"
         subjectType:
           type: string
-          enum: [payment-instruction, approval, organisation, account, journal-entry, settlement-batch]
+          enum: [payment-instruction, approval, organisation, account, journal-entry,
+                 settlement-batch, reconciliation-statement, reconciliation-break,
+                 reconciliation-adjustment]
         subjectId: { type: string, format: uuid }
         beforeDigest:
           type: string
@@ -3004,7 +4228,9 @@ components:
         subjectId: { type: string, format: uuid }
         subjectType:
           type: string
-          enum: [payment-instruction, approval, organisation, account, journal-entry, settlement-batch]
+          enum: [payment-instruction, approval, organisation, account, journal-entry,
+                 settlement-batch, reconciliation-statement, reconciliation-break,
+                 reconciliation-adjustment]
         from:
           type: string
           format: date-time

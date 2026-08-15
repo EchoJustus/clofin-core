@@ -28,6 +28,15 @@
     clofin.audit-test
     clofin.settlement.batch-test
     clofin.settlement.scheme-test
+    ;; The simulated scheme's statement generator, and the four reconciliation
+    ;; domain namespaces. `clofin.recon.matching-test` also carries the AC-9
+    ;; guard comparing the documented rule order in DOMAIN_MODEL §6 with the
+    ;; code's, in both directions and in order.
+    clofin.settlement.statement-test
+    clofin.recon.statement-test
+    clofin.recon.matching-test
+    clofin.recon.break-state-test
+    clofin.recon.adjustment-test
     clofin.config-test
     clofin.http.router-test
     clofin.http.middleware-test
@@ -70,6 +79,8 @@
     clofin.audit.unit-of-work-test
     clofin.settlement.repository-test
     clofin.api.settlement-api-test
+    clofin.recon.repository-test
+    clofin.api.reconciliation-api-test
     clofin.system-test])
 
 (defn integration?

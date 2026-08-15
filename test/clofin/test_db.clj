@@ -44,7 +44,14 @@
   discovers that from `pg_trigger` — but it does assert the two agree, so a
   migration that adds or removes a guard fails here loudly rather than leaving
   a cleanup that silently stops resetting a table."
-  ["journal_entry" "journal_line" "audit_event" "approval" "scheme_response"])
+  ["journal_entry" "journal_line" "audit_event" "approval" "scheme_response"
+   ;; Reconciliation (migration `0012`). A statement arriving, the lines it
+   ;; carried and the movement each line was matched to are statements about a
+   ;; moment in time; editing one would be editing history. `reconciliation_break`
+   ;; and `reconciliation_adjustment` are deliberately absent — a break's state
+   ;; and owner move and an adjustment becomes posted, which is the mechanism of
+   ;; the module rather than a gap in it.
+   "reconciliation_statement" "reconciliation_statement_line" "reconciliation_match"])
 
 (defn clean-business-data!
   "Reset business tables between tests, leaving reference data and the
@@ -117,6 +124,9 @@
       ;; only ever truncated by implication is a test that fails somewhere else.
       (db/execute! tx ["truncate audit_event, approval, approver_limit,
                                  approval_threshold, actor_role, actor,
+                                 reconciliation_adjustment, reconciliation_break,
+                                 reconciliation_match, reconciliation_statement_line,
+                                 reconciliation_statement,
                                  scheme_response, settlement_batch_item,
                                  settlement_batch,
                                  idempotency_key, payment_instruction,
@@ -196,12 +206,17 @@
   objected. Tests that deliberately probe an *incomplete* entry still do so
   directly, so the constraint they exercise is visible at the call site."
   [pool {:keys [id organisation-id debit-account-id credit-account-id
-                amount-minor currency narrative reference-type reference-id]
+                amount-minor currency narrative reference-type reference-id
+                occurred-at]
          :or {amount-minor 125000 currency "SGD" narrative "Test entry"
               reference-type "payment-instruction"}}]
   (let [id (or id (random-uuid))]
     (db/with-transaction [tx pool]
+      ;; `occurred-at` is passed through because reconciliation reads the
+      ;; journal *by period*: a fixture that could only post "now" could not
+      ;; place a movement inside or outside one.
       (insert-entry! tx {:id id :organisation-id organisation-id
+                         :occurred-at occurred-at
                          :narrative narrative :reference-type reference-type
                          :reference-id reference-id})
       (insert-line! tx {:entry-id id :line-no 1 :account-id debit-account-id

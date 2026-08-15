@@ -17,6 +17,7 @@ document.
 | [UAT-004 — A retried submission cannot pay twice](UAT-004-idempotent-submission.md) | A double submission performed by hand, and the evidence that it acted once | PR-001, PR-003, PR-004, PR-040, PR-041, PR-042 |
 | [UAT-005 — Segregation of duties, attempted and refused](UAT-005-segregation-of-duties.md) | Self-approval attempted by hand and refused; approval thresholds and limits; an amendment killing its approvals; the audit trail resisting alteration | PR-010, PR-011, PR-012, PR-013, PR-014, PR-015, PR-070, PR-072, PR-073, PR-074, PR-075 |
 | [UAT-006 — Settlement, and the four ways a scheme misbehaves](UAT-006-settlement-simulation.md) | Partial batch failure, a duplicate response, a late contradiction, and a timeout whose true outcome is unknown — with the re-batch attempted by hand in SQL and refused | PR-030, PR-031, PR-032, NFR-003 |
+| [UAT-007 — Reconciliation: the disagreements, and what happens to them](UAT-007-reconciliation-and-breaks.md) | A statement ingested and matched rule by rule, a payment nobody answered about that is correctly absent, breaks with an owner and a derived age, and a correction posted only after somebody other than its author agreed | PR-050, PR-051, PR-052, PR-053, PR-054 |
 
 ## Recording a result
 

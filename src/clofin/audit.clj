@@ -118,7 +118,40 @@
          ;; The sweep is a state change to the items it marks, caused by the
          ;; passage of time rather than by a scheme. Its own term, because
          ;; "we stopped waiting" is not "the scheme answered".
-         "settlement-batch.timeout-swept"]))
+         "settlement-batch.timeout-swept"
+
+         ;; Reconciliation (TASK-008).
+         ;;
+         ;; A statement **arriving** is the fact, and it is one fact whether or
+         ;; not CloFin could process it: receipt and disposition are separate
+         ;; things, and the disposition travels in the subject digest rather
+         ;; than in a second term (standing lesson **L-11**). A *replayed*
+         ;; delivery creates no row and emits nothing — the trail records
+         ;; arrivals, not requests.
+         "reconciliation-statement.received"
+         ;; One per break the matching opened. A break is a record coming into
+         ;; existence, so it is emitted once, in the transaction where the row
+         ;; first exists — L-7's requirement of a `<subject>.<transition>` term.
+         "reconciliation-break.opened"
+         ;; **Assignment is the transition.** A break becomes investigated by
+         ;; somebody taking it on, so this is one fact and one event rather than
+         ;; an ownership change plus a state change that always accompany each
+         ;; other. Re-assigning an already-investigated break emits the same
+         ;; term with a state that did not move, which is honest: the before and
+         ;; after digests differ in the assignee and in nothing else.
+         "reconciliation-break.assigned"
+         ;; Emitted **only** in the transaction where the break reaches its
+         ;; terminal state, which is the transaction in which its adjustment
+         ;; posts. A proposed adjustment resolves nothing.
+         "reconciliation-break.resolved"
+         ;; The adjustment is proposed, and — separately, possibly under a
+         ;; different actor and certainly under a different correlation id —
+         ;; posted. Two terms because they are two decisions: one operator
+         ;; proposes a correction, and it becomes a movement in the books only
+         ;; when the approvals it needs exist. Collapsing them would make a
+         ;; count of postings a count of proposals, which is F-005's shape.
+         "reconciliation-adjustment.proposed"
+         "reconciliation-adjustment.posted"]))
 
 (def subject-types
   "Every kind of thing an audit event may be about.
@@ -135,7 +168,17 @@
          ;; batch. Inventing a synthetic item id purely to have something to put
          ;; in `subject_id` would put a surrogate in the column an auditor joins
          ;; on.
-         "settlement-batch"]))
+         "settlement-batch"
+         ;; Reconciliation (TASK-008). Three kinds of row, three subjects.
+         ;; A statement's *lines* and *matches* have no identity of their own —
+         ;; a line is addressed by (statement, position) and a match by the line
+         ;; it sits on — so an event about either names the statement, and the
+         ;; statement's own projection carries the content digest and the match
+         ;; list that prove what those rows say. The same reasoning that keeps a
+         ;; settlement item's events on the instruction and on the batch.
+         "reconciliation-statement"
+         "reconciliation-break"
+         "reconciliation-adjustment"]))
 
 (def payment-action-prefix
   "The one action prefix whose subject type is not spelt the same way.
@@ -334,8 +377,14 @@
     (select-keys instruction instruction-fields)))
 
 (def approval-fields
-  "The fields of an approval that a digest covers."
-  [:id :instruction-id :actor-id :decision :reason :invalidated-at])
+  "The fields of an approval that a digest covers.
+
+  `:adjustment-id` joined `:instruction-id` in TASK-008, when an approval became
+  a decision about one of two kinds of subject. Both are in the projection, and
+  both are in it *always*: a field left out is a field an alteration could move
+  without the digest noticing, and \"which thing was this approval about?\" is
+  the first question an evidence pack has to answer."
+  [:id :instruction-id :adjustment-id :actor-id :decision :reason :invalidated-at])
 
 (defn approval-subject
   "The projection of an approval that its audit digests are taken over."
@@ -414,3 +463,68 @@
   [batch]
   (when batch
     (select-keys batch settlement-batch-fields)))
+
+(def reconciliation-statement-fields
+  "The fields of a received statement that a digest covers.
+
+  Identity, what the document was a statement *of*, and the two things that say
+  what CloFin did with it: the `content-digest` — which itself covers every line
+  — and the disposition.
+
+  `:matches` is here, and it is the field that makes this event worth having.
+  A statement's matches have no subject of their own (a match is addressed by
+  the line it sits on), so without them the trail would record that a document
+  arrived and not *which rule bound which line to which movement* — which is
+  exactly what PR-051 asks CloFin to be able to explain. `reconciliation_match`
+  is append-only, so the digest proves those rows have not moved since.
+
+  `received-at` is deliberately outside the projection, for the same reason
+  `instruction-fields` excludes `created-at`: it is assigned by the database, so
+  it is present on a row read back and absent from the value just built, and a
+  digest that differed depending on which it was handed would prove nothing."
+  [:id :organisation-id :scheme :currency :statement-reference :format
+   :format-version :period-start :period-end :content-digest
+   :disposition :disposition-reason :reconciled-account-id :matches])
+
+(defn reconciliation-statement-subject
+  "The projection of a received statement that its audit digests are taken over."
+  [statement]
+  (when statement
+    (select-keys statement reconciliation-statement-fields)))
+
+(def reconciliation-break-fields
+  "The fields of a break that a digest covers.
+
+  Everything a later change could alter — `state` and `assignee-id` are the two
+  that move — plus what the break *is*: which side or sides disagreed, by how
+  much, and the detail that names it.
+
+  **`age-seconds` is deliberately absent, and its absence is load-bearing.** A
+  break's age is derived at read time from `opened-at`, so a projection that
+  carried it would produce a different digest every second and make every
+  before/after pair differ for reasons that are not changes. That is the same
+  reasoning that keeps a balance out of `account-fields`."
+  [:id :organisation-id :statement-id :account-id :kind :state :line-no
+   :entry-id :currency :statement-amount :ledger-amount :detail :assignee-id])
+
+(defn reconciliation-break-subject
+  "The projection of a break that its audit digests are taken over."
+  [break]
+  (when break
+    (select-keys break reconciliation-break-fields)))
+
+(def reconciliation-adjustment-fields
+  "The fields of an adjustment that a digest covers.
+
+  `approvals-required` is in the projection because it is the control's own
+  number: an adjustment that posted after one approval when its row said two
+  would be the failure C-01 and C-02 exist to prevent, and a digest that omitted
+  the requirement could not prove it did not happen."
+  [:id :organisation-id :break-id :amount :direction :narrative :status
+   :approvals-required :entry-id :created-by])
+
+(defn reconciliation-adjustment-subject
+  "The projection of an adjustment that its audit digests are taken over."
+  [adjustment]
+  (when adjustment
+    (select-keys adjustment reconciliation-adjustment-fields)))

@@ -23,6 +23,7 @@ flowchart LR
         c_09["C-09<br/>Data minimisation<br/>(partial)"]
         c_10["C-10<br/>Change control over the schema"]
         c_12["C-12<br/>Supply chain control"]
+        c_13["C-13<br/>Reconciliation integrity"]
     end
     subgraph status_partial["🔨 partial"]
         direction TB
@@ -53,71 +54,94 @@ flowchart LR
     ep18["clofin.api.approvals"]
     ep19["clofin.api.principal/authorise!"]
     ep20["clofin.audit.repository/assert-unit-of-work!"]
-    ep21["clofin.audit.repository/record!"]
-    ep22["clofin.audit/event"]
-    ep23["clofin.audit/event, actor rule"]
-    ep24["clofin.authz.approval/evaluate"]
-    ep25["clofin.authz.model/authorise!"]
-    ep26["clofin.authz.model/role-permissions"]
-    ep27["clofin.config/redacted with a test asserting<br/>the credential does not appear in the<br/>printed form ✅. Exception logging is outside<br/>both — see the statement above and §4."]
-    ep28["clofin.error/public-data, with tests<br/>asserting that a credential embedded in an<br/>exception message does not appear in a<br/>production response and that a constraint<br/>name attached to a domain error appears in<br/>neither the response nor any profile ✅."]
-    ep29["clofin.http.middleware/wrap-errors ✅"]
-    ep30["clofin.http.middleware/wrap-request-logging<br/>✅"]
-    ep31["clofin.idempotency.repository/execute-once!"]
-    ep32["clofin.idempotency/canonical and /digest"]
-    ep33["clofin.ledger.entry/entry raises with the<br/>per-currency shortfall ✅"]
-    ep34["clofin.ledger.entry/reverse-entry refuses to<br/>reuse the original's id ✅"]
-    ep35["clofin.ledger.purity-test"]
-    ep36["clofin.payments.state/creator-only-events +<br/>clofin.payments.repository/transition!"]
-    ep37["integration test tampering with a checksum<br/>and asserting start-up fails ✅."]
-    ep38["journal_entry_append_only and<br/>journal_line_append_only triggers reject<br/>UPDATE, DELETE and TRUNCATE at the database<br/>✅ — the third verb added by migration 0007<br/>after audit finding F-002 found it uncovered<br/>✅"]
-    ep39["scheme_response_append_only,<br/>scheme_response_no_truncate"]
-    ep40["scheme_response_replay_key and<br/>scheme_response.request_digest"]
-    ep41["settlement_item_instruction_key"]
+    ep21["clofin.audit.repository/assert-unit-of-work!<br/>in clofin.recon.service"]
+    ep22["clofin.audit.repository/record!"]
+    ep23["clofin.audit/event"]
+    ep24["clofin.audit/event, actor rule"]
+    ep25["clofin.authz.approval/evaluate"]
+    ep26["clofin.authz.model/authorise!"]
+    ep27["clofin.authz.model/role-permissions"]
+    ep28["clofin.config/redacted with a test asserting<br/>the credential does not appear in the<br/>printed form ✅. Exception logging is outside<br/>both — see the statement above and §4."]
+    ep29["clofin.error/public-data, with tests<br/>asserting that a credential embedded in an<br/>exception message does not appear in a<br/>production response and that a constraint<br/>name attached to a domain error appears in<br/>neither the response nor any profile ✅."]
+    ep30["clofin.http.middleware/wrap-errors ✅"]
+    ep31["clofin.http.middleware/wrap-request-logging<br/>✅"]
+    ep32["clofin.idempotency.repository/execute-once!"]
+    ep33["clofin.idempotency/canonical and /digest"]
+    ep34["clofin.ledger.entry/entry raises with the<br/>per-currency shortfall ✅"]
+    ep35["clofin.ledger.entry/reverse-entry refuses to<br/>reuse the original's id ✅"]
+    ep36["clofin.ledger.purity-test"]
+    ep37["clofin.payments.state/creator-only-events +<br/>clofin.payments.repository/transition!"]
+    ep38["clofin.recon.adjustment/approvals-required"]
+    ep39["clofin.recon.break-state/transitions"]
+    ep40["clofin.recon.matching-test"]
+    ep41["clofin.recon.matching/rules"]
+    ep42["integration test tampering with a checksum<br/>and asserting start-up fails ✅."]
+    ep43["journal_entry_append_only and<br/>journal_line_append_only triggers reject<br/>UPDATE, DELETE and TRUNCATE at the database<br/>✅ — the third verb added by migration 0007<br/>after audit finding F-002 found it uncovered<br/>✅"]
+    ep44["recon_adjustment_posted_key"]
+    ep45["recon_match_expectation_key"]
+    ep46["recon_match_rule_known"]
+    ep47["recon_statement_append_only,<br/>recon_statement_line_append_only,<br/>recon_match_append_only (and their TRUNCATE<br/>guards)"]
+    ep48["recon_statement_replay_key and<br/>reconciliation_statement.content_digest"]
+    ep49["reconciliation_break.assignee_id NOT NULL"]
+    ep50["scheme_response_append_only,<br/>scheme_response_no_truncate"]
+    ep51["scheme_response_replay_key and<br/>scheme_response.request_digest"]
+    ep52["settlement_item_instruction_key"]
 
     c_01 --> ep18
-    c_01 --> ep24
-    c_01 --> ep26
-    c_01 --> ep36
+    c_01 --> ep25
+    c_01 --> ep27
+    c_01 --> ep37
     c_02 --> ep12
     c_02 --> ep14
-    c_02 --> ep24
+    c_02 --> ep25
     c_03 --> ep04
-    c_03 --> ep34
-    c_03 --> ep38
+    c_03 --> ep35
+    c_03 --> ep43
     c_04 --> ep01
     c_04 --> ep02
     c_04 --> ep03
     c_04 --> ep07
-    c_04 --> ep33
+    c_04 --> ep34
     c_05 --> ep13
     c_05 --> ep15
     c_05 --> ep16
     c_05 --> ep20
-    c_05 --> ep21
     c_05 --> ep22
     c_05 --> ep23
-    c_05 --> ep35
-    c_05 --> ep39
+    c_05 --> ep24
+    c_05 --> ep36
+    c_05 --> ep50
     c_06 --> ep06
     c_06 --> ep09
-    c_06 --> ep31
     c_06 --> ep32
-    c_06 --> ep40
-    c_06 --> ep41
+    c_06 --> ep33
+    c_06 --> ep51
+    c_06 --> ep52
     c_07 --> ep10
     c_07 --> ep17
     c_08 --> ep11
     c_08 --> ep19
-    c_08 --> ep24
     c_08 --> ep25
-    c_09 --> ep27
-    c_09 --> ep30
+    c_08 --> ep26
+    c_09 --> ep28
+    c_09 --> ep31
     c_10 --> ep05
-    c_10 --> ep37
-    c_11 --> ep28
+    c_10 --> ep42
     c_11 --> ep29
+    c_11 --> ep30
     c_12 --> ep08
+    c_13 --> ep21
+    c_13 --> ep25
+    c_13 --> ep38
+    c_13 --> ep39
+    c_13 --> ep40
+    c_13 --> ep41
+    c_13 --> ep44
+    c_13 --> ep45
+    c_13 --> ep46
+    c_13 --> ep47
+    c_13 --> ep48
+    c_13 --> ep49
 ```
 
 Each control carries the status its `COMPLIANCE.md` heading states, grouped by

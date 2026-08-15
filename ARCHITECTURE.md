@@ -94,8 +94,20 @@ are worth reading against each other, and the diagram is the one that cannot be
 out of date.
 
 Dependency rule: **the ledger's domain depends on nothing.** Payments depends on
-ledger and authz. Settlement and reconciliation depend on ledger. Nothing depends
-on HTTP. This is what makes the domain testable without a server or a database.
+ledger and authz. Reconciliation depends on ledger and authz — on authz because
+an adjustment goes through the *same* maker–checker control a payment does, not
+a second one. Settlement depends on ledger and payments, and on **reconciliation
+for the statement format its simulator emits**: an adapter writing documents in
+the format its consumer reads is a direction, and the two depending on each other
+would be a cycle. Nothing depends on HTTP. This is what makes the domain testable
+without a server or a database.
+
+The arrow between settlement and reconciliation runs one way for a reason worth
+stating, because it is a control rather than tidiness. The **generator** of a
+statement reads the settlement records; the **matcher** reads the journal.
+Neither can see the other's keys or rules, so nothing the two agree about was
+derived from one of them — which is the only arrangement under which agreement
+is evidence (standing lesson **L-16**).
 
 **Audit is a sink: anything may depend on it, and it depends on nothing.** An
 audit event has to be written by the transaction that carries the change (§5.5,
@@ -354,7 +366,64 @@ The failure modes are the increment, not its edge cases:
 The sweep is an explicit operator call rather than a daemon — a timeout that
 fires itself is one nobody can point at afterwards.
 
-### 5.7 Multi-tenancy and access
+### 5.7 Reconciliation
+
+A **statement** — the simulated scheme's own account of what it did — is
+received, matched against CloFin's journal, and every disagreement becomes a
+tracked, owned, ageing **break**.
+
+**The format is CloFin's own** ([ADR-0023](docs/ADR/0023-a-clofin-defined-synthetic-statement-format-and-an-ordered-matching-sequence.md)):
+`SIM-CLOFIN-RECON-STATEMENT`, versioned, `SIM-` prefixed, and deliberately not
+camt.053, MT940, BAI2 or any real scheme's schema. The only producer of one is
+CloFin's own simulator at `GET /settlement-statements`. There is no listener and
+no file drop.
+
+**The two sides are produced by different things, and that is the control.** The
+simulator builds a statement from the settlement records — what the scheme did,
+when it resolved each item, and the amount the instruction carried. The matcher
+reads the **journal**: the posted amount, the entry's occurrence date, and the
+counter-account that says whether a movement was a settlement or a return.
+Neither can see the other's keys or rules, so nothing they agree about was
+derived from the other. A statement generated from the matcher's own rules would
+prove the matcher agrees with itself.
+
+**Matching is deterministic, ordered and explainable.** Four rules in a fixed
+sequence, first match wins, exactly one candidate or no match, and the rule id is
+written beside the match — a match nobody can re-derive is a match nobody can
+defend to an auditor. The order is published in
+[`DOMAIN_MODEL.md` §6](docs/DOMAIN_MODEL.md) and compared with the code in both
+directions by a guard. *Which movement a line is about* and *whether the two
+records agree* are separate questions, so a pair identified by reference and
+disagreeing on amount is a break that names the disagreement rather than two
+unrelated "not found" entries.
+
+**The account reconciled is `1300-IN-TRANSIT`** — CloFin's clearing exposure at
+any instant (§5.6). A payment the scheme never answered about is correctly still
+in that balance *and* correctly absent from the statement; that pair is what the
+model is for.
+
+**A break is a tracked object.** It has a kind, an owner it never lacks, a state
+held as data (`open` → `investigating` → `resolved`) and an **age derived at
+read time** — never stored, because a stored age is wrong the moment it is
+written.
+
+**Nothing here edits a journal entry.** A disagreement changes the books through
+one route: a new balanced entry between the reconciled account and
+`2200-UNAPPLIED`, posted through the same path a release takes, and approved
+through the **same** maker–checker control a payment goes through — the same
+pure decision function, the same `approval` table, the same per-currency limits.
+Above the lowest approval band the organisation configured for the currency it
+needs that band's approvals from actors other than the proposer; below it, one
+actor; with no band configured, none at all, because an unconfigured currency is
+not an unsupervised one.
+
+Matching runs **synchronously on ingestion**. This codebase has no job runner,
+and one increment must not introduce one as a side effect; the bound on a run is
+explicit and **refuses** rather than truncating, because a movement left out of a
+reconciliation becomes a break against a movement that is right there in the
+journal.
+
+### 5.8 Multi-tenancy and access
 
 Every business record carries an organisation identifier, and the organisation a
 request acts on comes from the **authenticated actor**, never from the request.

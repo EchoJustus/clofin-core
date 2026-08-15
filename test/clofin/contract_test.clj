@@ -223,7 +223,8 @@
                                   (if (str/includes? path "approvals") "approvals" "payments")
                                   (str/starts-with? path "/payment-instructions") "payments"
                                   (str/starts-with? path "/approvals")     "approvals"
-                                  (str/starts-with? path "/settlement-batches") "settlement"
+                                  (str/starts-with? path "/settlement-")   "settlement"
+                                  (str/starts-with? path "/reconciliation-") "reconciliation"
                                   (str/starts-with? path "/audit")         "audit"
                                   :else "health")))
                   route-table))))

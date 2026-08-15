@@ -9,6 +9,7 @@
   comparison here runs both ways: nothing in the source may be missing from the
   drawing, and nothing in the drawing may be absent from the source."
   (:require [clofin.payments.state :as state]
+            [clofin.recon.break-state :as break-state]
             [clofin.tools.diagrams :as diagrams]
             [clofin.tools.markdown :as md]
             [clofin.tools.mermaid :as mmd]
@@ -137,6 +138,72 @@
         "`reverse` is not a transition and must not appear as an arrow")
     (is (empty? (filter #(= :settled (first %)) (lifecycle-edges body)))
         "`settled` is terminal: nothing leaves it")))
+
+;; ---------------------------------------------------------------------------
+;; TASK-008 AC-10 — the break lifecycle diagram against its table, both ways
+;; ---------------------------------------------------------------------------
+;;
+;; The second lifecycle, and the second time this comparison is written. It is
+;; written twice rather than abstracted over the two because the *point* of the
+;; guard is that it names its source: a parameterised version would pass a table
+;; in, and a caller passing the wrong table would still be green.
+
+(deftest ac-10-the-break-lifecycle-diagram-and-its-table-agree-in-both-directions
+  (let [body     (mermaid-body (artifact "docs/diagrams/reconciliation-break-lifecycle.md"))
+        drawn    (lifecycle-edges body)
+        declared (into #{} (for [[from events] break-state/transitions
+                                 [event to]    events]
+                             [from event to]))]
+    (testing "every permitted pair in the table is drawn"
+      (is (empty? (set/difference declared drawn))
+          (str "transitions the table permits and the diagram omits: "
+               (pr-str (set/difference declared drawn))
+               " — run `make diagrams`.")))
+    (testing "nothing is drawn that the table does not permit"
+      (is (empty? (set/difference drawn declared))
+          (str "transitions the diagram invents: " (pr-str (set/difference drawn declared)))))
+
+    (testing "every state appears, and no other"
+      (is (= (set (keys break-state/transitions))
+             (set (vals (state-aliases body))))))
+
+    (testing "every event appears, and no other"
+      (is (= (set break-state/events) (into #{} (map second) drawn))))
+
+    (testing "the start marker names the initial state, and only it"
+      (is (= #{break-state/initial-state} (:initial (anchor-edges body)))))
+
+    (testing "the terminal set is the derived one, and is not a second list"
+      (is (= (into #{} (filter break-state/terminal?) (keys break-state/transitions))
+             (:terminal (anchor-edges body)))))
+
+    (testing "a state drawn as terminal has no outgoing arrow in the diagram either"
+      (doseq [s (:terminal (anchor-edges body))]
+        (is (empty? (filter #(= s (first %)) drawn))
+            (str s " is drawn as terminal and also has an outgoing arrow."))))))
+
+(deftest ac-10-the-break-lifecycle-diagram-draws-no-arrow-for-a-reassignment
+  ;; Reassigning an investigating break leaves the state where it is, so it is a
+  ;; rule about status rather than an edge — the distinction
+  ;; `clofin.payments.state`'s `mutable-states` already makes, and the one a
+  ;; hand-drawn diagram gets wrong first.
+  (let [body (mermaid-body (artifact "docs/diagrams/reconciliation-break-lifecycle.md"))]
+    (is (empty? (filter (fn [[from _ to]] (= from to)) (lifecycle-edges body)))
+        "a self-arrow would draw reassignment as a transition")))
+
+(deftest ac-10-a-break-transition-added-without-regenerating-fails-the-check
+  ;; The negative control, run rather than asserted: the lifecycle gains a pair,
+  ;; nothing is regenerated, and `check` must fail and say where.
+  (let [tampered (update (diagrams/break-lifecycle) :edges conj [:resolved :reopen :open])]
+    (with-redefs [diagrams/break-lifecycle (constantly tampered)]
+      (let [{:keys [ok? report]} (diagrams/check root)]
+        (is (not ok?) "a diagram that no longer matches its source must fail the check")
+        (is (str/includes? report "docs/diagrams/reconciliation-break-lifecycle.md")
+            "the failure names the artifact that drifted")
+        (is (str/includes? report "reopen")
+            "the failure names the difference, not merely that there is one"))))
+  (testing "and the check passes again once nothing is tampered with"
+    (is (:ok? (diagrams/check root)))))
 
 ;; ---------------------------------------------------------------------------
 ;; AC-4 — the control map against COMPLIANCE §2, both ways

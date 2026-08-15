@@ -53,6 +53,8 @@
             [clofin.money :as money]
             [clofin.organisations.service :as organisations-service]
             [clofin.payments.approval-service :as approval-service]
+            [clofin.recon.service :as recon-service]
+            [clofin.recon.statement :as statement]
             [clofin.settlement.service :as settlement-service]
             [clofin.test-db :as tdb]
             [clojure.test :refer [deftest is testing use-fixtures]])
@@ -125,7 +127,9 @@
                                  [(str "select count(*) as count from " t)]))]))
         ["organisation" "ledger_account" "journal_entry" "journal_line"
          "payment_instruction" "approval" "settlement_batch" "settlement_batch_item"
-         "scheme_response" "audit_event"]))
+         "scheme_response" "audit_event"
+         "reconciliation_statement" "reconciliation_statement_line"
+         "reconciliation_match" "reconciliation_break" "reconciliation_adjustment"]))
 
 ;; ---------------------------------------------------------------------------
 ;; The set
@@ -230,7 +234,61 @@
     :call (fn [source {:keys [org actor batch]}]
             (settlement-service/sweep-timeouts!
              source {:organisation-id org :batch-id batch :actor {:id actor}
-                     :correlation-id "corr-f-011" :horizon-seconds 0}))}])
+                     :correlation-id "corr-f-011" :horizon-seconds 0}))}
+
+   ;; Reconciliation (TASK-008). The statement receipt, the matches, the breaks
+   ;; and every audit event describing them are one unit of work; so are an
+   ;; adjustment's posting, its break's resolution and the journal entry
+   ;; between them. A lost transaction here is a break opened against a receipt
+   ;; that did not commit, or an entry in the books with no adjustment behind
+   ;; it — both states C-05 calls unrepresentable.
+   {:ns 'clofin.recon.service
+    :label "ingest-statement!"
+    :call (fn [source {:keys [org actor]}]
+            (recon-service/ingest-statement!
+             source {:organisation-id org
+                     :statement-id (random-uuid)
+                     :actor {:id actor}
+                     :correlation-id "corr-f-011"
+                     :statement {:format statement/format-name
+                                 :format-version statement/format-version
+                                 :scheme "SIM-RTGS"
+                                 :currency "SGD"
+                                 :statement-reference "SIM-STMT-F011"
+                                 :period-start (Instant/parse "2026-08-01T00:00:00Z")
+                                 :period-end   (Instant/parse "2026-09-01T00:00:00Z")
+                                 :lines []}}))}
+
+   {:ns 'clofin.recon.service
+    :label "assign-break!"
+    :call (fn [source {:keys [org actor]}]
+            (recon-service/assign-break!
+             source {:organisation-id org :break-id (random-uuid)
+                     :assignee-id actor :actor {:id actor}
+                     :correlation-id "corr-f-011"}))}
+
+   {:ns 'clofin.recon.service
+    :label "propose-adjustment!"
+    :call (fn [source {:keys [org actor]}]
+            (recon-service/propose-adjustment!
+             source {:organisation-id org :break-id (random-uuid)
+                     :adjustment-id (random-uuid)
+                     :amount (money/of "SGD" 12500)
+                     :direction :credit
+                     :narrative "Adjusting a break the scheme reported"
+                     :actor {:id actor} :correlation-id "corr-f-011"
+                     :entry-id (random-uuid)
+                     :occurred-at (Instant/parse "2026-08-04T09:00:00Z")}))}
+
+   {:ns 'clofin.recon.service
+    :label "approve-adjustment!"
+    :call (fn [source {:keys [org actor]}]
+            (recon-service/approve-adjustment!
+             source {:organisation-id org :adjustment-id (random-uuid)
+                     :approval-id (random-uuid) :actor {:id actor}
+                     :correlation-id "corr-f-011"
+                     :entry-id (random-uuid)
+                     :occurred-at (Instant/parse "2026-08-04T09:00:00Z")}))}])
 
 (deftest every-audit-composing-service-is-covered-here
   (testing "the same set is written down in two places, so they are compared —
