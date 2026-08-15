@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | **Increment** | 8.1 (cockpit, phase 1) — spans `clofin-core` (one ADR) and `clofin-cockpit` (everything else) |
-| **Status** | `IMPLEMENTED` — Worker reported done 2026-08-15: part A (ADR-0026) **merged** in PR #21 (`eb3a561`); part B open as `clofin-cockpit` PR #1 (CI green), **merge held** pending two operator settings (visibility → public, Pages → GitHub Actions; observation N-4a). Both objections ruled, see Changelog |
+| **Status** | `CLOSED` — part A merged in PR #21 (`eb3a561`); part B merged in `clofin-cockpit` PR #1 (`f20f4a6`) after the repository went public and Pages was set (N-4a resolved); the O-2 README ruling executed on cockpit `main` (`7b0b8d6`). Both objections ruled, see Changelog |
 | **Depends on** | The operator's D1/D2 ruling of 2026-08-15 (recorded below and in the audits register); the `clofin-cockpit` repository ✅ created with its first-commit README and EPL-2.0 licence (`13e6435`) |
 | **Base branch** | `clofin-core` `main` at `812f732` or later; `clofin-cockpit` `main` at `13e6435` or later |
 | **Requirements** | Driver D5; the cockpit plan of 2026-08-15 (Phase 0 + Phase 1, minus everything `ref-2`- or API-gated) |
