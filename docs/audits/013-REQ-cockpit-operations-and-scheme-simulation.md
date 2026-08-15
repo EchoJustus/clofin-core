@@ -24,8 +24,9 @@ subject. It does not. `clofin-core` was **run** — `make up`'s stack against a
 real PostgreSQL 16, migrated to schema `0013`, reporting
 `sourceCommit e8c5bf62f5ab3272ae08fa14fbd31a5fbb755f04` — and **driven hard**:
 every flow below is real requests against that instance, and the walk in §6 was
-performed four times over the increment against a database dropped and
-re-migrated between runs.
+performed to completion three times over the increment, against a database
+dropped and re-migrated before each — plus four partial runs that stopped at a
+harness defect or captured close-ups of single screens.
 
 Two things were found that would have been `clofin-core` changes. Neither was
 made. Both are filed in [§3](#3-objections).
@@ -505,8 +506,13 @@ exact case, rendering rather than a blank and rather than a guess.
 - The five negative controls in §5, each run for real, three of them confirmed
   to leave no `_site`.
 - The end-to-end walk in §6, in Chromium against a live instance on a real
-  PostgreSQL 16, run to completion four times over the increment with the
-  database dropped and re-migrated between runs. The final run is the one quoted.
+  PostgreSQL 16, run to completion **three** times over the increment with the
+  database dropped and re-migrated before each. The final run — against the
+  build these PRs carry — is the one quoted. Four further runs were partial:
+  three stopped at defects in the driving harness rather than in the cockpit
+  (a choice step needs presenting before its options render; the actor switcher
+  labels the current actor "Acting as X", which a substring match for "Act as X"
+  does not find), and one captured close-ups of single screens.
 - `clofin-core`: **nothing was run against its test suite, because nothing in it
   was changed.** `make verify` was not executed and is not claimed. The
   repository was used as a running system, not modified; `git diff origin/main`
