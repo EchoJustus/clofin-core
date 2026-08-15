@@ -648,6 +648,34 @@ a tag existed. A fail-open design with the identical bug would have shown a
 stale or defaulted tag beside a live instance, and nothing on the screen would
 have looked wrong.
 
+### Two more, from a self-review run after the pull requests were opened
+
+This document originally said no self-review of mine was outstanding. That was
+written before I ran one, and it was wrong to say — so here is what the review
+found, and the correction is on the record rather than quietly folded in.
+
+**A refusal could delete an address the operator had saved.** `openInstance`
+withdrew the registry entry on any refusal. For an address that turned out not
+to be CloFin, that is right. For one the operator had connected before and
+whose machine was simply off, it is not: a stopped instance produces exactly
+the same *"did not answer"* refusal, and losing a saved address because a
+laptop was closed is a surprising thing for a refusal to do. Now the permission
+and the credentials are withdrawn either way, and the **entry** goes only if the
+address was not already remembered. Checked in the browser: an instance
+connected, then stopped, then re-selected — the refusal renders and
+`localStorage` still holds it; an address that was never remembered leaves
+nothing behind.
+
+**A confirmed manual step still offered its "I have run them" button.** Clicking
+it after the step was done either did nothing or asked about a different step.
+The statements stay on screen — they are what happened — but the button now
+appears only while that step is the one waiting.
+
+Both are user-interface defects rather than honesty defects, and neither could
+have produced a false claim: a lost registry entry loses an address, and the
+stale button asks a question the runner answers with "not that step". They are
+recorded because the sentence they contradict was published first.
+
 ## 8. Verification (L-9)
 
 **What I ran, and its results.**
@@ -686,19 +714,28 @@ instance were all local — and the browser's refusal is a decision the browser
 made locally from headers the local service sent. AC-2 is measured, not
 inferred.
 
-**No self-review, adversarial pass or long-running check of mine is
-outstanding.** I have finished verifying.
+**The self-review is done, and it found two things** — both described in §7,
+both fixed, both re-checked in the browser, and the whole browser drive re-run
+afterwards with the same results. **Nothing of mine is now outstanding.** The
+earlier version of this sentence claimed that before the review had happened;
+the correction is in §7 rather than removed.
 
 **Three things are still running or not yet runnable, and none is mine:**
 
-1. **CI on `clofin-core` #23 and `clofin-cockpit` #2.** Both were opened from
-   this branch and their runs are in flight as this is written; the commit
-   carrying this document re-triggers both, and its result cannot be known from
-   inside the document that causes it. `clofin-cockpit`'s workflow builds and
-   runs both checks, which this session ran locally with the same commands;
-   `clofin-core`'s includes the **Compose stack smoke test**, which this session
-   could not run — there is no Docker daemon in this environment — so CI is that
-   job's first execution.
+1. **CI on `clofin-core` #23 and `clofin-cockpit` #2.** `clofin-cockpit` #2's
+   *Build the cockpit and check it* completed **success** on both its push and
+   pull-request runs, and `pages.yml` correctly did not run. `clofin-core` #23
+   at `159e1bc`: all **six** check runs completed **success** — *Unit, property
+   and contract tests*, *Database integration tests* and *Compose stack smoke
+   test*, once for the push event and once for the pull-request event. The
+   Compose smoke job is one this session could not run — there is no Docker
+   daemon in this environment — so CI is its first execution, and it passed.
+
+   The caveat is the same one 011-REQ recorded and it is unavoidable: **the
+   commit carrying this paragraph re-triggers both**, and its result cannot be
+   known from inside the document that causes it. That commit also carries the
+   two §7 fixes, so it is not documentation-only; its runs are named in the
+   completion report rather than pre-declared green here.
 2. **The Pages deployment has not run and cannot yet.** `pages.yml` triggers on
    `main` only, by design, so the first deploy happens after `clofin-cockpit` #2
    merges. 011-REQ's **N-4a** is unresolved as far as this session can tell:
