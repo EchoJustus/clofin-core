@@ -30,6 +30,7 @@ and this table is stale.
 | 8.1 | Cockpit — ADR-0026, scaffold, release browser, honesty layer | [TASK-011](briefs/011-TASK-cockpit-initialization.md) | ✅ `CLOSED` — PR #21 (`eb3a561`) + `clofin-cockpit` PR #1 (`f20f4a6`); **live at <https://echojustus.github.io/clofin-cockpit/>** | green, both repositories |
 | 8.2 | Cockpit — CORS allowlist, instance connect, seed bootstrap | [TASK-012](briefs/012-TASK-cockpit-connect-and-bootstrap.md) | ✅ `CLOSED` — PR #23 (`f174116`) + `clofin-cockpit` PR #2 (`90abb1d`) | green, both repositories |
 | 8.3 | Cockpit — operation flows, scheme play, evidence view | [TASK-013](briefs/013-TASK-cockpit-operations-and-scheme-simulation.md) | ✅ `CLOSED` — cockpit PR #3 (`7ee7e28`) + REQ-only core PR #25 (`b962d7f`); frozen core held | green, cockpit CI ×2 |
+| 8.4 | Cockpit — Actions scenario runner, PAT-free | [TASK-014](briefs/014-TASK-cockpit-scenario-runner.md) | 🔨 `IN PROGRESS` — dispatched 2026-08-15; core frozen, REQ-only | — |
 | 7, 9 | Financial crime; programmable settlement | not yet briefed | 💭 later | — |
 
 **Controls now enforced on `main`.** As of 2026-08-04 the increment-3/4 stack is
