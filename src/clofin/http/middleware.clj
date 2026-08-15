@@ -6,6 +6,7 @@
   can be tested in isolation."
   (:require [clofin.config :as config]
             [clofin.error :as err]
+            [clofin.http.cors :as cors]
             [clofin.http.response :as resp]
             [clojure.data.json :as json]
             [clojure.string :as str]
@@ -221,16 +222,24 @@
 
   1. correlation id  — so every later layer, including the error boundary, has one
   2. request logging — so a request that fails is still logged, with its status
-  3. JSON response   — sits *outside* the error boundary so that the problem
+  3. CORS            — below logging so a preflight is logged and carries a
+                       correlation id like anything else, and above the JSON
+                       codec because a preflight has no body to encode. **With
+                       no allowlist configured this layer is not present at
+                       all**: `cors/wrap-cors` returns the handler it was given,
+                       so the chain is the chain that shipped before it existed
+                       (ADR-0027, AC-1)
+  4. JSON response   — sits *outside* the error boundary so that the problem
                        documents it produces are encoded like any other body
-  4. error boundary  — so a throwable from anything below becomes a response
-  5. JSON request    — parsing failures are raised inside the error boundary
-  6. query params    — likewise: a malformed query string is a 400, not a 500"
+  5. error boundary  — so a throwable from anything below becomes a response
+  6. JSON request    — parsing failures are raised inside the error boundary
+  7. query params    — likewise: a malformed query string is a 400, not a 500"
   [handler config]
   (-> handler
       wrap-query-params
       wrap-json-request
       (wrap-errors config)
       wrap-json-response
+      (cors/wrap-cors (config/cors-allowed-origins config))
       wrap-request-logging
       wrap-correlation-id))

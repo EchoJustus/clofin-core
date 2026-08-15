@@ -5,7 +5,9 @@
   documentation. This test asserts the two agree in both directions: every
   declared operation is routable, and every route is declared. A route added
   without a contract change fails here, which is the point."
-  (:require [clofin.audit :as audit]
+  (:require [clofin.api.health :as health]
+            [clofin.audit :as audit]
+            [clofin.build-info :as build-info]
             [clofin.money :as money]
             [clofin.payments.instruction :as instruction]
             [clofin.routes :as routes]
@@ -78,6 +80,60 @@
       (is (str/includes? lowered "synthetic"))
       (is (str/includes? lowered "central bank"))
       (is (str/includes? lowered "regulatory")))))
+
+;; ---------------------------------------------------------------------------
+;; Self-identification (ADR-0027)
+;; ---------------------------------------------------------------------------
+
+(deftest service-info-declares-exactly-the-fields-it-returns
+  (let [schema (get-in (load-spec) ["components" "schemas" "ServiceInfo"])
+        declared (set (keys (get schema "properties")))
+        returned (set (keys (:body ((health/info {:environment :test}) {}))))]
+    (is (= declared returned)
+        (str "ServiceInfo declares " (pr-str (vec (sort declared)))
+             " and GET / returns " (pr-str (vec (sort returned)))))
+    (testing "sourceCommit is required, because it is always answered"
+      (is (contains? (set (get schema "required")) "sourceCommit")))))
+
+(deftest the-contract-says-source-commit-is-self-reported-rather-than-attested
+  (testing "L-14: the sentence beside the field may not claim more than the field is"
+    (let [description (str/lower-case
+                       (get-in (load-spec)
+                               ["components" "schemas" "ServiceInfo"
+                                "properties" "sourceCommit" "description"]))]
+      (is (str/includes? description "self-reported"))
+      (is (str/includes? description "not attested"))
+      (is (not (str/includes? description "proves"))
+          "nothing about this field proves anything, so the word must not appear as a claim"))))
+
+(deftest the-declared-pattern-admits-a-commit-and-unknown-and-nothing-in-between
+  (let [pattern (re-pattern
+                 (get-in (load-spec)
+                         ["components" "schemas" "ServiceInfo" "properties" "sourceCommit"
+                          "pattern"]))
+        matches? #(boolean (re-find pattern %))]
+    (testing "the two forms the service can produce"
+      (is (matches? "f10974c7762eb9e095694fcfb3aaa72c0bee4bdf"))
+      (is (matches? build-info/unknown))
+      (is (matches? (get-in ((health/info {:environment :test}) {}) [:body "sourceCommit"]))))
+    (testing "and the form 011-REQ's objection O-1 is about"
+      (doseq [wrong ["main" "HEAD" "ref-1" "refs/heads/main" "f10974c" ""]]
+        (is (not (matches? wrong))
+            (str (pr-str wrong) " is contract-valid, which would let a branch name be "
+                 "published under the label \"commit\""))))))
+
+(deftest the-contract-describes-browser-access-as-closed-and-not-as-a-control
+  ;; Flattened before matching: the description is hard-wrapped YAML, so a
+  ;; sentence is split across lines at whatever column it reached, and matching
+  ;; raw text would assert about the wrapping rather than the words.
+  (let [description (-> (get-in (load-spec) ["info" "description"])
+                        str/lower-case
+                        (str/replace #"\s+" " "))]
+    (testing "a reader of the contract alone learns the default and the limit"
+      (is (str/includes? description "clofin_cors_allowed_origins"))
+      (is (str/includes? description "sends no cors header of any kind"))
+      (is (str/includes? description "there is no wildcard setting"))
+      (is (str/includes? description "cors is not an access control")))))
 
 (defn- subject-type-enums
   "Every `subjectType` enum anywhere in the spec's schemas, as `{schema-name enum}`.

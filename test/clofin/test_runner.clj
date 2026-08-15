@@ -38,8 +38,15 @@
     clofin.recon.break-state-test
     clofin.recon.adjustment-test
     clofin.config-test
+    ;; What `GET /` may report as the running commit, and the several ways it
+    ;; could report something plausible and wrong instead (ADR-0027).
+    clofin.build-info-test
     clofin.http.router-test
     clofin.http.middleware-test
+    ;; The CORS allowlist in both directions, and the two answer lists derived
+    ;; from the route table and from the header lookups in `src/` rather than
+    ;; written out twice (ADR-0027).
+    clofin.http.cors-test
     clofin.api.health-test
     clofin.api.wire-test
     clofin.contract-test

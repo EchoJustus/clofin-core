@@ -6,7 +6,8 @@
   traffic. Conflating them causes an orchestrator to restart a healthy service
   because its database is briefly unavailable — turning a recoverable
   dependency blip into an outage."
-  (:require [clofin.db.core :as db]
+  (:require [clofin.build-info :as build-info]
+            [clofin.db.core :as db]
             [clofin.db.migrate :as migrate]
             [clofin.http.response :as resp]))
 
@@ -40,7 +41,16 @@
 
 (defn info
   "Static description of the service. Exists so that anyone who reaches the API
-  without context immediately learns what it is — and what it is not."
+  without context immediately learns what it is — and what it is not.
+
+  `sourceCommit` is what this process says it was built from — resolved at
+  start-up by `clofin.build-info`, or the literal string `\"unknown\"`. It is
+  **self-reported, not attested**: nothing here proves the running bytes are
+  the bytes at that commit, and `api/openapi.yaml` says so in the field's own
+  description rather than leaving the stronger reading available. The `or` is
+  not defensive tidying — a null or absent field would render on a client as a
+  blank where a commit should be, which is the one thing this field must never
+  do."
   [config]
   (fn [_request]
     (resp/ok {"service" "clofin-core"
@@ -49,4 +59,5 @@
               "disclaimer" (str "CloFin operates on synthetic data only. It is not connected "
                                 "to any bank, payment scheme or central bank, holds no "
                                 "regulatory authorisation, and never processes real funds.")
+              "sourceCommit" (or (:source-commit config) build-info/unknown)
               "documentation" "https://github.com/EchoJustus/clofin-core"})))
