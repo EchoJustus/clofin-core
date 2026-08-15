@@ -48,6 +48,7 @@ table and a brief disagree, the brief on `origin/meta` wins.
 | [008 — Reconciliation](008-TASK-reconciliation.md) | 6 | `CLOSED` — merged in PR #16 (`a41e69f`); four objections ruled, O-1/O-2 routed to TASK-010 | 004 ✅, 006 ✅ | PR-050…054 | Large |
 | [009 — Trace hardening and cross-links](009-TASK-trace-hardening-and-cross-links.md) | 5v.3 | `CLOSED` — merged in PR #17 (`ddf39c1`) + `clofin-trace` PR #2 (`bc0017c`); duplicate dispatch's PR #3 closed unmerged | 007 ✅ | D5 | Small |
 | [010 — Reconciliation completion](010-TASK-reconciliation-completion.md) | 6c | `CLOSED` — merged in PR #19 (`37d2d02`); two objections ruled for the Worker | 008 ✅ | ADR-0019, C-05, 008-REQ O-1/O-2/N-5 | Medium |
+| [011 — `clofin-cockpit` initialization](011-TASK-cockpit-initialization.md) | 8.1 | `CLOSED` — PR #21 (`eb3a561`) + `clofin-cockpit` PR #1 (`f20f4a6`); two objections ruled for the Worker | cockpit repo ✅ | D5, ADR-0026 | Medium |
 
 Sequencing follows **product relevance and regulatory risk**, not implementation
 convenience:
@@ -102,4 +103,5 @@ increment was specified, which is as useful as the code that resulted.
 | [008 — Reconciliation](008-TASK-reconciliation.md) | 6 | PR #16 (`a41e69f`) | Awaiting the deferred batch audit at the **Sol** tier (A1: authz enforcement code + migration); four objections ruled at ingestion, O-1/O-2 → TASK-010, O-3 ratified, O-4 confirmed |
 | [009 — Trace hardening and cross-links](009-TASK-trace-hardening-and-cross-links.md) | 5v.3 | PR #17 (`ddf39c1`) + `clofin-trace` PR #2 (`bc0017c`) | Awaiting the deferred batch audit; no objections |
 | [010 — Reconciliation completion](010-TASK-reconciliation-completion.md) | 6c | PR #19 (`37d2d02`) | Awaiting the deferred batch audit at the **Sol** tier; two objections ruled at ingestion, both confirming the Worker against the brief's own text; N-1/N-3/N-4 routed to the operational-hardening brief |
+| [011 — `clofin-cockpit` initialization](011-TASK-cockpit-initialization.md) | 8.1 | PR #21 (`eb3a561`) + `clofin-cockpit` PR #1 (`f20f4a6`) | ADR-0026 joins the deferred Sol audit's scope; two objections ruled at ingestion (O-1 → the Tags-API rule; O-2 → the README tense fix, executed by Master Control) |
 | [007 — `clofin-trace` replay walkthrough](007-TASK-clofin-trace.md) | 5v.2 | `clofin-core` PR #14 (`261c778`) + `clofin-trace` PR #1 (`71cb13f`) | Awaiting the next milestone batch audit; five objections ruled at ingestion, all for the Worker; O-1 corrected the register's tag-form claims |

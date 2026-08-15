@@ -22,6 +22,20 @@ inherits this note. Until then, every claim about the visual layer's assurance
 is bounded by "objection-ruled and Master-Control-verified, not independently
 audited", and nothing may describe it more generously (L-14, L-15).
 
+**2026-08-15 (second) — three repositories ruled; the Sol audit is scheduled,
+not started.** The operator ruled **(D1)** the ecosystem becomes three
+repositories, amending ADR-0020's "two, and no more", and **(D2)** the third is
+**`clofin-cockpit`** — the operator cockpit, a client of the real API that owns
+no truth and may never claim. ADR-0026 records the amendment (authored under
+TASK-011; ADR-0020 gains a dated amendment section, original text intact).
+`clofin-cockpit` is **outside release-audit scope** on the same basis as
+`clofin-trace`; the boundary artifact (ADR-0026) is inside it. Separately: the
+**Sol release audit for `ref-2` is scheduled for 2026-09-01** by operator
+decision — commissioned in writing on 2026-08-15 (charter filled, RC pinned at
+`812f732`, meta at `fa11e2b`), execution delayed for operator availability. The
+accumulation statement below stands and now runs ~2.5 weeks longer; work landing
+in the gap (TASK-011 onward) joins the audit's scope on the same terms.
+
 **2026-08-15 — the deferred debt now spans four increments, and its tier is
 set.** TASK-008 (increment 6, reconciliation) and TASK-009 (5v.3) merged under
 the same deferral. TASK-008 **modifies enforcement code in the authorisation
