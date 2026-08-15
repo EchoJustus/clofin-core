@@ -345,13 +345,27 @@ confirmed by `ls` immediately afterwards — which is the difference between
 refusing and reporting. Restored, the same command exits 0 and the built page
 contains a `<form>`, which phase 1's build would have refused.
 
-### The CORS refusals, at start-up
+### The CORS refusals, at start-up — in a real process
 
 `cors_test` asserts that four wildcard forms and eleven malformed origins refuse
 the service to start, and that one bad entry in a list refuses the whole list.
 The wildcard message is asserted to name the variable and to say *"There is no
 wildcard"*, because an operator who wrote `*` and saw the service come up would
 conclude it had been honoured.
+
+Run for real rather than only asserted — `clojure -M:run` with
+`CLOFIN_CORS_ALLOWED_ORIGINS=*`:
+
+```
+Execution error (ExceptionInfo) at clofin.error/error (error.clj:103).
+CLOFIN_CORS_ALLOWED_ORIGINS is not a list of origins: "*" contains "*". There is
+no wildcard: every origin permitted to read a CloFin response is named in full,
+or none is
+```
+
+The process exits and **no port is bound** — checked with `ss` immediately
+afterwards. That is the difference that matters: a service that started and
+ignored the setting would leave an operator believing every origin was allowed.
 
 ## 6. The browser evidence
 
