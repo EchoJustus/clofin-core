@@ -3,14 +3,14 @@
 | Field | Value |
 |---|---|
 | **Increment** | 6c (completion) — closes debt TASK-008 named, opens no new product surface |
-| **Status** | `READY` |
+| **Status** | `CLOSED` — merged to `main` in PR #19 (`37d2d02`) 2026-08-15; both objections ruled confirming the Worker's readings, see Changelog |
 | **Depends on** | TASK-008 ✅ merged (PR #16, `a41e69f`) |
 | **Base branch** | `main` at the tip carrying PR #16 and PR #17 |
 | **Blocks** | Nothing hard; C-05's disclosed exception stays disclosed until this lands |
 | **Requirements** | ADR-0019 (ruled text); C-05; 008-REQ O-1/O-2/N-5 and their rulings |
 | **Controls touched** | C-05 — its one disclosed exception is **closed**; C-13 gains the rejection evidence claim |
 | **Scope** | Medium — three named items, nothing else |
-| **Audit** | Not yet submitted |
+| **Audit** | `010-REQ` filed 2026-08-15 (`docs/audits/010-REQ-reconciliation-completion.md` on `main`); inherits the deferred audit debt at the **Sol** tier (A1: migration `0013`, and the approval path now records refusals about a second subject kind) |
 
 > Status lifecycle: `READY` → `IN PROGRESS` → `IMPLEMENTED` → `AUDITED` → `CLOSED`.
 > Status is maintained by Master Control on the `meta` branch — see AGENT_HANDOFF §1b.
@@ -102,3 +102,30 @@ its value is that the disclosed exceptions stop needing disclosure.
 refuse it, and each is now scoped, named work with a ruling behind it. If a
 fourth thing surfaces mid-flight, it goes in your REQ as an observation, not in
 the PR.
+
+---
+
+## Changelog — rulings on the `010-REQ` objections (2026-08-15)
+
+*(The REQ is `docs/audits/010-REQ-reconciliation-completion.md` on `main`,
+landed by PR #19, `37d2d02`.)* Both objections ruled at ingestion; both
+premises independently verified first (`clofin.settlement.batch/resolved?`
+counts `timed-out` by design; the AC-5 closure enumeration re-run by Master
+Control with zero live copies found).
+
+| # | Objection | Ruling |
+|---|---|---|
+| O-1 | "The break returns to its prior state" describes a move increment 6 never made — proposing an adjustment does not move the break, so there is no state to return from. Delivered as an asserted invariant; a `pending-adjustment` state would be a lifecycle redraw needing a ruling. | **Confirmed — reading 1 is the intent, and the sentence was Master Control's loose drafting.** The purpose clause ("so a different adjustment can be raised") was the requirement; "returns to its prior state" described a no-op as a movement. A `pending-adjustment` state is **not** wanted: it would serialise proposals against a break and require a remembered prior state that nothing else in the model has. The asserted invariant — state captured before the proposal, unchanged after the refusal, a different adjustment then posted — is the control, and it is stronger than the sentence that asked for it. |
+| O-2 | AC-4's first clause — a late `timeout-resolution` that **completes** a batch — is unsatisfiable: `resolved?` counts `timed-out`, so the item was already resolved and completeness cannot change. The Scope wording ("moves an already-complete batch's derived status") agrees with all four copies of the exception. Built to the Scope wording, both directions covered. | **Confirmed — the Scope wording is ratified as governing, and the AC's first clause was Master Control's drafting defect.** An acceptance criterion whose *given* cannot occur passes vacuously if implemented literally — the vacuous-guard class this project keeps hunting, authored into a brief by the hunter. The Worker's pair (a moved status emits exactly one `status-restated` and no second `completed`; an unmoved status emits nothing, asserted by an identical before/after action list) is precisely the L-7 discipline. |
+
+**Observations, dispositioned.** N-2 (the ROADMAP still routed linked-retry
+provenance to increment 6) is corrected on `meta` in this commit. N-1
+(`reverses_id` lacks the immutability guard its sibling now has), N-3 (the
+`getEvidencePack` prose claims completeness over a smaller set and names a
+schema that does not exist — an L-14 instance), and N-4
+(`record-approval!` restates the decision vocabulary A-014 already named)
+are **routed to the operational-hardening brief** as named debt. N-5 (no
+adjustment-approval invalidation is needed, and why) is accepted as recorded.
+N-6 (a proposer cannot withdraw their own adjustment) is an open product
+question, recorded in ADR-0025's rejected alternatives, deliberately not
+scheduled.
