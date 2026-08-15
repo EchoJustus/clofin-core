@@ -1,9 +1,9 @@
 # ADR-0020: Two repositories, and the rules that govern anything visual
 
 - **Status:** Accepted
-- **Date:** 2026-08-05
-- **Deciders:** Technical lead / product owner
-- **Supersedes / Superseded by:** —
+- **Date:** 2026-08-05 · **Amended:** 2026-08-15 (§Amendment 1)
+- **Deciders:** Technical lead / product owner; amended by operator ruling D1/D2
+- **Supersedes / Superseded by:** — · **Amended by:** [ADR-0026](0026-three-repositories-and-the-cockpits-role-boundary.md)
 
 ## Context
 
@@ -170,6 +170,67 @@ quoted.
   repository, and `clofin-trace` carries exactly two automated checks —
   fixture provenance present, and the scope disclaimer matching the captured
   `GET /` response byte for byte, so softened wording fails rather than passes.
+
+## Amendment 1 — three repositories, and the console moves out (2026-08-15, TASK-011)
+
+The decision above says **"CloFin is two repositories, and no more"**, and, four
+paragraphs later, that **"the operator console remains increment 8, inside
+`clofin-core`"**. On 2026-08-15 the operator ruled on both. The ruling is
+recorded in full in
+[ADR-0026](0026-three-repositories-and-the-cockpits-role-boundary.md); what it
+changes here is stated below.
+
+**CloFin is three repositories.** The third is `clofin-cockpit` — interaction
+with the *present*: a transparent client that deploys and drives a real
+reference instance, and that **may never claim**, as `clofin-trace` may never
+fake.
+
+**Two things change; one thing that looks like it should does not.**
+
+**A. The count.** "Two, and no more" becomes three. The count was never the
+decision — the *role boundary* was, and it now has three rows rather than two,
+distinguished by their relationship with truth: `clofin-core` owns it,
+`clofin-trace` replays it, `clofin-cockpit` queries it.
+
+**B. Increment 8's address.** The operator console is built in
+`clofin-cockpit`, not inside this repository. Its roadmap position, content and
+sequence are unchanged; only its address moves. The reason is the one this ADR
+already gave for the walkthrough, applied to a larger artifact: a browser
+console arrives with a package manager, a lockfile and a transitive dependency
+graph, and vendoring it here would force
+[ADR-0004](0004-minimal-dependency-footprint.md) and NFR-007 to acquire a
+"except under `ui/`" carve-out. This ADR's own objection to vendoring — that it
+"would force the audit's scope statement to acquire a carve-out", which "is the
+F-001/F-002 partial-set class" — turns out to argue against the console staying
+too. The sentence keeping it here was carried forward from the roadmap rather
+than derived from that argument.
+
+**C. What does *not* change: the rejection of "three or more repositories — one
+per view".** That row of the alternatives table stands exactly as written. It
+rejected splitting the topology, the ledger sand table and the evidence
+timeline — three views that "share one fixture set and one walkthrough" — into
+three products, and that reasoning is untouched. `clofin-cockpit` is not a
+fourth view of the walkthrough. It shares no fixture set with it, because it
+consumes no fixtures; it calls a running API. This ADR anticipated the
+distinction itself: the console "is a different kind of artifact from a
+replay."
+
+**The three rules now govern all three repositories**, with RULE 2 read in the
+cockpit's tense — *drive, never simulate*: every value it displays is a real
+response from a real instance, shown with the request that produced it. The
+alternatives table's rejection of "an interactive console that simulates
+payments" is **not** softened by this amendment and remains in force: the
+cockpit is permitted because it does the opposite of what was rejected. RULE 1
+and RULE 3 apply unaltered, and RULE 3 is the rule the cockpit lives by.
+
+**The release-audit subject is unchanged** — the `clofin-core` release
+candidate. `clofin-cockpit` sits outside it on the same basis as
+`clofin-trace`: it owns no truth.
+
+**The closing constraint below binds three repositories, not two.** Where the
+final paragraph of this ADR reads "Neither repository, at any point, may imply
+production readiness…", read "No repository in this project". The constraint
+predates this ADR and is unaffected in substance by the count.
 
 ## Verification
 
