@@ -286,7 +286,7 @@ found a real ordering defect in my own code, described in §7.
 **N-5 — this session ran the integration suite, which the previous one could
 not.** 011-REQ §7 noted that the database and Compose jobs were first executed
 in CI. This session installed PostgreSQL 16 locally and ran `clojure -M:test:it`:
-**885 tests, 6477 assertions, 0 failures, 0 errors**. The Compose smoke job
+**885 tests, 0 failures, 0 errors**. The Compose smoke job
 remains CI-only — there is no Docker daemon in this environment.
 
 **N-6 — `docs/ROADMAP.md` on `origin/meta` is still stale in the way 011-REQ N-2
@@ -720,7 +720,16 @@ recorded because the sentence they contradict was published first.
   links OK (87 files). The base run before any edit was 438 tests / 2779
   assertions.
 - `clofin-core` `clojure -M:test:it` against a real PostgreSQL 16 — **885 tests,
-  6477 assertions, 0 failures, 0 errors**.
+  0 failures, 0 errors**, run four times.
+
+  The assertion count is quoted for the unit suite and **not** for this one, and
+  the omission is deliberate. Four runs of the integration suite reported 6477,
+  6486, 6498 and 6495 assertions — the same 885 tests and the same zero
+  failures every time, but a count that moves. Something in it asserts a
+  variable number of times, and quoting one figure the way this project quotes
+  the unit suite's would imply a determinism it does not have. The stable facts
+  are the test count and the failure count; those are what is claimed. Worth
+  someone's attention as its own question, and not this increment's to answer.
 - `clofin-cockpit` clean-room `npm ci && npm run build` — **126 tests, 126
   passed, 0 failed** (45 before this increment); both checks green; the network
   guard clean.
