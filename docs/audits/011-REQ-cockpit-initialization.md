@@ -337,12 +337,21 @@ outstanding.** I have finished verifying.
 
 **Two things are still running or not yet runnable, and neither is mine:**
 
-1. **CI.** `clofin-cockpit` #1 — **green**: both the push and the pull-request
-   runs of *Build and check* completed `success`, and `pages.yml` correctly did
-   **not** run, which is AC-8's "on `main` only" observed rather than asserted.
-   `clofin-core` #21 — its checks are still settling at the time of writing and
-   are not in hand; the same `make verify` was run locally on the pushed commit
-   and is quoted above.
+1. **CI — green in both repositories, with one honest caveat about this
+   sentence.** `clofin-cockpit` #1: both the push and the pull-request runs of
+   *Build and check* completed `success`, and `pages.yml` correctly did **not**
+   run — AC-8's "on `main` only" observed rather than asserted. `clofin-core`
+   #21 at `889bac2`: all six check runs completed `success` — *Unit, property
+   and contract tests*, *Database integration tests* and *Compose stack smoke
+   test*, once for the push event and once for the pull-request event. Note
+   that the integration and smoke jobs are ones this session could not run
+   locally (no database, no Docker), so CI is their first execution.
+
+   The caveat: **the commit carrying this paragraph re-triggers CI**, and its
+   result cannot be known from inside the document that causes it. The change
+   is documentation-only, so the expectation is that it matches — but that is
+   an expectation, and the run is named in the completion report rather than
+   pre-declared green here.
 2. **The Pages deployment has not run and cannot yet.** `pages.yml` triggers on
    `main` only, by design, so the first deploy happens after #1 merges. Two
    things must be true before it can succeed: the repository's Pages source set
