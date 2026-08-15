@@ -8,7 +8,7 @@
 | **Controls** | **None move.** The cockpit demonstrates controls by driving them and enforces nothing. `docs/COMPLIANCE.md` is untouched |
 | **Base** | `clofin-core` `main` at `e8c5bf6` — **read and driven, never edited**; `clofin-cockpit` `main` at `90abb1d` |
 | **Branch** | `claude/cockpit-ops-scheme-sim-mzcfgd` in both repositories |
-| **Pull requests** | `clofin-cockpit` **#3** · `clofin-core` — this file, alone, in its own PR |
+| **Pull requests** | `clofin-cockpit` **#3** · `clofin-core` **#25** — this file, alone — cross-referenced in both descriptions |
 | **`clofin-core` diff** | **This file and nothing else.** `git diff origin/main` on this branch lists one path: `docs/audits/013-REQ-cockpit-operations-and-scheme-simulation.md` |
 | **Model** | `claude-opus-5` |
 | **Reasoning effort** | High — extended thinking enabled throughout. The harness does not expose a numeric setting to the session, so this is reported as the mode, not as a measured value |
