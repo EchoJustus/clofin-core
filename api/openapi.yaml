@@ -24,6 +24,20 @@ info:
     schemas against one, so this document's *semantics* are maintained by
     review rather than mechanically. Deep validation is named debt in
     `docs/COMPLIANCE.md` §4.
+
+    **Browser clients.** A page served from another origin can read a CloFin
+    response only if the deployment has named that origin in
+    `CLOFIN_CORS_ALLOWED_ORIGINS`. Unset — the default, and what every
+    deployment does unless someone decides otherwise — the service sends no
+    CORS header of any kind and answers a preflight exactly as it answers any
+    other unrouted `OPTIONS`, so a browser refuses the request. There is no
+    wildcard setting and no origin is ever echoed back from the request.
+
+    **CORS is not an access control**, and is not counted as one here: it
+    governs what a *browser* will let a page read, and has no effect on any
+    other client. Authorisation is `X-Actor-Id` and the permission each
+    operation names, unchanged. See
+    `docs/ADR/0027-browser-clients-cors-allowlist-and-instance-self-identification.md`.
   license:
     name: EPL-2.0
     identifier: EPL-2.0
@@ -250,6 +264,9 @@ paths:
       description: |
         Identifies the service to anyone who reaches it without context, and
         states plainly what it is not. Unauthenticated by design.
+
+        Includes `sourceCommit`, which is **self-reported by the running
+        process, not attested** — see the field's own description.
       responses:
         "200":
           description: Service description
@@ -4410,7 +4427,7 @@ components:
 
     ServiceInfo:
       type: object
-      required: [service, description, environment, disclaimer]
+      required: [service, description, environment, disclaimer, sourceCommit]
       properties:
         service: { type: string, examples: ["clofin-core"] }
         description: { type: string }
@@ -4420,6 +4437,22 @@ components:
         disclaimer:
           type: string
           description: Statement of scope — synthetic data, no institutional connectivity.
+        sourceCommit:
+          type: string
+          pattern: "^([0-9a-f]{40}|unknown)$"
+          examples: ["f10974c7762eb9e095694fcfb3aaa72c0bee4bdf", "unknown"]
+          description: |
+            The commit this process reports itself as running, **self-reported
+            by the running process and not attested**. Nothing in this response
+            demonstrates that the bytes serving it are the bytes at that
+            commit; the field says what the process was told at start-up, or
+            what it could read from a source checkout beside it.
+
+            Exactly two forms occur: a 40-character lower-case hex commit id,
+            or the literal string `unknown`. There is no third, and in
+            particular never a branch name — a value that is not a commit id is
+            ignored rather than reported, because a branch name displayed under
+            the label "commit" is stable, plausible and wrong.
         documentation: { type: string, format: uri }
 
     Health:

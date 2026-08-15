@@ -1,5 +1,6 @@
 (ns clofin.config-test
-  (:require [clofin.config :as config]
+  (:require [clofin.build-info :as build-info]
+            [clofin.config :as config]
             [clojure.test :refer [deftest is testing]]))
 
 (deftest defaults-let-a-fresh-clone-run
@@ -10,6 +11,21 @@
       (is (integer? (get-in c [:http :port])))
       (is (string? (get-in c [:db :url])))
       (is (integer? (get-in c [:db :pool-size]))))))
+
+(deftest browser-access-is-not-configured-unless-somebody-configures-it
+  (testing "the allowlist has no default value at all — the default is nothing"
+    ;; Read from the environment, so this asserts what a machine with no
+    ;; CLOFIN_CORS_ALLOWED_ORIGINS set sees, which is every machine that has
+    ;; not decided otherwise. See ADR-0027 and clofin.http.cors-test, which
+    ;; owns the behaviour that follows from it.
+    (when (nil? (System/getenv "CLOFIN_CORS_ALLOWED_ORIGINS"))
+      (is (nil? (config/cors-allowed-origins (config/load-config)))))))
+
+(deftest the-reported-commit-is-resolved-or-it-is-unknown
+  (let [reported (:source-commit (config/load-config))]
+    (is (or (build-info/commit-id? reported) (= build-info/unknown reported))
+        (str "load-config produced " (pr-str reported)
+             ", which is neither a commit id nor the literal \"unknown\""))))
 
 (deftest error-detail-is-a-development-only-affordance
   (is (config/expose-error-detail? {:environment :dev}))

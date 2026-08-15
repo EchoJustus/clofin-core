@@ -6,7 +6,8 @@
   from the process environment, which is what makes the same image run
   unchanged on a laptop, in Compose and in CI
   (docs/ADR/0005-hybrid-local-and-cloud-execution.md)."
-  (:require [clofin.error :as err]
+  (:require [clofin.build-info :as build-info]
+            [clofin.error :as err]
             [clojure.string :as str]))
 
 (defn- env
@@ -49,6 +50,18 @@
             :password        (env "CLOFIN_DB_PASSWORD" "clofin_local_dev_only")
             :pool-size       (env-int "CLOFIN_DB_POOL_SIZE" 8)
             :connect-timeout-ms (env-int "CLOFIN_DB_CONNECT_TIMEOUT_MS" 10000)}
+     ;; Read here, validated in `clofin.http.cors` at start-up. Configuration
+     ;; knows how to find a value; what a legal origin is belongs beside the
+     ;; middleware that answers with it. Unset is the empty allowlist, which is
+     ;; the middleware doing nothing at all — see ADR-0027.
+     ;; Spelled out rather than referred to `clofin.http.cors/env-variable`,
+     ;; so that configuration does not depend on transport; `config-test`
+     ;; asserts the two names are the same string.
+     :cors {:allowed-origins (env "CLOFIN_CORS_ALLOWED_ORIGINS")}
+     ;; Self-reported, not attested: `clofin.build-info` says what that means
+     ;; and refuses to report anything it did not resolve to a commit id.
+     :source-commit (build-info/resolve-source-commit (env build-info/env-variable)
+                                                      (env "CLOFIN_SOURCE_ROOT" "."))
      :migrate-on-start? (env-bool "CLOFIN_MIGRATE_ON_START" true)}))
 
 (defn expose-error-detail?
@@ -62,3 +75,10 @@
   "Configuration safe to log. Credentials never reach a log line."
   [config]
   (update-in config [:db] #(-> % (dissoc :password) (assoc :password "<redacted>"))))
+
+(defn cors-allowed-origins
+  "The raw allowlist as configured. Named so that callers do not reach into the
+  configuration map's shape, and so the default — nothing configured — has one
+  spelling."
+  [config]
+  (get-in config [:cors :allowed-origins]))

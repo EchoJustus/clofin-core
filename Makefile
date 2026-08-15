@@ -22,6 +22,35 @@ else
   CLJ = clojure
 endif
 
+# The commit the stack reports on `GET /`. Resolved here because the container
+# image contains no repository — `git rev-parse HEAD` in the image would find
+# nothing, and an image that guessed would be worse than one that says
+# "unknown". Overridable, and empty is a valid answer: an environment with no
+# git available simply reports "unknown", which is true.
+#
+# `rev-parse HEAD` and not `--abbrev-ref` or `describe`: the service refuses
+# anything that is not a full commit id, so a branch name passed here is
+# ignored rather than published (011-REQ O-1, applied server-side).
+CLOFIN_SOURCE_COMMIT ?= $(shell git rev-parse HEAD 2>/dev/null)
+
+# Origins allowed to read this instance's responses from a browser page.
+# **Empty by default** — that is the setting under which CloFin sends no CORS
+# header at all. Set it in `.env`, or for one run:
+#   make up CLOFIN_CORS_ALLOWED_ORIGINS=https://echojustus.github.io
+# See docs/ADR/0027.
+CLOFIN_CORS_ALLOWED_ORIGINS ?=
+
+# Exported only when they have a value. An exported *empty* variable would take
+# precedence over `.env` in Compose and silently override whatever the operator
+# wrote there — which for the CORS allowlist would mean a setting that appears
+# to be configured and is not.
+ifneq ($(CLOFIN_SOURCE_COMMIT),)
+  export CLOFIN_SOURCE_COMMIT
+endif
+ifneq ($(CLOFIN_CORS_ALLOWED_ORIGINS),)
+  export CLOFIN_CORS_ALLOWED_ORIGINS
+endif
+
 .DEFAULT_GOAL := help
 
 # ---------------------------------------------------------------------------
@@ -61,6 +90,8 @@ $(ENV_FILE):
 up: env ## Start the full stack (PostgreSQL + CloFin service)
 	$(COMPOSE) up -d --build postgres app
 	@echo "CloFin starting. Try: make health"
+	@echo "GET / will report sourceCommit=$(if $(CLOFIN_SOURCE_COMMIT),$(CLOFIN_SOURCE_COMMIT),unknown) (self-reported, not attested)"
+	@echo "Browser origins allowed to read responses: $(if $(CLOFIN_CORS_ALLOWED_ORIGINS),$(CLOFIN_CORS_ALLOWED_ORIGINS),none — see .env.example)"
 
 .PHONY: down
 down: ## Stop the stack, keeping data volumes
