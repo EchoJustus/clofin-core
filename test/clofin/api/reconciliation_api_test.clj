@@ -958,3 +958,256 @@
     (is (= 400 (:status (query "scheme=SIM-RTGS&perturbation=make-it-worse"))))
     (is (= 400 (:status (query "scheme=TARGET2"))))
     (is (= 200 (:status (query "scheme=SIM-ACH"))))))
+
+;; ---------------------------------------------------------------------------
+;; TASK-010 AC-6 — an adjustment can be refused, and the refusal is evidence
+;; ---------------------------------------------------------------------------
+;;
+;; The gap `008-REQ` recorded as observation N-5: an approver who disagreed
+;; simply did not approve, the adjustment sat `proposed` for ever, and nothing
+;; recorded that anybody had considered it. ADR-0025 gives the refusal a status,
+;; a term and a driver.
+
+(defn- decide!
+  "One decision on an adjustment — the same endpoint, whichever it is."
+  [f adjustment-id & {:keys [actor decision reason]}]
+  (call :post (str "/reconciliation-adjustments/" adjustment-id "/approvals")
+        :actor actor
+        :body (cond-> {"organisationId" (str (:org f))}
+                decision (assoc "decision" decision)
+                reason   (assoc "reason" reason))))
+
+(deftest ac-6-an-approver-can-reject-an-adjustment-with-a-reason
+  (let [f          (setup)
+        brk        (a-break! f)
+        before     (get brk "state")
+        proposal   (propose! f brk :minor 100000)
+        adjustment (get-in proposal [:json "id"])]
+    (is (= "proposed" (get-in proposal [:json "status"])))
+    (is (= ["post" "reject"] (get-in proposal [:json "permittedTransitions"]))
+        "derived from the lifecycle table, so the API cannot advertise a
+         decision the state machine would refuse")
+
+    (let [refused (decide! f adjustment :actor (:checker f) :decision "rejected"
+                           :reason "The scheme's figure is the right one")]
+      (is (= 201 (:status refused)) (str (:body refused)))
+      (is (true? (get-in refused [:json "rejected"])))
+      (is (false? (get-in refused [:json "posted"]))
+          "a refusal moves no money — one refusal ends the adjustment")
+      (is (= "rejected" (get-in refused [:json "adjustment" "status"])))
+      (is (= [] (get-in refused [:json "adjustment" "permittedTransitions"]))
+          "and it is terminal: nothing may follow it")
+      (is (nil? (get-in refused [:json "adjustment" "entryId"]))
+          "no entry, so recon_adjustment_posting_paired holds as written")
+
+      (testing "the reason is retained on the decision, where a rejected
+                payment's is — the same place and the only place"
+        (is (= "rejected" (get-in refused [:json "approval" "decision"])))
+        (is (= "The scheme's figure is the right one"
+               (get-in refused [:json "approval" "reason"])))
+        (is (= (str adjustment) (get-in refused [:json "approval" "adjustmentId"])))
+        (is (nil? (get-in refused [:json "approval" "instructionId"]))))
+
+      (testing "the break returns to the state it was in — proposing an
+                adjustment never moved it, so a refusal returns it to nothing"
+        (is (= before (get-in refused [:json "break" "state"])))
+        (is (nil? (get-in refused [:json "break" "resolvedAt"])))))
+
+    (testing "no journal entry was posted by any of it"
+      (let [entries (call :get "/reconciliation-breaks" :actor (:controller f)
+                          :query (str "organisationId=" (:org f) "&state=resolved"))]
+        (is (= 0 (get-in entries [:json "count"])))))
+
+    (testing "and the break can be corrected by a DIFFERENT adjustment, which is
+              the whole point of recording the refusal rather than leaving the
+              proposal to sit"
+      (let [second-proposal (propose! f brk :minor 99999 :narrative "Second look")]
+        (is (= 201 (:status second-proposal)))
+        (is (true? (get-in second-proposal [:json "posted"])))
+        (is (= "resolved" (get-in second-proposal [:json "break" "state"])))))))
+
+(deftest ac-6-the-rejector-must-differ-from-the-creator
+  (testing "C-01's own comparison, refused first and never waivably: the maker
+            never becomes a valid checker for their own correction, and that is
+            as true of a refusal as of an approval"
+    (let [f          (setup)
+          brk        (a-break! f)
+          proposal   (propose! f brk :minor 100000)
+          adjustment (get-in proposal [:json "id"])
+          refused    (decide! f adjustment :actor (:controller f) :decision "rejected"
+                              :reason "changed my mind")]
+      (is (= 403 (:status refused)))
+      (is (= "self-approval" (get-in refused [:json "errors" "reason"])))
+      (is (str/includes? (get-in refused [:json "detail"]) "reconciliation adjustment"))
+      (testing "and the adjustment is untouched"
+        (let [detail (call :get (str "/reconciliation-breaks/" (get brk "id"))
+                           :actor (:controller f)
+                           :query (str "organisationId=" (:org f)))]
+          (is (= "proposed" (get-in detail [:json "adjustments" 0 "status"]))))))))
+
+(deftest ac-6-a-rejection-with-no-reason-is-refused
+  (testing "PR-013's rule, applied to the other subject: a refusal whose reason
+            is retained is the difference between a trail that explains a
+            declined correction and one that merely records that somebody
+            declined it. Enforced in the domain, and again by
+            approval_rejection_needs_reason at the database"
+    (let [f        (setup)
+          brk      (a-break! f)
+          proposal (propose! f brk :minor 100000)
+          refused  (decide! f (get-in proposal [:json "id"])
+                            :actor (:checker f) :decision "rejected")]
+      (is (= 422 (:status refused)))
+      (is (= "is required when rejecting an instruction"
+             (get-in refused [:json "errors" "reason"]))))))
+
+(deftest ac-6-a-rejected-adjustment-is-terminal-for-every-decision
+  (let [f          (setup)
+        brk        (a-break! f)
+        proposal   (propose! f brk :minor 1000000)
+        adjustment (get-in proposal [:json "id"])]
+    (is (= 2 (get-in proposal [:json "approvalsRequired"]))
+        "two approvals were needed, and one refusal is still enough to end it")
+    (is (= 201 (:status (decide! f adjustment :actor (:checker f)
+                                 :decision "rejected" :reason "no"))))
+    (testing "a later approval, and a later rejection, are both 409 naming what
+              would have been permitted"
+      (doseq [[decision reason] [["approved" nil] ["rejected" "also no"]]]
+        (let [late (decide! f adjustment :actor (:checker-2 f)
+                            :decision decision :reason reason)]
+          (is (= 409 (:status late)) decision)
+          (is (= "rejected" (get-in late [:json "errors" "adjustment-status"]))
+              "the refusal names the status the adjustment is actually in")
+          (is (= [] (get-in late [:json "errors" "permitted"]))))))))
+
+(deftest ac-6-an-approval-still-works-and-the-default-decision-is-unchanged
+  (testing "the `decision` member defaults to `approved`: every caller written
+            before a refusal could be recorded keeps its meaning"
+    (let [f          (setup)
+          brk        (a-break! f)
+          proposal   (propose! f brk :minor 100000)
+          adjustment (get-in proposal [:json "id"])
+          approved   (decide! f adjustment :actor (:checker f))]
+      (is (= 201 (:status approved)))
+      (is (true? (get-in approved [:json "posted"])))
+      (is (false? (get-in approved [:json "rejected"])))
+      (is (= "posted" (get-in approved [:json "adjustment" "status"])))
+      (is (= [] (get-in approved [:json "adjustment" "permittedTransitions"])))))
+  (testing "and a decision CloFin does not recognise is refused rather than
+            defaulted — the safe default would have to be one of the two"
+    (let [f          (setup)
+          brk        (a-break! f)
+          proposal   (propose! f brk :minor 100000)
+          bad        (decide! f (get-in proposal [:json "id"]) :actor (:checker f)
+                              :decision "maybe")]
+      (is (= 400 (:status bad))))))
+
+(deftest ac-6-and-ac-8-a-rejection-leaves-exactly-two-events-and-a-rollback-leaves-none
+  (let [f          (setup)
+        brk        (a-break! f)
+        proposal   (propose! f brk :minor 100000)
+        adjustment (get-in proposal [:json "id"])
+        before     (audit-actions f)
+        _          (is (= 201 (:status (decide! f adjustment :actor (:checker f)
+                                                :decision "rejected"
+                                                :reason "the scheme was right"))))
+        after      (audit-actions f)]
+    (is (= 1 (get after "reconciliation-adjustment.rejected"))
+        "one event in the transaction where the adjustment became terminal — L-7")
+    (is (= (inc (get before "approval.recorded" 0)) (get after "approval.recorded"))
+        "and one for the decision itself: a decision being taken and a subject
+         becoming terminal are two facts about two subjects")
+    (is (nil? (get after "reconciliation-adjustment.posted"))
+        "nothing posted, so nothing says it did")
+    (is (nil? (get after "reconciliation-break.resolved"))
+        "and the break did not resolve")
+    (is (nil? (get after "journal-entry.posted"))
+        "no entry reached the journal at all")
+
+    (testing "a refused decision writes nothing — the self-approval attempt below
+              rolls its whole transaction back"
+      (let [snapshot (audit-actions f)
+            second-proposal (propose! f brk :minor 100000)]
+        (is (= 403 (:status (decide! f (get-in second-proposal [:json "id"])
+                                     :actor (:controller f) :decision "rejected"
+                                     :reason "mine"))))
+        (is (= (get snapshot "reconciliation-adjustment.rejected")
+               (get (audit-actions f) "reconciliation-adjustment.rejected")))))))
+
+;; ---------------------------------------------------------------------------
+;; TASK-010 AC-3 — a break on a returned original names the retry
+;; ---------------------------------------------------------------------------
+;;
+;; ADR-0019 deferred linked-retry provenance to reconciliation precisely because
+;; the workflow that reads it is a break. ADR-0024 built it.
+
+(defn- retry!
+  "A retry of a returned instruction, raised through the public path."
+  [{:keys [org maker] :as f} original & {:keys [actor amount]}]
+  (call :post "/payment-instructions"
+        :actor (or actor maker) :idempotency-key (str (random-uuid))
+        :body {"organisationId" (str org)
+               "debtorAccountId" (account-id f "1100-CLIENT-FUNDS")
+               "creditorName" "Pacific Rim Logistics Pte Ltd"
+               "creditorAccount" "SG-SYNTH-88012399"
+               "amount" {"currency" "SGD" "minorUnits" (or amount 110000)}
+               "valueDate" value-date
+               "purposeCode" "SUPP"
+               "retriesId" (str original)}))
+
+(deftest ac-3-a-break-on-a-returned-original-names-the-retry
+  ;; Two returned payments and no settled ones, so every statement line is a
+  ;; return and the dropped line is certainly about a returned instruction —
+  ;; which is the only kind a retry may be raised against.
+  (let [f        (setup)
+        settled  (settle! f :settled 0 :returned 2)
+        response (ingest! f (generate! f :perturbation "missing-line"))
+        found    (breaks response)
+        brk      (first found)]
+    (is (= 200 (:status response)) (str (:body response)))
+    (is (= 1 (count found))
+        (str "one dropped line, one break — " (pr-str (mapv #(get % "kind") found))))
+    (is (= "expectation-unmatched" (get brk "kind"))
+        "CloFin's books record a movement the statement does not report")
+
+    (let [original (get brk "instructionId")]
+      (is (some? original)
+          "the break names the payment it is about, derived from the ledger
+           entry it carries")
+      (is (contains? (set (:returned settled)) original)
+          "and that payment is one of the two the scheme sent back")
+      (is (nil? (get brk "retriedByInstructionIds"))
+          "nothing has been retried yet, so the field is absent rather than
+           empty — evidence, not decoration")
+
+      (let [retry (retry! f original)
+            _     (is (= 201 (:status retry)) (str (:body retry)))
+            retry-id (get-in retry [:json "id"])
+            detail (call :get (str "/reconciliation-breaks/" (get brk "id"))
+                         :actor (:controller f)
+                         :query (str "organisationId=" (:org f)))]
+        (is (= 200 (:status detail)))
+        (is (= original (get-in detail [:json "instructionId"])))
+        (is (= [retry-id] (get-in detail [:json "retriedByInstructionIds"]))
+            "the break now names the retry — and nothing wrote to the break to
+             make that true, which is what `derived` means here")
+
+        (testing "the other break-bearing reads agree, because they share one
+                  projection rather than each deriving their own"
+          (let [listed (call :get "/reconciliation-breaks" :actor (:controller f)
+                             :query (str "organisationId=" (:org f)))]
+            (is (= [retry-id]
+                   (get-in listed [:json "reconciliationBreaks" 0
+                                   "retriedByInstructionIds"])))))
+))))
+
+(deftest ac-3-neither-derived-fact-is-a-column-on-the-break
+  (testing "a stored answer would be wrong the moment somebody raised a retry,
+            for the same reason a stored age is wrong the moment it is written"
+    (is (= 0 (db/->long
+              (:count (db/query-one
+                       tdb/*pool*
+                       ["select count(*) as count from information_schema.columns
+                          where table_name = 'reconciliation_break'
+                            and column_name in ('instruction_id', 'retried_by_ids',
+                                                'retries_id')"]))))
+        "reconciliation_break has no column for either fact")))

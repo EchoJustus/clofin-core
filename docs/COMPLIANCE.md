@@ -262,15 +262,20 @@ transiently incomplete entry mid-transaction is still allowed to complete.
 ### C-05 Complete and attributable audit trail ✅
 
 **Statement.** Every state change records who did what, to which subject, when,
-and what changed — and cannot be altered afterwards — **with one disclosed
-exception: a late `timeout-resolution` that moves an already-complete settlement
-batch's derived status emits no batch-subject event.** That exception is
-described in full in §4 and is named here rather than three hundred lines below,
-because a control statement whose scope a reader discovers elsewhere in the same
-document is the defect standing lesson **L-14** exists to prevent (audit finding
-**A-004**). The payment's own transition *is* recorded in that transaction, so
-nothing is unattributable; what is missing is an event whose subject is the
-batch.
+and what changed — and cannot be altered afterwards.
+
+**That statement carried one disclosed exception from TASK-004's remediation
+until TASK-010, and it no longer does.** A late `timeout-resolution` that moved
+an already-complete settlement batch's derived status recorded the payment's own
+transition and left no event whose subject was the batch (release-audit finding
+**A-004**). It now emits `settlement-batch.status-restated`, a term distinct
+from `settlement-batch.completed` because they name different transitions — see
+*The boundary of "every state change"* below, which is now a description of a
+closed edge rather than of an open one. The exception is named here, in its own
+paragraph, rather than deleted without trace: a control that has been unqualified
+since the beginning and one that was qualified and then closed are different
+histories, and an auditor comparing this document with the `ref-1` audit needs to
+find the second.
 
 *Who* is null in exactly one case, the unauthenticated bootstrap, where there is
 no principal to record; that is not a coverage gap but a property of the one
@@ -454,30 +459,40 @@ database refused. That is the concrete reason `record!` cannot open a connection
 of its own, and `clofin.ledger.service-test` asserts it by unbalancing an entry
 after it has been posted and letting the commit fail.
 
-**The boundary of "every state change", stated because the control reads
-broader than it is.** One derived value moves without a subject event of its
-own, and an auditor reading this control literally would not expect it.
+**The boundary of "every state change", stated because a derived value is not
+an obvious subject.** A settlement batch's `status` is **derived** from its
+items' outcomes, and it can reach a terminal value twice.
 
-A settlement batch's `status` is **derived** from its items' outcomes. When the
-last unresolved item resolves, the batch reaches a terminal derived status and
-`settlement-batch.completed` is written once, in that transaction — L-7's rule.
-A **late** `timeout-resolution` can then move that already-terminal status
-again: a batch that derived to `failed` while an item was `timed-out` becomes
-`settled` or `partially-settled` when the late truth arrives. That transaction
-writes the payment's own event (`payment.settled` / `payment.returned`), posts
-its finality entry, and updates the stored batch status — and it writes **no
-second batch-subject event**, because `settlement-batch.completed` names the
-transition *into* a complete batch and that transition happened earlier. Two
-`completed` events for one batch would be F-005's mislabelling with a new name.
+When the last unresolved item resolves, the batch reaches a terminal derived
+status and `settlement-batch.completed` is written once, in that transaction —
+L-7's rule. A **late** `timeout-resolution` can then move that already-terminal
+status again: a batch that derived to `failed` while an item was `timed-out`
+becomes `settled` or `partially-settled` when the late truth arrives. That
+transaction writes the payment's own event (`payment.settled` /
+`payment.returned`), posts its finality entry, updates the stored batch status —
+and writes `settlement-batch.status-restated`, whose subject *is* the batch.
 
-So the batch status is auditable through its items rather than directly: every
-item resolution that moved it has its own event, in its own transaction, with
-its own actor. What is missing is an event whose *subject* is the batch. This is
-recorded debt, named in `004-REQ` and reproduced by the Milestone 2 audit; the
-fix is a distinct term for "a completed batch's derived status changed", which
-is vocabulary design and belongs with increment 6's reconciliation work rather
-than being invented here. It is written down at the point this control is read
-so the central record is not broader than its accepted edge.
+**Two terms rather than one, and the distinction is L-7's.** `completed` names
+the transition *into* a complete batch, and that transition happened earlier,
+under a different actor and a different correlation id. Two `completed` events
+for one batch would be F-005's mislabelling with a new name. "Restated" is what
+a set of books calls a figure that later information corrected, which is exactly
+what a late answer does to a batch's outcome.
+
+**Neither term is emitted where nothing moved.** A response that resolves one
+item of ten completes nothing; a late resolution that leaves
+`partially-settled` where it was changes no batch-level fact. An event in either
+case would assert a transition that did not occur, with before and after digests
+that are identical — the shape audit finding F-005 found. Which term, or
+neither, is decided by `clofin.settlement.service/batch-status-action` from the
+two statuses themselves rather than from the response kind, so a future path that
+moves the status the same way is the same fact.
+
+Until TASK-010 the second move wrote nothing whose subject was the batch. It was
+recorded debt — named in `004-REQ`, reproduced by the Milestone 2 audit,
+reproduced again as `ref-1` finding **A-004** — and it was the single disclosed
+exception on this control's statement. ADR-0025 records why the term is
+`status-restated` rather than a second `completed`.
 
 **Attribution, including where there is none.** `POST /organisations` is the
 bootstrap: no actor can exist before the organisation that holds one, so it is
@@ -798,7 +813,18 @@ purpose.
    approvals, from actors other than its proposer.** Below that band one actor
    suffices; with **no** band configured in the currency, no adjustment can be
    proposed at all.
-6. **A statement that arrives is recorded as having arrived**, applied or
+6. **An adjustment that is refused says so, and says who and why.** The set is
+   every adjustment an approver rejects. The rejector must be an actor other
+   than the proposer — the same comparison, and the same first-and-never-waivable
+   ranking, that governs an approval — the reason is mandatory, and the refusal
+   leaves an `approval` row and a `reconciliation-adjustment.rejected` event in
+   the transaction that makes the adjustment terminal. This is the same class of
+   evidence C-05 keeps for a rejected payment, and it did not exist before
+   TASK-010: an approver who disagreed simply did not answer, and nothing
+   recorded that anybody had considered it. A rejected adjustment blocks
+   nothing — the break it named is left in the state it was already in, and a
+   different adjustment may be raised against it.
+7. **A statement that arrives is recorded as having arrived**, applied or
    refused, and an exact re-delivery performs no work. The set is every
    syntactically valid statement reaching `POST /reconciliation-statements`; a
    document CloFin cannot parse is a `400` and earns no receipt, which is
@@ -833,6 +859,9 @@ resolution is a new approved entry through
 | `clofin.recon.matching-test` | The documented rule order in `DOMAIN_MODEL.md` §6 and the code's agree, in both directions and in order |
 | `reconciliation_break.assignee_id` `NOT NULL` | A break is never unowned, by any route into the table |
 | `clofin.recon.break-state/transitions` | A break's state moves only along the arrows in that table; the service refuses anything else with a `409`, and the terminal set is derived rather than listed |
+| `clofin.recon.adjustment/transitions` | An adjustment's status moves only along the arrows in that table — `post` or `reject`, both terminal, the terminal set derived rather than listed — so a decision on an adjustment that has already been decided is a `409` naming what would have been permitted |
+| `clofin.recon.repository/mark-rejected!` | A refusal is claimed in the statement that writes it (`where status = 'proposed'`), so two approvers cannot post and reject one adjustment; and the row keeps no entry id, so a rejected adjustment stays outside `recon_adjustment_posted_key` and the break can be corrected by a different one |
+| `approval_rejection_needs_reason` | A refused adjustment cannot be stored without the reason for it, at the database, by the same constraint that binds a refused payment |
 | `clofin.recon.adjustment/approvals-required` | The de-minimis boundary is the organisation's own lowest band, inclusive, and an unconfigured currency refuses rather than defaulting to nobody |
 | `clofin.authz.approval/evaluate` | The proposer of an adjustment cannot approve it, and no approver acts beyond their per-currency limit — the same pure function, the same table and the same refusals payments use |
 | `recon_adjustment_posted_key` | One posted adjustment per break, ever |
@@ -883,9 +912,6 @@ Being explicit about gaps is part of the control design.
 | Runtime role split for append-only enforcement | **Not built.** The append-only triggers on `journal_entry`, `journal_line`, `audit_event` and `approval` refuse `UPDATE`, `DELETE` and `TRUNCATE` — but a trigger cannot bind the table's *owner*, and CloFin connects as the owner (and, in the shipped stack, as a superuser). `DISABLE TRIGGER`, `DROP TRIGGER` and `session_replication_role = 'replica'` all succeed for that role; the last defeats the row-level guards that have existed since migration `0002`, so this residue predates audit finding F-002 rather than being introduced by it. The fix — application role ≠ owner, `TRUNCATE` and DDL revoked — is foreshadowed in `0002`'s own comment and verified to refuse all four attempts. Named here rather than left to be discovered |
 | Automated dependency vulnerability scanning | Candidate for CI |
 | Retention and deletion policy | Not modelled; interacts with C-03 and C-05 immutability and needs a decision |
-| Linked-retry provenance | **Not built.** [ADR-0019](ADR/0019-a-returned-payment-is-terminal-and-retries-as-a-new-instruction.md) ruled that a reference relating a retry to the payment it replaces belongs to increment 6; TASK-008's scope did not include it and this increment did not build it. What increment 6 *did* deliver is the half that made the gap dangerous in reconciliation: a statement line's end-to-end reference is the **instruction** id, so a line about an original and a line about its retry can never be confused. The remaining work is the provenance column and the exception workflow that reads it. Raised as objection O-1 in `docs/audits/008-REQ-reconciliation.md` |
-| A rejected adjustment | **Not built.** An approver who disagrees with a reconciliation adjustment simply does not approve it: the adjustment stays `proposed`, never posts, and a different one may be raised against the same break. There is no way to record *that* somebody refused it, or why — which is exactly the evidence C-05 keeps for a rejected payment. The mechanism is a third adjustment status, an audit term and an endpoint; it is vocabulary and lifecycle design and belongs in a brief |
-| Batch-status-change audit term | **Not built.** A late `timeout-resolution` moves an already-complete batch's derived status and writes no batch-subject event, because `settlement-batch.completed` names the transition *into* completion (C-05, and the paragraph above it). The fix is a distinct vocabulary term, which is vocabulary design and belongs in a brief. **It was expected to land with increment 6 and did not:** TASK-008's scope named the reconciliation vocabulary and not settlement's, and extending a control-critical enum outside a brief is the divergence AGENT_HANDOFF §1b forbids. Recorded as objection O-2 in `docs/audits/008-REQ-reconciliation.md` so the expectation is corrected rather than left pointing at an increment that has closed. The exception is stated in C-05's own statement, in `DOMAIN_MODEL.md`'s coverage paragraph and in `api/openapi.yaml`'s Audit tag, so no headline is broader than this row |
 | Log sanitiser for exception paths | **Not built. Target: the operational-hardening brief.** C-11 deliberately logs an unexpected throwable in full, and a throwable's message can carry anything the code that threw it put there — which is why C-09 is now scoped to request and configuration logging rather than to every log line. The mechanism is a sanitiser on the defect-logging path (`clofin.http.middleware/wrap-errors`, `clofin.http.server`), with a pattern set and a test that a credential in an exception message does not reach the log either. Audit finding **A-007**; the claim was narrowed at the same time, so nothing is over-stated while the debt is open |
 | Live-schema catalogue hashing | **Not built. Target: the operational-hardening brief.** C-10 covers the migration *history*: the runner hashes indexed SQL files, so a direct `ALTER TABLE` or a dropped trigger leaves every checksum and the reported `schemaVersion` unchanged. The mechanism is a canonical digest over the catalogue — tables, columns, constraints, triggers, functions, indexes, privileges — recorded per environment and comparable between them. Audit finding **A-008**. Partially mitigated today by `clofin.db.vocabulary-test`, which compares every closed vocabulary with the live catalogue on each integration run and would fail if a constraint were widened by hand |
 | Transitive dependency SBOM | **Not built. Target: the operational-hardening brief.** C-12 covers the seven **direct** dependencies in `deps.edn`; nothing here inventories the resolved graph, and ADR-0004's claim to "a short, auditable SBOM" describes a document the repository does not contain. The mechanism is a generated SBOM (CycloneDX or SPDX) produced in CI from the resolved classpath, reviewed on change, with an upstream security process named per component. Audit finding **A-010** |

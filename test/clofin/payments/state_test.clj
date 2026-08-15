@@ -9,6 +9,7 @@
   the implementation already handles."
   (:require [clofin.error :as err]
             [clofin.payments.state :as state]
+            [clojure.set]
             [clojure.test :refer [deftest is testing]]))
 
 (defn- caught
@@ -133,7 +134,8 @@
     (is (= :validation (error-type #(state/permitted? :in-flight :submit))))
     (is (= :validation (error-type #(state/transition :in-flight :submit))))
     (is (= :validation (error-type #(state/mutable? :in-flight))))
-    (is (= :validation (error-type #(state/reversible? :in-flight)))))
+    (is (= :validation (error-type #(state/reversible? :in-flight))))
+    (is (= :validation (error-type #(state/retryable? :in-flight)))))
 
   (testing "known? answers without raising, which is what a filter needs"
     (is (false? (state/known? :in-flight)))
@@ -172,6 +174,34 @@
     (is (= "draft" (:instruction-status data)))
     (is (= "reverse" (:attempted data)))
     (is (= ["settled"] (:reversible-in data)))))
+
+(deftest ac-2-only-a-returned-instruction-is-retryable
+  (testing "ADR-0019 and ADR-0024 — a returned payment is terminal, and a retry
+            is a new instruction raised against it"
+    (is (state/retryable? :returned))
+    (doseq [state (disj (set state/states) :returned)]
+      (is (not (state/retryable? state))
+          (str (name state) " must not be retryable"))))
+  (testing "and the two link rules are disjoint: a settled payment is reversed,
+            a returned one is retried, and neither is both"
+    (is (empty? (clojure.set/intersection (set state/reversible-states)
+                                          (set state/retryable-states))))))
+
+(deftest ac-2-assert-retryable-refuses-with-the-state-it-found
+  (is (= :returned (state/assert-retryable! :returned)))
+  (doseq [state (disj (set state/states) :returned)]
+    (let [data (ex-data (caught #(state/assert-retryable! state)))]
+      (is (= :conflict (:clofin/error data)) (name state))
+      (is (= (name state) (:instruction-status data)))
+      (is (= "retry" (:attempted data)))
+      (is (= ["returned"] (:retryable-in data))
+          "the refusal names the correction rather than only the rule"))))
+
+(deftest retrying-is-not-a-transition-and-draws-no-arrow
+  (testing "the original is untouched, exactly as it is for a reversal, which is
+            why `returned` keeps no outgoing arrow while a retry is possible"
+    (is (state/terminal? :returned))
+    (is (empty? (state/permitted-events :returned)))))
 
 (deftest amend-in-place-and-the-amend-event-are-different-things
   (testing "ADR-0014 — PATCH is governed by mutable-states, not by the amend event"

@@ -14,6 +14,7 @@ RULE 1, and standing lesson **L-4** for what a hand-maintained drawing cost.
 |---|---|
 | [Payment instruction lifecycle](payment-lifecycle.md) | `clofin.payments.state/transitions` |
 | [Reconciliation break lifecycle](reconciliation-break-lifecycle.md) | `clofin.recon.break-state/transitions` |
+| [Reconciliation adjustment lifecycle](reconciliation-adjustment-lifecycle.md) | `clofin.recon.adjustment/transitions` |
 | [Bounded-context topology](context-topology.md) | [`ARCHITECTURE.md` §3](../../ARCHITECTURE.md) and the `ns` forms under `src/` |
 | [Control map](control-map.md) | [`COMPLIANCE.md` §2](../COMPLIANCE.md) |
 

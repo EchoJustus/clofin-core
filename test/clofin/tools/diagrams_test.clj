@@ -9,6 +9,7 @@
   comparison here runs both ways: nothing in the source may be missing from the
   drawing, and nothing in the drawing may be absent from the source."
   (:require [clofin.payments.state :as state]
+            [clofin.recon.adjustment :as adjustment]
             [clofin.recon.break-state :as break-state]
             [clofin.tools.diagrams :as diagrams]
             [clofin.tools.markdown :as md]
@@ -204,6 +205,81 @@
             "the failure names the difference, not merely that there is one"))))
   (testing "and the check passes again once nothing is tampered with"
     (is (:ok? (diagrams/check root)))))
+
+;; ---------------------------------------------------------------------------
+;; TASK-010 AC-7 — the adjustment lifecycle diagram against its table, both ways
+;; ---------------------------------------------------------------------------
+;;
+;; The third lifecycle, and the third time this comparison is written out. Same
+;; reason as the second: the guard's value is that it names its source, and a
+;; parameterised version would pass a table in — a caller passing the wrong one
+;; would still be green.
+
+(deftest ac-7-the-adjustment-lifecycle-diagram-and-its-table-agree-in-both-directions
+  (let [body     (mermaid-body
+                  (artifact "docs/diagrams/reconciliation-adjustment-lifecycle.md"))
+        drawn    (lifecycle-edges body)
+        declared (into #{} (for [[from events] adjustment/transitions
+                                 [event to]    events]
+                             [from event to]))]
+    (testing "every permitted pair in the table is drawn"
+      (is (empty? (set/difference declared drawn))
+          (str "transitions the table permits and the diagram omits: "
+               (pr-str (set/difference declared drawn))
+               " — run `make diagrams`.")))
+    (testing "nothing is drawn that the table does not permit"
+      (is (empty? (set/difference drawn declared))
+          (str "transitions the diagram invents: " (pr-str (set/difference drawn declared)))))
+
+    (testing "every status appears, and no other"
+      (is (= (set (keys adjustment/transitions))
+             (set (vals (state-aliases body))))))
+
+    (testing "every event appears, and no other"
+      (is (= (set adjustment/events) (into #{} (map second) drawn))))
+
+    (testing "the start marker names the initial status, and only it"
+      (is (= #{adjustment/initial-status} (:initial (anchor-edges body)))))
+
+    (testing "the terminal set is the derived one, and is not a second list"
+      (is (= (into #{} (filter adjustment/terminal?) (keys adjustment/transitions))
+             (:terminal (anchor-edges body))))
+      (is (= #{:posted :rejected} (:terminal (anchor-edges body)))
+          "both endings are drawn as endings — an adjustment that was refused is
+           as finished as one that posted"))
+
+    (testing "a status drawn as terminal has no outgoing arrow in the diagram either"
+      (doseq [s (:terminal (anchor-edges body))]
+        (is (empty? (filter #(= s (first %)) drawn))
+            (str s " is drawn as terminal and also has an outgoing arrow."))))))
+
+(deftest ac-7-an-adjustment-transition-added-without-regenerating-fails-the-check
+  ;; The negative control, run rather than asserted. `un-reject` is chosen
+  ;; because it is the arrow somebody would reach for first and the one the
+  ;; lifecycle must not have: a refusal that can be taken back is not a refusal.
+  (let [tampered (update (diagrams/adjustment-lifecycle) :edges conj
+                         [:rejected :un-reject :proposed])]
+    (with-redefs [diagrams/adjustment-lifecycle (constantly tampered)]
+      (let [{:keys [ok? report]} (diagrams/check root)]
+        (is (not ok?) "a diagram that no longer matches its source must fail the check")
+        (is (str/includes? report "docs/diagrams/reconciliation-adjustment-lifecycle.md")
+            "the failure names the artifact that drifted")
+        (is (str/includes? report "un-reject")
+            "the failure names the difference, not merely that there is one"))))
+  (testing "and the check passes again once nothing is tampered with"
+    (is (:ok? (diagrams/check root)))))
+
+(deftest ac-7-the-generated-index-names-every-lifecycle-that-is-drawn
+  ;; `docs/diagrams/README.md` is the one artifact with no machine-readable
+  ;; source: its table is written in the generator. A diagram added to the
+  ;; registry and forgotten there would be a drawing nobody could find from the
+  ;; index that exists to list them.
+  (let [index (artifact "docs/diagrams/README.md")]
+    (doseq [path (->> (keys (diagrams/artifacts root))
+                      (filter #(str/starts-with? % "docs/diagrams/"))
+                      (remove #(= % "docs/diagrams/README.md")))]
+      (is (str/includes? index (str/replace path "docs/diagrams/" ""))
+          (str path " is generated but is not in the generated index")))))
 
 ;; ---------------------------------------------------------------------------
 ;; AC-4 — the control map against COMPLIANCE §2, both ways

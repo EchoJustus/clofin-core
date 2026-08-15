@@ -759,6 +759,110 @@
       (is (= 2 (entry-count)))
       (is (= 1 (count (filter #{"payment.settled"} (actions-for (:org f) (uuid a)))))))))
 
+(deftest ac-4-a-late-resolution-that-moves-a-complete-batchs-status-says-so
+  ;; TASK-010 AC-4, and the closing of C-05's one disclosed exception
+  ;; (release-audit finding **A-004**). One item, swept: the batch is complete
+  ;; and derives to `failed`. The late truth then makes it `settled` — a real
+  ;; change to a real column, with a real actor behind it, that left no event
+  ;; whose subject was the batch until `settlement-batch.status-restated`.
+  (let [f (setup)
+        a (raise! f :creditor-account "SG-SYNTH-88012349")
+        batch (get (:json (create-batch! f [a])) "id")]
+    (submit-batch! f batch)
+    (ok! (str "/settlement-batches/" batch "/timeout-sweep")
+         :actor (:controller f) :body {"organisationId" (str (:org f)) "timeoutSeconds" 0})
+    (let [after-sweep (actions-for (:org f) (uuid batch))]
+      (is (= 1 (count (filter #{"settlement-batch.completed"} after-sweep)))
+          "the sweep is the transition INTO a complete batch")
+      (is (empty? (filter #{"settlement-batch.status-restated"} after-sweep))
+          "and nothing has been restated yet"))
+
+    (let [before (audit-count)
+          {:keys [status json]} (respond! f batch {"kind" "timeout-resolution"
+                                                   "instructionId" a
+                                                   "reference" "SIM-TMO-LATE"
+                                                   "outcome" "settled"})
+          actions (actions-for (:org f) (uuid batch))]
+      (is (= 200 status))
+      (is (= "settled" (get json "status")) "the derived status did move")
+      (is (= 1 (count (filter #{"settlement-batch.status-restated"} actions)))
+          "exactly one batch-subject event with the new term, in that transaction")
+      (is (= 1 (count (filter #{"settlement-batch.completed"} actions)))
+          "and NOT a second `completed` — that transition happened at the sweep,
+           under a different actor and a different correlation id, and counting
+           one as the other is F-005's mislabelling with a new name")
+      (is (= (+ before 2) (audit-count))
+          "two events for two facts: the payment settled, and the batch's
+           outcome was restated")
+
+      (testing "the event carries a real before and a real after"
+        (let [row (db/query-one
+                   tdb/*pool*
+                   ["select before_digest, after_digest, actor_id from audit_event
+                      where subject_id = ? and action = 'settlement-batch.status-restated'"
+                    (uuid batch)])]
+          (is (some? (:before-digest row)))
+          (is (some? (:after-digest row)))
+          (is (not= (:before-digest row) (:after-digest row))
+              "identical digests would assert a change that did not happen")
+          (is (some? (:actor-id row)) "and the actor that caused it"))))))
+
+(deftest ac-4-a-late-resolution-that-moves-nothing-emits-nothing
+  ;; The other half of AC-4, and the half a rule written against the response
+  ;; `kind` rather than against the status would get wrong. Two items: one
+  ;; settled, one swept. The batch is complete and derives to
+  ;; `partially-settled`. Resolving the swept item to `returned` leaves it
+  ;; `partially-settled` — the item moved, the batch did not.
+  (let [f (setup)
+        a (raise! f :creditor-account "SG-SYNTH-88012349")
+        b (raise! f :creditor-account "SG-SYNTH-88012350")
+        batch (get (:json (create-batch! f [a b])) "id")]
+    (submit-batch! f batch)
+    (settle! f batch a "SIM-STL-A")
+    (ok! (str "/settlement-batches/" batch "/timeout-sweep")
+         :actor (:controller f) :body {"organisationId" (str (:org f)) "timeoutSeconds" 0})
+    (is (= "partially-settled"
+           (get (:json (call :get (str "/settlement-batches/" batch)
+                             :actor (:controller f)
+                             :query (str "organisationId=" (:org f))))
+                "status")))
+
+    (let [before-actions (actions-for (:org f) (uuid batch))
+          {:keys [status json]} (respond! f batch {"kind" "timeout-resolution"
+                                                   "instructionId" b
+                                                   "reference" "SIM-TMO-LATE-B"
+                                                   "outcome" "returned"
+                                                   "reason" "SIM-RETURN: late truth"})
+          after-actions (actions-for (:org f) (uuid batch))]
+      (is (= 200 status))
+      (is (= "partially-settled" (get json "status"))
+          "the item moved and the batch's derived status did not")
+      (is (= "returned" (status-of f b)) "the payment's own transition is recorded")
+      (is (= before-actions after-actions)
+          "so no batch-subject event at all — an event whose before and after
+           digests are identical asserts a transition that did not occur")
+      (is (empty? (filter #{"settlement-batch.status-restated"} after-actions))))))
+
+(deftest ac-4-a-refused-late-resolution-restates-nothing
+  (testing "AC-8's rolled-back half for the new write: the receipt commits, the
+            batch does not move, and no batch-subject event claims it did"
+    (let [f (setup)
+          a (raise! f :creditor-account "SG-SYNTH-88012349")
+          batch (get (:json (create-batch! f [a])) "id")]
+      (submit-batch! f batch)
+      (settle! f batch a "SIM-STL-1")
+      (let [before (actions-for (:org f) (uuid batch))
+            {:keys [status json]} (respond! f batch {"kind" "timeout-resolution"
+                                                     "instructionId" a
+                                                     "reference" "SIM-TMO-NOPE"
+                                                     "outcome" "returned"
+                                                     "reason" "too late"})]
+        (is (= 409 status))
+        (is (= "item-not-timed-out" (get-in json ["errors" "dispositionReason"])))
+        (is (= before (actions-for (:org f) (uuid batch)))
+            "nothing about the batch changed, so nothing about the batch is
+             recorded")))))
+
 (deftest ac-6-a-timeout-resolution-must-name-the-outcome-it-resolves-to
   (let [f (setup)
         a (raise! f :creditor-account "SG-SYNTH-88012349")

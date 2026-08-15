@@ -453,7 +453,7 @@
                              :before          (audit/reconciliation-break-subject break)
                              :after           (audit/reconciliation-break-subject resolved)
                              :correlation-id  correlation-id})
-    {:adjustment claimed :break resolved :entry posted :posted? true}))
+    {:adjustment claimed :break resolved :entry posted :posted? true :rejected? false}))
 
 (defn propose-adjustment!
   "Raise an adjustment against a break, and post it immediately when the
@@ -521,33 +521,85 @@
                                    :entry-id        entry-id
                                    :occurred-at     occurred-at})
              :approvals-required required)
-      {:adjustment stored :break break :entry nil :posted? false
+      {:adjustment stored :break break :entry nil :posted? false :rejected? false
        :approvals-required required})))
 
-(defn approve-adjustment!
-  "Record one actor's approval of an adjustment and, when it completes the
-  requirement, post it — on the caller's transaction.
+(defn- reject-adjustment!
+  "Refuse an adjustment, and say so — in the transaction that refuses it.
+
+  Three facts, and the order is the interesting part:
+
+  1. **Claim the refusal** (`mark-rejected!`, `where status = 'proposed'`), for
+     the same reason `post-adjustment!` claims the posting in a statement rather
+     than after a read: a check-then-write is a race, and the window is exactly
+     long enough for a concurrent approval to post the adjustment being refused.
+  2. **Say what happened** — one event, whose subject is the adjustment, in the
+     transaction where it reached a terminal status (**L-7**). The
+     `approval.recorded` event for the decision itself is written by the caller
+     and is a different fact about a different subject.
+  3. **Leave the break alone.** Deliberately, and it is the half worth stating:
+     proposing an adjustment never moved the break, so a refused adjustment
+     returns it to nothing — it is in the state it was in, and a different
+     adjustment may be raised against it because `recon_adjustment_posted_key`
+     is partial on `posted` and a rejected row is outside it. The break is
+     returned as it was read, under its lock, so a caller renders the state it
+     actually has rather than the state a rejection might have implied.
+
+  Nothing posts. There is no entry, and `recon_adjustment_posting_paired`
+  already required that of anything that is not `posted`."
+  [tx {:keys [organisation-id adjustment break actor correlation-id]}]
+  (let [rejected (or (recon/mark-rejected! tx organisation-id (:id adjustment))
+                     (err/conflict!
+                      "This reconciliation adjustment is no longer awaiting a decision"
+                      {:adjustment-id (str (:id adjustment))}))]
+    (audit-store/record! tx {:organisation-id organisation-id
+                             :actor-id        (:id actor)
+                             :action          "reconciliation-adjustment.rejected"
+                             :subject-type    "reconciliation-adjustment"
+                             :subject-id      (:id adjustment)
+                             :before          (audit/reconciliation-adjustment-subject adjustment)
+                             :after           (audit/reconciliation-adjustment-subject rejected)
+                             :correlation-id  correlation-id})
+    {:adjustment rejected :break break :entry nil :posted? false :rejected? true}))
+
+(defn decide-adjustment!
+  "Record one actor's decision on an adjustment and act on it — post it when the
+  approvals it needs now exist, refuse it when the decision is a rejection — on
+  the caller's transaction.
 
   Returns `{:approval … :adjustment … :break … :entry … :posted? bool
-            :approvals-held n :approvals-required n}`.
+            :rejected? bool :approvals-held n :approvals-required n}`.
 
-  ## What is reused, and the one thing that is not
+  ## What is reused, and the two things that are not
 
   **The decision is `clofin.authz.approval/evaluate`, unchanged.** Self-approval
   is refused first and never waivably — the actor who proposed the adjustment
-  may not approve it, which is C-01's own comparison against `created-by`
-  applied to a different subject. The approver's per-currency ceiling (C-02) and
-  their `:payment/approve` permission (C-08) apply exactly as they do to a
-  payment, and the row lands in the same `approval` table under the same
-  no-delete guarantee.
+  may not approve *or reject* it, which is C-01's own comparison against
+  `created-by` applied to a different subject. The approver's per-currency
+  ceiling (C-02) and their `:payment/approve` permission (C-08) apply exactly as
+  they do to a payment; a rejection is judged against `:payment/reject` and
+  needs neither a ceiling nor a band, because refusing a payment is not an
+  exercise of spending authority. The row lands in the same `approval` table
+  under the same no-delete guarantee, and `assert-reason!` — the same function,
+  and `approval_rejection_needs_reason` behind it — makes the reason mandatory
+  on a rejection here exactly as it is on a payment's.
 
   **The count comes from the adjustment, not from `evaluate`.** `evaluate`
   answers *may this actor decide*, and its `:completes?` is computed against the
   bands as they stand **now**; an adjustment carries the requirement computed
   when it was proposed. Reading the stored number is what stops an organisation
   lowering a band and thereby posting an adjustment that never cleared the bar
-  it was raised under. That is the single adjustment-specific rule, and it is
-  stated here rather than smuggled into the shared function.
+  it was raised under. A **rejection** is exempt from the count and always
+  terminal: one refusal ends the adjustment, which is the same rule a rejected
+  payment follows and is `evaluate`'s own `:completes?` for a rejection.
+
+  **Where it may go next is the lifecycle table**, asked before anything is said
+  about the actor. `clofin.recon.adjustment/transition` refuses a decision on an
+  adjustment that has already posted or already been refused, with a `409`
+  naming what would have been permitted — the same ordering
+  `clofin.payments.approval-service/decide!` uses, and for the same reason: a
+  decision on a finished adjustment is a conflict whoever sent it, and answering
+  `403` first would suggest that fixing permissions would help.
 
   ## Lock order
 
@@ -557,37 +609,47 @@
   adjustment first to find out which break it belongs to would take the two row
   types in the opposite order from `propose-adjustment!`, and two operations on
   overlapping rows locked in opposite orders deadlock."
-  [tx {:keys [organisation-id adjustment-id approval-id actor reason correlation-id
-              entry-id occurred-at]}]
+  [tx {:keys [organisation-id adjustment-id approval-id actor decision reason
+              correlation-id entry-id occurred-at]}]
   (audit-store/assert-unit-of-work! tx)
-  (let [addressed (or (recon/find-adjustment tx organisation-id adjustment-id)
-                      (err/not-found! "No such reconciliation adjustment in this organisation"
-                                      {:id (str adjustment-id)}))
+  (let [decision   (or decision :approved)
+        event      (or (adjustment/decision-events decision)
+                       (err/invalid! (str "Unknown approval decision: " decision)
+                                     {:decision (str decision)
+                                      :known (mapv name (sort (keys adjustment/decision-events)))}))
+        addressed  (or (recon/find-adjustment tx organisation-id adjustment-id)
+                       (err/not-found! "No such reconciliation adjustment in this organisation"
+                                       {:id (str adjustment-id)}))
         break      (recon/lock-break! tx organisation-id (:break-id addressed))
         proposal   (recon/lock-adjustment! tx organisation-id adjustment-id)
-        _          (when (= "posted" (:status proposal))
-                     (err/conflict! "This reconciliation adjustment has already been posted"
-                                    {:adjustment-id (str adjustment-id)
-                                     :status (:status proposal)}))
+        ;; The lifecycle first, from the table rather than from a status test
+        ;; written here. Its return value is deliberately discarded: what is
+        ;; wanted is the refusal, and where the adjustment actually goes is
+        ;; decided below by whether this decision completes the requirement.
+        _          (adjustment/transition (:status proposal) event)
+        _          (approval/assert-reason! decision reason)
         existing   (authz/approvals-for-adjustment tx adjustment-id)
         thresholds (authz/thresholds-for tx organisation-id (:currency (:amount proposal)))
         outcome    (approval/evaluate {:instruction        proposal
                                        :actor              actor
                                        :existing-approvals existing
                                        :thresholds         thresholds
-                                       :decision           :approved})
+                                       :decision           decision})
         _          (when (= :refused (:decision outcome)) (refuse-approval! outcome))
         recorded   (authz/record-approval! tx {:id            approval-id
                                                :adjustment-id adjustment-id
                                                :actor-id      (:id actor)
-                                               :decision      :approved
+                                               :decision      decision
                                                :reason        reason})
-        held       (count (approval/live-approvals (conj (vec existing) recorded)))]
+        held       (count (approval/live-approvals (conj (vec existing) recorded)))
+        outstanding {:approval recorded
+                     :approvals-held held
+                     :approvals-required (:approvals-required proposal)}]
     ;; One event per thing that happened, which is the whole of standing lesson
     ;; **L-7**. A decision was recorded — always, and its subject is the
-    ;; *approval*, the record that came into existence. The adjustment posting
-    ;; and the break resolving are separate facts about separate subjects and
-    ;; get their own events below, only when they happen.
+    ;; *approval*, the record that came into existence. The adjustment posting,
+    ;; the adjustment's refusal and the break resolving are separate facts about
+    ;; separate subjects and get their own events below, only when they happen.
     (audit-store/record! tx {:organisation-id organisation-id
                              :actor-id        (:id actor)
                              :action          "approval.recorded"
@@ -596,16 +658,25 @@
                              :before          nil
                              :after           (audit/approval-subject recorded)
                              :correlation-id  correlation-id})
-    (if (>= held (:approvals-required proposal))
-      (assoc (post-adjustment! tx {:organisation-id organisation-id
+    (cond
+      (= :rejected decision)
+      (merge (reject-adjustment! tx {:organisation-id organisation-id
+                                     :adjustment      proposal
+                                     :break           break
+                                     :actor           actor
+                                     :correlation-id  correlation-id})
+             outstanding)
+
+      (>= held (:approvals-required proposal))
+      (merge (post-adjustment! tx {:organisation-id organisation-id
                                    :adjustment      proposal
                                    :break           break
                                    :actor           actor
                                    :correlation-id  correlation-id
                                    :entry-id        entry-id
                                    :occurred-at     occurred-at})
-             :approval recorded
-             :approvals-held held
-             :approvals-required (:approvals-required proposal))
-      {:approval recorded :adjustment proposal :break break :entry nil :posted? false
-       :approvals-held held :approvals-required (:approvals-required proposal)})))
+             outstanding)
+
+      :else
+      (merge {:adjustment proposal :break break :entry nil :posted? false :rejected? false}
+             outstanding))))

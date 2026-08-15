@@ -1,11 +1,16 @@
 # UAT-007 — Reconciliation: the disagreements, and what happens to them
 
 **Covers:** statement ingestion, deterministic matching that records its rule,
-breaks with an owner and an age, and resolution by an approved adjustment
+breaks with an owner and an age, resolution by an approved adjustment — and, in
+steps 12 and 13, the two edges TASK-010 closed: an adjustment an approver
+**refuses**, and a retry that names the returned payment it replaces
 **Requirements:** PR-050, PR-051, PR-052, PR-053, PR-054 (PRD §5.6)
-**Controls:** [C-01](../COMPLIANCE.md), C-02, C-03, C-05, C-06, C-13
+**Controls:** [C-01](../COMPLIANCE.md), C-02, C-03, C-05, C-06, C-08, C-13
 **Related:** [ADR-0023](../ADR/0023-a-clofin-defined-synthetic-statement-format-and-an-ordered-matching-sequence.md)
-— the format, the matching order, and how a break is resolved
+— the format, the matching order, and how a break is resolved;
+[ADR-0024](../ADR/0024-a-retry-names-the-returned-payment-it-replaces.md) — the
+retry link; [ADR-0025](../ADR/0025-two-audit-terms-for-changes-the-trail-did-not-carry.md)
+— the refusal, and the adjustment lifecycle
 
 ---
 
@@ -481,7 +486,227 @@ defect as well as a handler.
 
 ---
 
-## Step 12 — Reconciliation status for the account and period
+## Step 12 — Refuse a correction, and raise a different one
+
+Not every proposal deserves to post. Pick a break that is still open — call it
+`$BREAK3` — and propose an adjustment **above** the band, so it needs somebody
+else's agreement:
+
+```sh
+curl -sS -X POST $BASE/reconciliation-breaks/$BREAK3/adjustments \
+  -H "X-Actor-Id: $CONTROLLER" -H 'content-type: application/json' \
+  -d "{\"organisationId\":\"$ORG\",
+       \"amount\":{\"currency\":\"SGD\",\"minorUnits\":100000},
+       \"direction\":\"credit\",
+       \"narrative\":\"Provisional: the scheme's figure looks wrong\"}" \
+  | jq '{id, status, permittedTransitions, posted}'
+```
+
+**Expected** — `201`, `status: "proposed"`, and
+`permittedTransitions: ["post","reject"]`. Record the id as `$ADJ3`.
+
+Try to refuse **your own** proposal first:
+
+```sh
+curl -sS -X POST $BASE/reconciliation-adjustments/$ADJ3/approvals \
+  -H "X-Actor-Id: $CONTROLLER" -H 'content-type: application/json' \
+  -d "{\"organisationId\":\"$ORG\",\"decision\":\"rejected\",\"reason\":\"changed my mind\"}" \
+  | jq '{reason: .errors.reason, detail}'
+```
+
+**Expected** — `403`, `errors.reason` is `self-approval`.
+
+> The maker never becomes a valid checker for their own correction, and that is
+> as true of a refusal as of an approval. It is the same comparison, ranked
+> first and never waivable.
+
+Now try a refusal with no reason:
+
+```sh
+curl -sS -X POST $BASE/reconciliation-adjustments/$ADJ3/approvals \
+  -H "X-Actor-Id: $CHECKER" -H 'content-type: application/json' \
+  -d "{\"organisationId\":\"$ORG\",\"decision\":\"rejected\"}" | jq '.errors'
+```
+
+**Expected** — `422`, naming `reason`. A refusal whose reason is retained is the
+difference between a trail that explains a declined correction and one that
+merely records that somebody declined it — the same rule PR-013 sets for a
+rejected payment, enforced in the domain **and** by
+`approval_rejection_needs_reason` at the database.
+
+And now refuse it properly:
+
+```sh
+curl -sS -X POST $BASE/reconciliation-adjustments/$ADJ3/approvals \
+  -H "X-Actor-Id: $CHECKER" -H 'content-type: application/json' \
+  -d "{\"organisationId\":\"$ORG\",\"decision\":\"rejected\",
+       \"reason\":\"The statement is right; our posting is the one to investigate\"}" \
+  | jq '{rejected, posted, adjustment: {status: .adjustment.status,
+         permittedTransitions: .adjustment.permittedTransitions,
+         entryId: .adjustment.entryId},
+         approval: {decision: .approval.decision, reason: .approval.reason},
+         break: .break.state}'
+```
+
+**Expected**
+
+- `201`, `rejected: true`, `posted: false`;
+- the adjustment `rejected`, with **no** `entryId` and
+  `permittedTransitions: []` — it is terminal;
+- the approval carrying `decision: "rejected"` and your reason. **That is where
+  the evidence lives**, and it is the same place a rejected payment keeps it;
+- the break in the state it was already in. Proposing an adjustment never moved
+  it, so refusing one returns it to nothing.
+
+Confirm nothing moved in the books, and then raise a **different** adjustment
+against the same break:
+
+```sh
+psql -c "select count(*) from journal_entry where reference_type = 'reconciliation-adjustment';"
+
+curl -sS -X POST $BASE/reconciliation-breaks/$BREAK3/adjustments \
+  -H "X-Actor-Id: $CONTROLLER" -H 'content-type: application/json' \
+  -d "{\"organisationId\":\"$ORG\",
+       \"amount\":{\"currency\":\"SGD\",\"minorUnits\":99999},
+       \"direction\":\"credit\",
+       \"narrative\":\"Agreed after investigation\"}" \
+  | jq '{status, posted, break: .break.state}'
+```
+
+**Expected** — the entry count is unchanged by the refusal, and the second
+adjustment posts and resolves the break. A refused correction blocks nothing:
+`recon_adjustment_posted_key` is partial on `posted`, so a rejected row is
+outside it.
+
+Finally, try to decide the rejected adjustment again:
+
+```sh
+curl -sS -X POST $BASE/reconciliation-adjustments/$ADJ3/approvals \
+  -H "X-Actor-Id: $CHECKER2" -H 'content-type: application/json' \
+  -d "{\"organisationId\":\"$ORG\"}" | jq '.errors'
+```
+
+**Expected** — `409`, naming `adjustment-status: "rejected"` and
+`permitted: []`. The lifecycle is
+[`diagrams/reconciliation-adjustment-lifecycle.md`](../diagrams/reconciliation-adjustment-lifecycle.md),
+generated from `clofin.recon.adjustment/transitions`; a refusal that could be
+taken back would not be a refusal.
+
+---
+
+## Step 13 — Point a retry at the payment that came back
+
+Reconciliation is where return-exception handling lives, which is why
+[ADR-0019](../ADR/0019-a-returned-payment-is-terminal-and-retries-as-a-new-instruction.md)
+ruled linked-retry provenance to this increment. Find a break about a **returned**
+payment — the `missing-line` run in step 6 produced one — and read it:
+
+```sh
+curl -sS "$BASE/reconciliation-breaks/$BREAKR?organisationId=$ORG" -H "X-Actor-Id: $CONTROLLER" \
+  | jq '{kind, instructionId, retriedByInstructionIds}'
+```
+
+**Expected** — `expectation-unmatched`, an `instructionId`, and **no**
+`retriedByInstructionIds`: nothing has been retried yet, so the field is absent
+rather than empty. Record the instruction as `$RETURNED` and confirm what it is:
+
+```sh
+curl -sS "$BASE/payment-instructions/$RETURNED?organisationId=$ORG" -H "X-Actor-Id: $CONTROLLER" \
+  | jq '{status, permittedTransitions}'
+```
+
+**Expected** — `returned`, with an empty `permittedTransitions`. It is terminal:
+a retry is a **new** instruction, not a transition on this one.
+
+Try to retry something that is not returned first — any settled instruction:
+
+```sh
+curl -sS -X POST $BASE/payment-instructions \
+  -H "X-Actor-Id: $MAKER" -H 'content-type: application/json' \
+  -H "Idempotency-Key: $(uuidgen)" \
+  -d "{\"organisationId\":\"$ORG\",\"debtorAccountId\":\"$FUNDS\",
+       \"creditorName\":\"Pacific Rim Logistics Pte Ltd\",
+       \"creditorAccount\":\"SG-SYNTH-88012399\",
+       \"amount\":{\"currency\":\"SGD\",\"minorUnits\":110000},
+       \"valueDate\":\"$VALUEDATE\",\"purposeCode\":\"SUPP\",
+       \"retriesId\":\"$SETTLED\"}" | jq '{detail, errors}'
+```
+
+**Expected** — `409`, naming `instruction-status: "settled"`,
+`attempted: "retry"` and `retryable-in: ["returned"]`. The refusal names the
+correction rather than only the rule: what that operator wants is a reversal.
+
+Now raise the retry properly, against `$RETURNED`, changing the beneficiary
+account — which is the ordinary reason a payment comes back:
+
+```sh
+curl -sS -X POST $BASE/payment-instructions \
+  -H "X-Actor-Id: $MAKER" -H 'content-type: application/json' \
+  -H "Idempotency-Key: $(uuidgen)" \
+  -d "{\"organisationId\":\"$ORG\",\"debtorAccountId\":\"$FUNDS\",
+       \"creditorName\":\"Pacific Rim Logistics Pte Ltd\",
+       \"creditorAccount\":\"SG-SYNTH-88012777\",
+       \"amount\":{\"currency\":\"SGD\",\"minorUnits\":110000},
+       \"valueDate\":\"$VALUEDATE\",\"purposeCode\":\"SUPP\",
+       \"retriesId\":\"$RETURNED\"}" | jq '{id, status, retriesId}'
+```
+
+**Expected** — `201`, `status: "draft"`, `retriesId: "$RETURNED"`. Record it as
+`$RETRY`.
+
+> Nothing about the amount, the currency or the beneficiary is compared against
+> the original, and that is deliberate: a return is **new information**, and
+> correcting the account it bounced off is exactly why you are here. The retry
+> is submitted and approved on its own merits, with the whole maker–checker
+> control applying to it.
+
+Read the linkage from **both** ends, and from the break:
+
+```sh
+curl -sS "$BASE/payment-instructions/$RETURNED?organisationId=$ORG" -H "X-Actor-Id: $CONTROLLER" \
+  | jq '{status, retriedByIds}'
+
+curl -sS "$BASE/reconciliation-breaks/$BREAKR?organisationId=$ORG" -H "X-Actor-Id: $CONTROLLER" \
+  | jq '{instructionId, retriedByInstructionIds}'
+```
+
+**Expected** — the original names `$RETRY` in `retriedByIds`, and the break now
+names it too. **Nothing was written to either the original or the break to make
+that true**: both are derived when they are read, for the same reason a break's
+age is.
+
+Try to rewrite the provenance, through the API and then behind it:
+
+```sh
+curl -sS -X PATCH "$BASE/payment-instructions/$RETRY" \
+  -H "X-Actor-Id: $MAKER" -H 'content-type: application/json' \
+  -H "Idempotency-Key: $(uuidgen)" \
+  -d "{\"organisationId\":\"$ORG\",\"retriesId\":\"$SETTLED\"}" | jq '.errors'
+```
+
+```sql
+update payment_instruction set retries_id = null where id = '<the retry>';
+```
+
+**Expected** — `422` naming `retriesId`, and the raw `UPDATE` **refused** by
+`payment_instruction_retry_link_immutable`. Provenance an operator can rewrite
+after the fact is provenance an investigation cannot rely on, so the guard is in
+the schema and binds a fix-up script too.
+
+Finally, confirm the link is in the trail and not only in the row:
+
+```sh
+curl -sS "$BASE/audit/evidence/$RETRY?organisationId=$ORG" -H "X-Actor-Id: $AUDITOR" \
+  | jq '{subjectType, events: [.events[] | {action, actorId}]}'
+```
+
+**Expected** — one `payment.created` event. Its after digest covers
+`retriesId`, so a link altered afterwards would no longer match what the
+creation left behind.
+
+---
+
+## Step 14 — Reconciliation status for the account and period
 
 ```sh
 export INTRANSIT=$(curl -sS "$BASE/accounts?organisationId=$ORG" -H "X-Actor-Id: $CONTROLLER" \
@@ -515,7 +740,7 @@ select rule_id, count(*) from reconciliation_match group by 1;
 
 ---
 
-## Step 13 — The trail, and the attempt to alter it
+## Step 15 — The trail, and the attempt to alter it
 
 Every step you performed left exactly one audit event per write:
 
@@ -527,7 +752,13 @@ curl -sS "$BASE/audit/events?organisationId=$ORG" -H "X-Actor-Id: $AUDITOR" \
 **Expected** — `reconciliation-statement.received`, `reconciliation-break.opened`,
 `reconciliation-break.assigned`, `reconciliation-break.resolved`,
 `reconciliation-adjustment.proposed`, `reconciliation-adjustment.posted`,
-`approval.recorded` and `journal-entry.posted`.
+`reconciliation-adjustment.rejected`, `approval.recorded`, `payment.created`
+and `journal-entry.posted`.
+
+`reconciliation-adjustment.rejected` appears **once**, for the refusal in step
+12, and `approval.recorded` appears once for *every* decision — the refusal
+included. A refusal is two events, because a decision being taken and a subject
+becoming terminal are two facts about two subjects.
 
 **Note what is *not* there:** the statement you delivered twice appears once.
 The trail records arrivals, not requests.
@@ -575,7 +806,9 @@ explanation is not one.
 | 9 | PR-053, C-01, C-02 | | self-approval refused; second actor posts |
 | 10 | PR-053 | | de-minimis posts; unconfigured currency refuses |
 | 11 | C-03 | | `409`, and the raw insert refused |
-| 12 | PR-054 | | figures agree with the rows |
-| 13 | C-05, C-13 | | one event per write; alterations refused |
+| 12 | C-01, C-05, C-13 | | self-rejection refused; reasonless refusal refused; the adjustment terminal with no entry; the break unmoved; a different adjustment posts |
+| 13 | ADR-0019, ADR-0024, C-08 | | a non-returned target refused by name; the link visible from both ends and from the break; `PATCH` and the raw `UPDATE` both refused |
+| 14 | PR-054 | | figures agree with the rows |
+| 15 | C-05, C-13 | | one event per write; alterations refused |
 
 A step with no evidence is not a passed step.

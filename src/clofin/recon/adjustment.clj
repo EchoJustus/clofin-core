@@ -1,6 +1,15 @@
 (ns clofin.recon.adjustment
   "The adjustment: what resolving a break by posting is, how many approvals it
-  needs, and the entry it produces.
+  needs, the entry it produces — and the lifecycle it moves along.
+
+  ## The lifecycle is data
+
+  `transitions` **is** the adjustment lifecycle, in the shape
+  `clofin.payments.state` established and `clofin.recon.break-state` copied. It
+  was a bare set of two statuses until an approver could refuse one; now that a
+  refusal is a move rather than an absence of one, the rules about which status
+  may follow which live in a table that the service reads, the diagram is
+  generated from, and a test walks by enumeration.
 
   **Nothing in reconciliation edits a journal entry, ever** (C-03). A posted
   entry is immutable, and the only way a disagreement between the scheme and
@@ -73,19 +82,129 @@
 ;; Vocabulary
 ;; ---------------------------------------------------------------------------
 
-(def statuses
-  "Every status an adjustment may hold. Identical to
-  `recon_adjustment_status_known` in migration `0012`.
+(def transitions
+  "Status to `{event → next status}`. **This is the adjustment lifecycle** — not
+  a description of one, and not a list of statuses with the rules kept somewhere
+  else.
 
-  Two, and the second is terminal. A `proposed` adjustment is a request for a
-  posting; a `posted` one has an entry id and its break is resolved. There is
-  deliberately no `rejected`: an approver who disagrees simply does not approve,
-  the adjustment stays `proposed` and never posts, and a different adjustment
-  may be raised against the same break. Naming the refusal would need a second
-  arrow, a second audit term and an endpoint nothing in this brief asks for —
-  and a status nothing can reach is worse than an absent one. Recorded as debt
-  in `docs/audits/008-REQ-reconciliation.md`."
-  (into (sorted-set) ["proposed" "posted"]))
+  Held in the shape `clofin.payments.state` established and
+  `clofin.recon.break-state` copied, and for the identical reason: a transition
+  rule written as an `if` inside a service is the failure both of those
+  namespaces exist to prevent, because the table stops being the truth and
+  nobody finds out until an audit. It was a bare set of two strings until this
+  increment, which was honest while the only move was `proposed → posted` and
+  stopped being honest the moment there were two moves.
+
+  | From | Event | To |
+  |---|---|---|
+  | `proposed` | `:post` | `posted` — the entry is in the journal and the break is resolved |
+  | `proposed` | `:reject` | `rejected` — an approver refused it, with a reason |
+
+  Both endpoints are terminal, **derived** by `terminal?` rather than listed, so
+  a status that acquires an outgoing arrow stops being terminal in the same
+  commit that gives it one. The diagram is generated from here
+  (`docs/diagrams/reconciliation-adjustment-lifecycle.md`, ADR-0020 RULE 1) and
+  is checked in both directions.
+
+  Every arrow has a driver, which is a rule rather than a coincidence
+  (standing lesson **L-10**): `:post` is driven by the transaction in which the
+  entry posts — `clofin.recon.service/post-adjustment!` — and `:reject` by
+  `POST /reconciliation-adjustments/{id}/approvals` carrying
+  `decision: rejected`. Migration `0012` declined to declare a `rejected` status
+  on exactly this ground, that a status nothing can reach is worse than an
+  absent one; ADR-0025 is the record of it acquiring a driver."
+  {:proposed {:post :posted, :reject :rejected}
+   :posted   {}
+   :rejected {}})
+
+(def initial-status
+  "Where an adjustment begins. A caller cannot propose one in any other status:
+  an adjustment that arrived already `posted` would be a movement in the books
+  nobody approved."
+  :proposed)
+
+(def statuses
+  "Every status an adjustment may hold, derived from the lifecycle. Identical to
+  `recon_adjustment_status_known` as migration `0013` leaves it, and
+  `clofin.db.vocabulary-test` compares the two against the live catalogue in
+  both directions.
+
+  Derived rather than declared, so the vocabulary and the lifecycle cannot
+  disagree — a second list is the thing that goes stale while every test that
+  reads it keeps passing."
+  (into (sorted-set) (keys transitions)))
+
+(def events
+  "Every event the lifecycle recognises, across all statuses."
+  (into (sorted-set) (mapcat keys) (vals transitions)))
+
+(defn- outgoing
+  "The events permitted from `status`, as `{event → next status}`.
+
+  An unrecognised status is a defect rather than a caller error — the column
+  carries a check constraint listing exactly these three — so it is reported as
+  one rather than being quietly treated as terminal. Treating an unknown status
+  as terminal would refuse every operation on the row and look, from outside,
+  exactly like a correctly posted adjustment."
+  [status]
+  (or (get transitions status)
+      (err/invalid! (str "Unknown reconciliation adjustment status: " status)
+                    {:status (str status) :known (mapv name statuses)})))
+
+(defn known?
+  "True when `status` is one the lifecycle recognises."
+  [status]
+  (contains? transitions status))
+
+(defn terminal?
+  "True when no event leaves `status`.
+
+  **Derived from the table rather than declared.** `posted` and `rejected` are
+  both ends of the road, and neither is named as such anywhere but here."
+  [status]
+  (empty? (outgoing status)))
+
+(def terminal-statuses
+  "The terminal set, derived. Never a second list."
+  (into (sorted-set) (filter terminal?) statuses))
+
+(defn permitted-events
+  "The events `status` allows, sorted."
+  [status]
+  (into (sorted-set) (keys (outgoing status))))
+
+(defn permitted?
+  "True when `event` may be applied to `status`."
+  [status event]
+  (contains? (outgoing status) event))
+
+(defn transition
+  "The status reached by applying `event` to `status`.
+
+  Throws a `:conflict` naming the attempted transition and what would have been
+  permitted instead. A caller that has been refused needs to know which of its
+  assumptions was wrong: \"somebody already posted this\" and \"somebody already
+  rejected this\" are very different answers for an approver holding it, and a
+  bare `409` leaves them guessing between the two."
+  [status event]
+  (or (get (outgoing status) event)
+      (err/conflict!
+       (str "Cannot " (name event) " a reconciliation adjustment that is " (name status))
+       {:adjustment-status (name status)
+        :attempted         (name event)
+        :permitted         (mapv name (permitted-events status))})))
+
+(def decision-events
+  "The lifecycle event each approval decision drives, when it completes the
+  requirement.
+
+  Read from here rather than written as an `if` at the call site, so that the
+  approvals endpoint and the lifecycle cannot disagree about what a decision
+  does. The keys are `clofin.authz.approval/decisions` — the same vocabulary the
+  `approval.decision` column carries — because there is one maker–checker
+  control and an adjustment goes through it unchanged."
+  {:approved :post
+   :rejected :reject})
 
 (def account-roles
   "The chart-of-accounts codes an adjustment needs, by the role each plays.

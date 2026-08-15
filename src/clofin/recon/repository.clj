@@ -44,6 +44,7 @@
   (:require [clofin.db.core :as db]
             [clofin.error :as err]
             [clofin.money :as money]
+            [clofin.recon.adjustment :as adjustment]
             [clofin.recon.break-state :as break-state]
             [clofin.recon.matching :as matching]
             [clofin.recon.statement :as statement]
@@ -148,7 +149,15 @@
      ;; age is computed in the same statement that reads the row, from `now()`
      ;; and `opened_at`, so a break's age is a fact about when it is read rather
      ;; than a column that was true once.
-     :age-seconds      (when (some? (:age-seconds row)) (db/->long (:age-seconds row)))}))
+     :age-seconds      (when (some? (:age-seconds row)) (db/->long (:age-seconds row)))
+     ;; Derived too, and for the same reason: which payment this break is about
+     ;; is answerable from the sides the break already carries, and storing it
+     ;; would be a fourth copy that could disagree with the other three.
+     :instruction-id   (:instruction-id row)
+     ;; The retries of that payment, when it has any. A break on a returned
+     ;; original names the retry (ADR-0019, ADR-0024) — the linkage is stored
+     ;; once, on the retry, and read from here.
+     :retried-by-ids   (db/->uuids (:retried-by-ids row))}))
 
 (defn- row->adjustment
   "An adjustment row as a domain value, or nil for no row — see `row->break`."
@@ -160,7 +169,11 @@
      :amount             (money/of (:currency row) (db/->long (:amount-minor row)))
      :direction          (keyword (:direction row))
      :narrative          (:narrative row)
-     :status             (:status row)
+     ;; A keyword, as every other lifecycle value in CloFin is. It was a string
+     ;; while the adjustment's \"lifecycle\" was a set of two names; it is read
+     ;; against `clofin.recon.adjustment/transitions` now, and a table keyed by
+     ;; keywords addressed with strings is a lookup that silently returns nil.
+     :status             (keyword (:status row))
      :approvals-required (int (:approvals-required row))
      :entry-id           (:entry-id row)
      :created-by         (:created-by row)
@@ -443,12 +456,56 @@
 ;; Breaks
 ;; ---------------------------------------------------------------------------
 
+(def ^:private break-instruction-sql
+  "Which payment instruction a break is about, derived from whichever side of the
+  disagreement it has.
+
+  A break carries a ledger side (`entry_id`), a statement side (`line_no`), or
+  both — `recon_break_has_a_side` requires at least one. Each side names the
+  instruction differently, and each is read where it actually lives:
+
+  - the **ledger** side from `journal_entry.reference_id`, which is a `uuid`
+    column and is the instruction by definition when `reference_type` says so;
+  - the **statement** side from `reconciliation_statement_line.payment_reference`,
+    which is `text` because it is whatever the document carried. It is cast only
+    when it looks like a UUID, for exactly the reason
+    `clofin.recon.matching/reference-of` renders rather than parses: a garbled
+    reference should fail to name anything, not fail the read.
+
+  The ledger side is preferred where both exist. It is CloFin's own record of
+  what the movement was about, and a matched-but-disagreeing break has a
+  statement line the matcher already bound to that entry."
+  "coalesce(
+     (select e.reference_id
+        from journal_entry e
+       where e.id = b.entry_id and e.reference_type = 'payment-instruction'),
+     (select case
+               when sl.payment_reference ~
+                    '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+               then sl.payment_reference::uuid
+             end
+        from reconciliation_statement_line sl
+       where sl.statement_id = b.statement_id and sl.line_no = b.line_no))")
+
 (def ^:private break-columns
-  "select id, organisation_id, statement_id, account_id, kind, state, line_no,
-          entry_id, currency, statement_amount_minor, ledger_amount_minor,
-          detail, assignee_id, opened_at, resolved_at,
-          extract(epoch from (now() - opened_at))::bigint as age_seconds
-     from reconciliation_break ")
+  "Every break column, plus the two facts a break derives rather than stores.
+
+  `age_seconds` has been derived since increment 6. `instruction_id` and
+  `retried_by_ids` join it in this one: a break on a **returned** payment is the
+  exception an investigator is holding, and the first question they ask about it
+  is whether the payment was raised again (ADR-0024). Both are computed in the
+  same statement that reads the row, so neither is a column that was true once."
+  (str "select b.id, b.organisation_id, b.statement_id, b.account_id, b.kind, b.state,
+               b.line_no, b.entry_id, b.currency, b.statement_amount_minor,
+               b.ledger_amount_minor, b.detail, b.assignee_id, b.opened_at,
+               b.resolved_at,
+               extract(epoch from (now() - b.opened_at))::bigint as age_seconds, "
+       break-instruction-sql " as instruction_id,
+               (select coalesce(array_agg(r.id order by r.created_at, r.id), '{}'::uuid[])
+                  from payment_instruction r
+                 where r.organisation_id = b.organisation_id
+                   and r.retries_id = " break-instruction-sql ") as retried_by_ids
+          from reconciliation_break b "))
 
 (defn insert-break!
   "Open one break. Returns it as stored, with its derived age.
@@ -485,18 +542,16 @@
 
   Held until the caller's transaction ends, so two operators assigning or
   resolving the same break serialise rather than both deciding against a state
-  that is about to change (standing lesson **L-8**). The derived age is read
-  under the lock too, which costs nothing and keeps one row shape."
+  that is about to change (standing lesson **L-8**). The derived facts are read
+  under the lock too, which costs nothing and — more to the point — keeps **one**
+  row shape: a locked break and a listed break are the same value, so a caller
+  that renders one can render the other. This function used to spell its own
+  column list out beside `break-columns`, which is a second copy of the
+  projection and the shape standing lesson **L-6** names."
   [tx organisation-id id]
   (or (row->break
-       (db/query-one tx [(str "select b.id, b.organisation_id, b.statement_id, b.account_id,
-                                      b.kind, b.state, b.line_no, b.entry_id, b.currency,
-                                      b.statement_amount_minor, b.ledger_amount_minor,
-                                      b.detail, b.assignee_id, b.opened_at, b.resolved_at,
-                                      extract(epoch from (now() - b.opened_at))::bigint
-                                        as age_seconds
-                                 from reconciliation_break b
-                                where b.organisation_id = ? and b.id = ? for update")
+       (db/query-one tx [(str break-columns
+                              "where b.organisation_id = ? and b.id = ? for update")
                          organisation-id id]))
       (err/not-found! "No such reconciliation break in this organisation" {:id (str id)})))
 
@@ -595,15 +650,21 @@
   "recon_adjustment_posted_key")
 
 (defn insert-adjustment!
-  "Write a proposed adjustment. Returns it as stored."
+  "Write an adjustment in the status an adjustment begins in. Returns it as
+  stored.
+
+  The status is bound from `clofin.recon.adjustment/initial-status` rather than
+  written as a literal, so that the one place that decides where an adjustment
+  starts is the lifecycle table."
   [tx {:keys [id organisation-id break-id amount direction narrative
               approvals-required created-by]}]
   (db/execute! tx ["insert into reconciliation_adjustment
                       (id, organisation_id, break_id, amount_minor, currency, direction,
                        narrative, status, approvals_required, created_by)
-                    values (?, ?, ?, ?, ?, ?, ?, 'proposed', ?, ?)"
+                    values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
                    id organisation-id break-id (:minor-units amount) (:currency amount)
-                   (name direction) narrative (int approvals-required) created-by])
+                   (name direction) narrative (name adjustment/initial-status)
+                   (int approvals-required) created-by])
   (row->adjustment (db/query-one tx [(str adjustment-columns "where id = ?") id])))
 
 (defn find-adjustment
@@ -652,9 +713,12 @@
   [tx organisation-id id entry-id]
   (let [updated (try
                   (db/execute! tx ["update reconciliation_adjustment
-                                      set status = 'posted', entry_id = ?, posted_at = now()
-                                    where organisation_id = ? and id = ? and status = 'proposed'"
-                                   entry-id organisation-id id])
+                                      set status = ?, entry_id = ?, posted_at = now()
+                                    where organisation_id = ? and id = ? and status = ?"
+                                   (name (adjustment/transition
+                                          adjustment/initial-status :post))
+                                   entry-id organisation-id id
+                                   (name adjustment/initial-status)])
                   (catch Exception t
                     (let [{:keys [sql-state constraint]} (db/violation t)]
                       (if (and (= sql-state (:unique-violation db/sql-states))
@@ -666,6 +730,34 @@
                          {:clofin/constraint constraint
                           :adjustment-id     (str id)})
                         (throw t)))))]
+    (when (pos? updated)
+      (find-adjustment tx organisation-id id))))
+
+(defn mark-rejected!
+  "Record that an adjustment was refused, exactly once. Returns it as stored, or
+  nil when it was no longer `proposed`.
+
+  The same `where status = <initial>` guarantee `mark-posted!` relies on, and in
+  the statement rather than in a preceding read for the same reason: a
+  check-then-update is a race, and the window between them is exactly long
+  enough for a concurrent approval to post the adjustment this one is refusing.
+  Returning nil for zero rows updated lets the caller tell \"I rejected it\"
+  from \"someone had already decided\" without asking again.
+
+  **Nothing else moves.** No entry id, no posted instant — the row stays outside
+  `recon_adjustment_posted_key`'s partial predicate, so the break it names can
+  still be corrected by a different adjustment, which is the whole point of
+  recording the refusal rather than leaving the proposal to sit. Who rejected
+  it, why and when are the `approval` row the same transaction wrote: the same
+  place, and the only place, a rejected payment keeps them."
+  [tx organisation-id id]
+  (let [updated (db/execute! tx ["update reconciliation_adjustment
+                                    set status = ?
+                                  where organisation_id = ? and id = ? and status = ?"
+                                 (name (adjustment/transition
+                                        adjustment/initial-status :reject))
+                                 organisation-id id
+                                 (name adjustment/initial-status)])]
     (when (pos? updated)
       (find-adjustment tx organisation-id id))))
 

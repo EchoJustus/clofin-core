@@ -149,6 +149,27 @@
   is untouched, which is why this is not a transition either."
   #{:settled})
 
+(def retryable-states
+  "States from which a **retry** instruction may be raised against an
+  instruction.
+
+  `returned` and nothing else.
+  [ADR-0019](../../../docs/ADR/0019-a-returned-payment-is-terminal-and-retries-as-a-new-instruction.md)
+  ruled that a returned payment is terminal and that a second attempt is a *new*
+  instruction — approved on its own merits, because a return is new information
+  a checker should see before the money goes out again. The original is
+  untouched, so raising a retry is not a transition on it: this is the
+  `returned` half of the doctrine `reversible-states` states for `settled`, and
+  the two sets are deliberately disjoint.
+
+  Not `failed`: `settlement_batch_item.outcome` has no `failed` value, so
+  nothing drives that arrow and a state nothing reaches is a permission no
+  workflow can use (standing lesson **L-10**). Not `timed-out` either — a timed
+  out item is not a status on the instruction at all; the payment stays
+  `released` precisely because its true fate is unknown, and retrying a payment
+  that may yet settle is how a payment is made twice."
+  #{:returned})
+
 (def creator-only-events
   "Events only an instruction's **creator** may cause.
 
@@ -200,6 +221,12 @@
   (outgoing state)
   (contains? reversible-states state))
 
+(defn retryable?
+  "True when a retry may be raised against an instruction in `state`."
+  [state]
+  (outgoing state)
+  (contains? retryable-states state))
+
 (defn assert-mutable!
   "Throw a `:conflict` unless an instruction in `state` may be amended.
 
@@ -226,4 +253,23 @@
      {:instruction-status (name state)
       :attempted          "reverse"
       :reversible-in      (mapv name (sort reversible-states))}))
+  state)
+
+(defn assert-retryable!
+  "Throw a `:conflict` unless a retry may be raised against `state`.
+
+  The refusal names the correction rather than only the rule, for the reason
+  `clofin.settlement.repository/add-items!` gives about the membership index: a
+  refusal an operator cannot act on becomes a request to disable the check. An
+  operator pointing a retry at a settled payment wants a reversal, and an
+  operator pointing one at a released payment is trying to retry something the
+  scheme has not answered about yet."
+  [state]
+  (when-not (retryable? state)
+    (err/conflict!
+     (str "Cannot retry a payment instruction that is " (name state)
+          "; only a returned instruction can be retried")
+     {:instruction-status (name state)
+      :attempted          "retry"
+      :retryable-in       (mapv name (sort retryable-states))}))
   state)

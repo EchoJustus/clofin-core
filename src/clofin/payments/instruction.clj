@@ -12,7 +12,8 @@
        :status            :draft
        :created-by        #uuid \"...\"
        :created-at        #inst \"...\"
-       :reverses-id       nil}
+       :reverses-id       nil
+       :retries-id        nil}
 
   **Every failed field is reported, not the first one** (PR-003). That is the
   whole reason validation is a function returning a map rather than a chain of
@@ -157,7 +158,7 @@
   caller could not parse at all are its own to report; this sees only values
   that arrived as some Clojure value, and judges those."
   [{:keys [organisation-id debtor-account-id creditor-name creditor-account
-           amount value-date purpose-code status created-by reverses-id]}
+           amount value-date purpose-code status created-by reverses-id retries-id]}
    {:keys [today]}]
   (when-not (instance? LocalDate today)
     (err/invalid! "Validating a value date requires today's date from the caller"
@@ -186,7 +187,12 @@
          ;; instruction being reversed; that the target exists, is in this
          ;; organisation and is settled is a database question, answered in
          ;; `clofin.payments.repository`.
-         :reverses-id       (when (some? reverses-id) (uuid-error reverses-id))}))
+         :reverses-id       (when (some? reverses-id) (uuid-error reverses-id))
+         ;; Optional, and the same shape for the same reason. Present only on a
+         ;; retry, where it names the **returned** instruction this one was
+         ;; raised to replace (ADR-0019, ADR-0024). That the target exists, is
+         ;; in this organisation and is returned is a database question too.
+         :retries-id        (when (some? retries-id) (uuid-error retries-id))}))
 
 (defn valid?
   "True when `candidate` has no failed fields."
@@ -209,15 +215,17 @@
   (let [errors (field-errors candidate opts)]
     (when (seq errors)
       (err/fail! :field-validation "Request failed validation" errors))
-    (-> ;; `reverses-id` is defaulted rather than merely selected, so that an
-        ;; instruction built here and one loaded from a row have the same shape.
-        ;; A key that is absent in one and nil in the other is a difference that
-        ;; only ever shows up in an equality check nobody expected to fail.
-        (merge {:reverses-id nil}
+    (-> ;; `reverses-id` and `retries-id` are defaulted rather than merely
+        ;; selected, so that an instruction built here and one loaded from a row
+        ;; have the same shape. A key that is absent in one and nil in the other
+        ;; is a difference that only ever shows up in an equality check nobody
+        ;; expected to fail.
+        (merge {:reverses-id nil :retries-id nil}
                (select-keys candidate [:id :organisation-id :debtor-account-id
                                        :creditor-name :creditor-account
                                        :amount :value-date :purpose-code :status
-                                       :created-by :created-at :reverses-id]))
+                                       :created-by :created-at :reverses-id
+                                       :retries-id]))
         (update :creditor-name str/trim)
         (update :creditor-account str/trim))))
 
@@ -240,7 +248,15 @@
 
   Everything else is either identity (`id`, `organisation-id`), provenance
   (`created-by`, `created-at`), lifecycle (`status` — that moves by transition,
-  never by edit) or linkage (`reverses-id` — a reversal does not stop being one)."
+  never by edit) or linkage (`reverses-id` — a reversal does not stop being one;
+  `retries-id` — nor does a retry stop replacing what it replaces).
+
+  The linkage half is enforced twice on purpose. This set makes a `PATCH` naming
+  either one a `422` that says the field cannot be amended; the database refuses
+  a change to `retries_id` from **any** writer
+  (`payment_instruction_retry_link_immutable`, migration `0013`), because
+  provenance an operator can rewrite afterwards is provenance an investigation
+  cannot rely on (standing lesson **L-6**)."
   #{:debtor-account-id :creditor-name :creditor-account
     :amount :value-date :purpose-code})
 

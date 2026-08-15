@@ -16,3 +16,4 @@
 0010-settlement-remediation.sql
 0011-purpose-codes-and-line-currency.sql
 0012-reconciliation.sql
+0013-linked-retries-and-adjustment-rejection.sql

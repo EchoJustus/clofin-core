@@ -171,14 +171,15 @@ tags:
       event and a committed one leaves exactly one. An unaudited state change is
       not representable.
 
-      One qualification, stated here rather than left to be found: a late
-      `timeout-resolution` can move an **already-complete** settlement batch's
-      derived status — `failed` to `settled`, say — and that recomputation emits
-      no second batch-subject event, because `settlement-batch.completed` marks
-      the transition *into* a complete batch and this is not one. The payment's
-      own transition is recorded in the same transaction, so the change is not
-      invisible; what is missing is an event whose subject is the batch. It is
-      named debt in `COMPLIANCE.md` §4.
+      There is **no qualification** on that statement. The one that stood until
+      TASK-010 was a late `timeout-resolution` moving an **already-complete**
+      settlement batch's derived status — `failed` to `settled`, say — which
+      recorded the payment's own transition and left no event whose subject was
+      the batch. That change now emits `settlement-batch.status-restated`, a
+      term distinct from `settlement-batch.completed` because the two name
+      different transitions: `completed` is the move *into* a complete batch,
+      and this is a later correction of an outcome already reached. It is
+      emitted only where the derived status actually moves.
 
       **Events carry digests, not payloads.** An event proves *that* something
       changed and — compared against a value the auditor already holds —
@@ -689,6 +690,12 @@ paths:
         back at it. The original is not modified — a settled payment is never
         mutated. Reversing anything that is not settled is `409`.
 
+        **A retry likewise.** Pass `retriesId` naming a `returned` instruction
+        and the result is a **new** instruction pointing back at it: a returned
+        payment is terminal, and a second attempt is a second payment decision
+        that is submitted and approved on its own merits. Retrying anything that
+        is not returned is `409`. The two members are mutually exclusive.
+
         *Not implemented:* a limit on the total reversed across several
         reversals of one instruction (PR-044). Nothing here stops a second
         reversal being raised against the same settled instruction.
@@ -842,8 +849,8 @@ paths:
         than trusted.
 
         Only substance is amendable. `id`, `organisationId`, `status`,
-        `createdBy`, `createdAt` and `reversesId` are not, and naming one is
-        `422` rather than being silently ignored — a caller that sent it
+        `createdBy`, `createdAt`, `reversesId` and `retriesId` are not, and naming
+        one is `422` rather than being silently ignored — a caller that sent it
         believes it changed something.
       parameters:
         - name: id
@@ -2048,18 +2055,28 @@ paths:
     post:
       tags: [Reconciliation]
       operationId: approveReconciliationAdjustment
-      summary: Approve a reconciliation adjustment, posting it when complete
+      summary: Decide a reconciliation adjustment, posting or refusing it
       description: |
-        A second, **different** actor agrees. This is the *same* maker–checker
-        control that governs payment approvals — the same pure decision
-        function, the same `approval` table, the same per-currency approver
-        limits, the same refusal vocabulary — applied to a different subject.
-        There is no second approval mechanism in CloFin.
+        A second, **different** actor agrees — or refuses. This is the *same*
+        maker–checker control that governs payment approvals — the same pure
+        decision function, the same `approval` table, the same per-currency
+        approver limits, the same refusal vocabulary, the same `decision`
+        member — applied to a different subject. There is no second approval
+        mechanism in CloFin.
 
-        The adjustment's proposer may not approve it, and that refusal is
-        evaluated **first** and is never waivable: an actor may be granted a
-        role or a larger limit, but the maker never becomes a valid checker for
-        their own correction.
+        **`decision: rejected` ends the adjustment**, with a `reason` that is
+        required rather than optional. The adjustment becomes terminal, an
+        event whose subject is the adjustment records the refusal, and the
+        break is left exactly as it was — proposing an adjustment never moved
+        it — so a different adjustment may be raised against the same break.
+        Until this existed an approver who disagreed simply did not answer, the
+        proposal sat `proposed` for ever, and nothing recorded that anybody had
+        considered it.
+
+        The adjustment's proposer may neither approve nor reject it, and that
+        refusal is evaluated **first** and is never waivable: an actor may be
+        granted a role or a larger limit, but the maker never becomes a valid
+        checker for their own correction.
 
         The number of approvals required is the one recorded on the adjustment
         **when it was proposed**, not the one the bands would give today. An
@@ -2071,9 +2088,12 @@ paths:
         adjustment is not a state that exists.
 
         No permission is checked at this boundary. The decision function checks
-        `payment/approve` *and* the maker, the limit and the count, and it ranks
-        those reasons deliberately: a boundary check would tell the adjustment's
-        own proposer that fixing their permissions would help.
+        `payment/approve` — or `payment/reject` — *and* the maker, the limit
+        and the count, and it ranks those reasons deliberately: a boundary check
+        would tell the adjustment's own proposer that fixing their permissions
+        would help. A rejection is judged against neither the approver's ceiling
+        nor the organisation's bands: saying no is not an exercise of spending
+        authority.
       requestBody:
         required: false
         content:
@@ -2090,7 +2110,8 @@ paths:
         "201":
           description: |
             The decision, and what it did. `posted` is true when this approval
-            completed the requirement and the entry was posted.
+            completed the requirement and the entry was posted; `rejected` is
+            true when this decision refused the adjustment. Never both.
           headers:
             Location:
               description: URI of the adjustment decided on.
@@ -2116,7 +2137,8 @@ paths:
         "409":
           description: |
             This actor has already decided on this adjustment, or the adjustment
-            has already been posted.
+            has already reached a terminal status — posted, or refused by
+            somebody else.
           content:
             application/problem+json:
               schema:
@@ -2124,7 +2146,8 @@ paths:
         "422":
           description: |
             No approval band is configured for this organisation and currency,
-            or the organisation has no account to post the adjustment to.
+            the organisation has no account to post the adjustment to, or a
+            rejection arrived with no `reason`.
           content:
             application/problem+json:
               schema:
@@ -2900,6 +2923,33 @@ components:
           description: |
             Present only on a reversal, naming the settled instruction it was
             raised against. That instruction is unchanged.
+        retriesId:
+          type: string
+          format: uuid
+          description: |
+            Present only on a **retry**, naming the `returned` instruction this
+            one was raised to replace. That instruction is unchanged, and this
+            one is submitted and approved entirely on its own merits — a return
+            is new information a checker should see before the money goes out
+            again.
+
+            Set when the instruction is created and never afterwards. A `PATCH`
+            naming it is `422`, and the database refuses a change to the column
+            from any writer.
+        retriedByIds:
+          type: array
+          description: |
+            The instructions raised to replace **this** one, present only on a
+            returned instruction that has been retried. The other end of
+            `retriesId`, derived at read time from the retries themselves rather
+            than stored, so the two ends cannot disagree.
+
+            A list rather than a single id: the link carries no uniqueness rule,
+            because every candidate rule would have to encode a second copy of
+            the payment lifecycle in an index — an original whose first retry
+            was cancelled may be retried again. The ordinary case has one
+            member.
+          items: { type: string, format: uuid }
         permittedTransitions:
           type: array
           description: |
@@ -2956,6 +3006,26 @@ components:
           description: |
             Set to raise this instruction as a reversal of a **settled** one.
             The result is a new instruction; the original is not modified.
+            Mutually exclusive with `retriesId`.
+        retriesId:
+          type: string
+          format: uuid
+          description: |
+            Set to raise this instruction as a **retry** of a `returned` one.
+            The result is a new instruction; the original is not modified.
+            Retrying anything that is not `returned` is `409`, and naming an
+            instruction in another organisation is `422` reported as
+            non-existence rather than as forbidden.
+
+            No rule constrains the amount, the currency, the beneficiary or the
+            value date against the original. A return is new information — a
+            closed account, a rejected beneficiary — and correcting one of those
+            is the ordinary reason to retry, so a link that only accepted an
+            identical payment would refuse exactly the retries that matter.
+
+            Mutually exclusive with `reversesId`: a payment succeeds a settled
+            one or replaces a returned one, never both, and sending both is
+            `422` naming both members.
 
     AmendPaymentInstructionRequest:
       type: object
@@ -3595,14 +3665,19 @@ components:
     AdjustmentStatus:
       type: string
       description: |
-        `proposed` until the approvals it needs exist; `posted` once its entry
-        is in the journal, which happens in the same transaction as the approval
-        that completed the requirement.
+        `proposed` until it is decided; `posted` once its entry is in the
+        journal, which happens in the same transaction as the approval that
+        completed the requirement; `rejected` once an approver has refused it,
+        with a reason.
 
-        There is deliberately no `rejected`: an approver who disagrees simply
-        does not approve, the adjustment never posts, and a different one may be
-        raised against the same break.
-      enum: [proposed, posted]
+        Both endings are terminal, and they are not interchangeable: a posted
+        adjustment moved the books and resolved its break, and a rejected one
+        moved nothing and left the break exactly where it was — so a different
+        adjustment may be raised against the same break. The lifecycle is
+        `clofin.recon.adjustment/transitions` and is drawn from it at
+        `docs/diagrams/reconciliation-adjustment-lifecycle.md`;
+        `permittedTransitions` on every adjustment is read from the same table.
+      enum: [proposed, posted, rejected]
 
     StatementRefusalReason:
       type: string
@@ -3823,6 +3898,27 @@ components:
           description: |
             **Derived at read time and stored nowhere.** A stored age is wrong
             the moment it is written, for the same reason a stored balance is.
+        instructionId:
+          type: string
+          format: uuid
+          description: |
+            The payment instruction this break is about, **derived at read time**
+            from whichever side of the disagreement the break has: the ledger
+            entry's reference, or the statement line's end-to-end reference. Absent
+            when neither side names one — an untagged line the matcher could not
+            bind, for instance.
+        retriedByInstructionIds:
+          type: array
+          description: |
+            The instructions raised to replace `instructionId`, when it is a
+            returned payment that has been retried. Derived the same way and
+            present only when there is something in it.
+
+            This is the exception workflow the retry link exists for: an
+            investigator holding a break about a payment that came back asks
+            first whether it was raised again, and before this the answer was
+            reachable only by matching counterparty and amount by eye.
+          items: { type: string, format: uuid }
         permittedTransitions:
           type: array
           description: |
@@ -3965,14 +4061,34 @@ components:
       type: object
       properties:
         organisationId: { type: string, format: uuid }
+        decision:
+          type: string
+          description: |
+            What this actor decided. Absent means `approved`, which is what this
+            endpoint did before a refusal could be recorded at all — a default
+            that changed the meaning of an existing caller's request would be a
+            contract break dressed as a feature.
+
+            The same member, the same vocabulary and the same default as
+            `POST /payment-instructions/{id}/approvals`: there is one
+            maker–checker control in CloFin, and an approver deciding about an
+            adjustment sends what they would send about a payment.
+          enum: [approved, rejected]
+          default: approved
         reason:
           type: string
-          description: Optional note retained with the decision.
+          description: |
+            A note retained with the decision. Optional on an approval and
+            **required** on a rejection: a refusal whose reason is retained is
+            the difference between a trail that explains a declined correction
+            and one that merely records that somebody declined it. Enforced in
+            the domain and again by `approval_rejection_needs_reason` at the
+            database, for both kinds of subject.
 
     ReconciliationAdjustment:
       type: object
       required: [id, breakId, amount, direction, narrative, status,
-                 approvalsRequired, createdBy, createdAt]
+                 approvalsRequired, createdBy, createdAt, permittedTransitions]
       properties:
         id: { type: string, format: uuid }
         breakId: { type: string, format: uuid }
@@ -3998,6 +4114,17 @@ components:
         postedAt: { type: string, format: date-time }
         createdBy: { type: string, format: uuid }
         createdAt: { type: string, format: date-time }
+        permittedTransitions:
+          type: array
+          description: |
+            The lifecycle events this adjustment's status still allows, read
+            from `clofin.recon.adjustment/transitions`. A `proposed` adjustment
+            allows both; a `posted` or `rejected` one allows nothing. Published
+            so a caller need not hold a second copy of the lifecycle to know
+            what it may still do.
+          items:
+            type: string
+            enum: [post, reject]
         posted:
           type: boolean
           description: |
@@ -4009,7 +4136,8 @@ components:
 
     AdjustmentApprovalOutcome:
       type: object
-      required: [approval, adjustment, break, posted, approvalsHeld, approvalsRequired]
+      required: [approval, adjustment, break, posted, rejected, approvalsHeld,
+                 approvalsRequired]
       properties:
         approval:
           $ref: "#/components/schemas/Approval"
@@ -4020,6 +4148,15 @@ components:
         posted:
           type: boolean
           description: True when this approval completed the requirement and the entry posted.
+        rejected:
+          type: boolean
+          description: |
+            True when this decision refused the adjustment. Mutually exclusive
+            with `posted`: one refusal ends an adjustment, so a rejection never
+            also posts. The `break` in the same document is unchanged — a
+            rejection returns it to nobody, because proposing an adjustment
+            never moved it — and a different adjustment may now be raised
+            against it.
         approvalsHeld: { type: integer }
         approvalsRequired: { type: integer }
 
@@ -4108,6 +4245,23 @@ components:
         break emits the same term with a state that did not move, and the before
         and after digests differ in the assignee alone.
 
+        **`settlement-batch.completed` and `settlement-batch.status-restated`
+        are two different facts.** `completed` marks the transition *into* a
+        complete batch, when its last unresolved item resolves. A late
+        `timeout-resolution` can then move that already-terminal derived status
+        again — `failed` to `settled`, say — and *that* is `status-restated`:
+        later information correcting a figure that had already been reported.
+        Emitted only where the derived status actually moves, so a late
+        resolution that changes nothing at the batch level leaves no event
+        claiming it did.
+
+        **`reconciliation-adjustment.rejected` is the other ending.** An
+        approver who refuses a proposed correction ends it, with a reason, and
+        that is a different fact from its posting. The decision itself is
+        `approval.recorded`, as it is for every other decision in CloFin: one
+        refusal leaves two events, because a decision being taken and a subject
+        becoming terminal are two things.
+
         **`payment.failed` is reserved and has no producer.** The payment
         lifecycle carries a `fail` arrow out of `released`, and nothing in
         CloFin drives it: a settlement item's outcome is `settled`, `returned`
@@ -4139,6 +4293,7 @@ components:
         - settlement-batch.created
         - settlement-batch.submitted
         - settlement-batch.completed
+        - settlement-batch.status-restated
         - settlement-batch.timeout-swept
         - reconciliation-statement.received
         - reconciliation-break.opened
@@ -4146,6 +4301,7 @@ components:
         - reconciliation-break.resolved
         - reconciliation-adjustment.proposed
         - reconciliation-adjustment.posted
+        - reconciliation-adjustment.rejected
 
     AuditEvent:
       type: object

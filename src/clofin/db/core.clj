@@ -114,6 +114,22 @@
     (instance? java.util.Date value) (.toInstant ^java.util.Date value)
     :else (err/invalid! (str "Not a timestamp column value: " (class value)) {:value value})))
 
+(defn ->uuids
+  "Coerce a `uuid[]` column value to a vector of `java.util.UUID`, in the order
+  the query produced them.
+
+  An aggregate over no rows is `null` in SQL and an **empty vector** here: a
+  projection whose \"nothing references this\" case were nil and whose \"one
+  thing does\" case were a vector would make every consumer test for two shapes,
+  and one of them would eventually be forgotten. `array_agg` is ordered in the
+  query rather than here, so the order is the database's and is stable."
+  [value]
+  (cond
+    (nil? value)                      []
+    (vector? value)                   value
+    (instance? java.sql.Array value)  (vec (.getArray ^java.sql.Array value))
+    :else (err/invalid! (str "Not an array column value: " (class value)) {:value value})))
+
 (defn ->local-date
   "Coerce a `date` column value to a `java.time.LocalDate`.
 
