@@ -1,6 +1,6 @@
 # CloFin — Roadmap
 
-**Status:** living document · **Last reviewed:** 2026-08-14
+**Status:** living document · **Last reviewed:** 2026-08-15
 
 Increments are sequenced by **product relevance and regulatory risk**, not by
 implementation convenience. Each increment leaves `main` runnable, migrated,
@@ -24,8 +24,9 @@ and this table is stale.
 | 5 | Settlement simulation | [TASK-004](briefs/004-TASK-settlement-simulation.md) | ✅ `CLOSED` — PR #7 (`cba31c5`) + FEEDBACK-M2 remediation PR #8 (`5d21334`; migration `0010`, ADR-0019) | green, 584 tests / 3638 assertions |
 | 5v.1 | Visual layer — generated diagrams | [TASK-006](briefs/006-TASK-generated-diagrams.md) | ✅ `CLOSED` — merged to `main` in PR #12 (`2237a39`); five objections ruled, O-1 actioned on `meta` | green, 322 tests / 1991 assertions (verify), 640 / 4222 (integration) |
 | 5v.2 | Visual layer — `clofin-trace` replay walkthrough | [TASK-007](briefs/007-TASK-clofin-trace.md) | ✅ `CLOSED` — harness merged in PR #14 (`261c778`); walkthrough merged in `clofin-trace` PR #1 (`71cb13f`); **live at <https://echojustus.github.io/clofin-trace/>** | green, both repositories |
-| 5v.3 | Visual layer — trace hardening and cross-links | [TASK-009](briefs/009-TASK-trace-hardening-and-cross-links.md) | 🔨 `IN PROGRESS` — dispatched 2026-08-14 | — |
-| 6 | Reconciliation | [TASK-008](briefs/008-TASK-reconciliation.md) | 🔨 `IN PROGRESS` — dispatched 2026-08-14 | — |
+| 5v.3 | Visual layer — trace hardening and cross-links | [TASK-009](briefs/009-TASK-trace-hardening-and-cross-links.md) | ✅ `CLOSED` — merged in PR #17 (`ddf39c1`) + `clofin-trace` PR #2 (`bc0017c`) | green, both repositories |
+| 6 | Reconciliation | [TASK-008](briefs/008-TASK-reconciliation.md) | ✅ `CLOSED` — merged in PR #16 (`a41e69f`); O-1/O-2 routed to TASK-010 | green, 808 tests / 5864 assertions |
+| 6c | Reconciliation completion (the three disclosed gaps) | [TASK-010](briefs/010-TASK-reconciliation-completion.md) | 📋 `READY` | — |
 | 7–9 | Financial crime onwards | not yet briefed | 💭 later | — |
 
 **Controls now enforced on `main`.** As of 2026-08-04 the increment-3/4 stack is
@@ -200,9 +201,9 @@ to rediscover them:
   re-batched unknowns, and out-of-order deliveries are the increment's core,
   not its edge cases.
 
-## Increment 6 — Reconciliation 🔨
+## Increment 6 — Reconciliation ✅
 
-**Brief:** [TASK-008](briefs/008-TASK-reconciliation.md) · **Status:** `IN PROGRESS` — dispatched 2026-08-14
+**Brief:** [TASK-008](briefs/008-TASK-reconciliation.md) · **Status:** `CLOSED` — merged in PR #16 (`a41e69f`); completion debt is [TASK-010](briefs/010-TASK-reconciliation-completion.md)
 
 - Synthetic statement generation and ingestion
 - Deterministic matching rules in a documented order, recording which matched

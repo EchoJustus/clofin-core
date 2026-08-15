@@ -3,14 +3,14 @@
 | Field | Value |
 |---|---|
 | **Increment** | 6 |
-| **Status** | `IN PROGRESS` — dispatched 2026-08-14 |
+| **Status** | `CLOSED` — merged to `main` in PR #16 (`a41e69f`) 2026-08-15; four objections ruled, O-1/O-2 confirmed as brief defects routed to TASK-010, O-3 ratified, O-4's reading confirmed — see Changelog |
 | **Depends on** | TASK-004 ✅ merged (settlement produces what this consumes); TASK-006 ✅ merged (the diagram generator this brief extends) |
 | **Base branch** | `main` at `501556e` or later |
 | **Blocks** | Increment 7 (financial crime) conceptually; nothing hard |
 | **Requirements** | PR-050…PR-054 (PRD §5.6); ROADMAP increment 6 |
 | **Controls touched** | A **new** control entry (C-13, reconciliation integrity) is authored by this brief; C-01/C-02 are reused, not modified; C-05 must remain unqualified |
 | **Scope** | Large |
-| **Audit** | Not yet submitted |
+| **Audit** | `008-REQ` filed 2026-08-14 (`docs/audits/008-REQ-reconciliation.md` on `main`); inherits the deferred audit debt — its milestone sits at the **Sol** tier (amendment A1: it modifies enforcement code in the authorisation domain and adds a migration) |
 
 > Status lifecycle: `READY` → `IN PROGRESS` → `IMPLEMENTED` → `AUDITED` → `CLOSED`.
 > Status is maintained by Master Control on the `meta` branch — see AGENT_HANDOFF §1b.
@@ -175,3 +175,25 @@ tool.
 filed ten between them and all ten were ruled in the Worker's favour. A
 numbered objection with your reasoning beats a silent workaround, and beats a
 stalled increment.
+
+---
+
+## Changelog — rulings on the `008-REQ` objections (2026-08-15)
+
+*(The REQ is `docs/audits/008-REQ-reconciliation.md` on `main`, landed by PR
+#16.)* All four ruled at ingestion; every objection premise was independently
+verified against `main` first (ADR-0019's ruled text, the C-05 statement, the
+`threshold_approvals_positive` constraint).
+
+| # | Objection | Ruling |
+|---|---|---|
+| O-1 | ADR-0019 assigned linked-retry provenance to increment 6, twice and in ruled text; this brief scoped it neither in nor out. Not built; recorded as an open gap. | **Confirmed — brief defect, Master Control's.** The Worker's refusal to build unscoped work is exactly right (§1b), and delivering the identity half — a line about a returned original can never match its retry, asserted end to end — is what made the gap safe to carry. **Ruled to a follow-up brief**: TASK-010, which inherits it as scoped, named work. The gap rows in COMPLIANCE §4 and DOMAIN_MODEL §2.4 stand until it lands. |
+| O-2 | COMPLIANCE §4 promised the batch-status audit vocabulary term "with increment 6's reconciliation work"; this brief scoped only reconciliation's own vocabulary. Not built; the pointer corrected. | **Confirmed — same class, same ruling.** A control-critical enum is not extended in passing, and the term needs a name chosen under L-7. **Ruled to TASK-010.** The disclosed C-05 exception stands, disclosed, until then. |
+| O-3 | "Below the threshold a single actor may post" has no representation in `approval_threshold` (`approvals_required >= 1`), and the two available readings of `nil` are opposite. The Worker defined the rule and put it in ADR-0023. | **Ratified as written.** The lowest configured band is where approval starts; below it, zero; at it, inclusive; **no band configured in the currency — no adjustment can be proposed at all.** The last clause is the one that matters: unconfigured must never read as unsupervised. Fail-closed on the empty case, boundary tested at the boundary — this is the shape the register teaches, chosen unprompted. |
+| O-4 | The brief's trap said "C-05 is unqualified on `main`"; enumerating the copies (L-16), the glyph is unqualified and the statement has carried one disclosed exception since TASK-004's remediation, consistently in four places. | **Confirmed — the Worker's testable reading is the correct one** (glyph stays ✅, no second exception introduced; both hold). The brief's sentence was an L-16 instance inside the very trap section warning about C-05 — Master Control asserted a claim without enumerating its copies, in a brief written after L-16 was recorded. Closing the exception itself is O-2's work: TASK-010. |
+
+**Observations N-1…N-6: all accepted as recorded.** N-5 (no way to record a
+refused adjustment, or why) is ruled the third item of TASK-010 — it is the
+same evidence C-05 keeps for a rejected payment, and its absence is a gap with
+a shelf life. N-3 (the `row->break` nil-guard defect, caught by the Worker's
+own tenant-isolation test) is noted as evidence the test discipline works.

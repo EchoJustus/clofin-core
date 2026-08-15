@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | **Increment** | 5v.3 (visual layer, follow-up) — spans both repositories, small |
-| **Status** | `IN PROGRESS` — dispatched 2026-08-14 |
+| **Status** | `CLOSED` — merged 2026-08-15: `clofin-core` PR #17 (`ddf39c1`), `clofin-trace` PR #2 (`bc0017c`). No objections; negative controls independently re-run by Master Control before merge. **Note:** the task was accidentally dispatched twice; the second session's duplicate PR (`clofin-trace` #3, branch `…9grdy8`, no REQ, no companion PR) was closed unmerged with the reason commented on it |
 | **Depends on** | TASK-007 ✅ closed; the walkthrough live at `https://echojustus.github.io/clofin-trace/` |
 | **Base branch** | `clofin-core` `main` at `501556e` or later; `clofin-trace` `main` at `71cb13f` or later |
 | **Requirements** | Driver D5; the seam observation from TASK-007's ingestion (below) |
