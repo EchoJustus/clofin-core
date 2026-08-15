@@ -1,6 +1,6 @@
 # CloFin — Roadmap
 
-**Status:** living document · **Last reviewed:** 2026-08-15
+**Status:** living document · **Last reviewed:** 2026-08-15 (evening)
 
 Increments are sequenced by **product relevance and regulatory risk**, not by
 implementation convenience. Each increment leaves `main` runnable, migrated,
@@ -26,7 +26,7 @@ and this table is stale.
 | 5v.2 | Visual layer — `clofin-trace` replay walkthrough | [TASK-007](briefs/007-TASK-clofin-trace.md) | ✅ `CLOSED` — harness merged in PR #14 (`261c778`); walkthrough merged in `clofin-trace` PR #1 (`71cb13f`); **live at <https://echojustus.github.io/clofin-trace/>** | green, both repositories |
 | 5v.3 | Visual layer — trace hardening and cross-links | [TASK-009](briefs/009-TASK-trace-hardening-and-cross-links.md) | ✅ `CLOSED` — merged in PR #17 (`ddf39c1`) + `clofin-trace` PR #2 (`bc0017c`) | green, both repositories |
 | 6 | Reconciliation | [TASK-008](briefs/008-TASK-reconciliation.md) | ✅ `CLOSED` — merged in PR #16 (`a41e69f`); O-1/O-2 routed to TASK-010 | green, 808 tests / 5864 assertions |
-| 6c | Reconciliation completion (the three disclosed gaps) | [TASK-010](briefs/010-TASK-reconciliation-completion.md) | 📋 `READY` | — |
+| 6c | Reconciliation completion (the three disclosed gaps) | [TASK-010](briefs/010-TASK-reconciliation-completion.md) | ✅ `CLOSED` — merged in PR #19 (`37d2d02`); C-05's disclosed exception closed on every copy | green, 841 tests / 6324 assertions |
 | 7–9 | Financial crime onwards | not yet briefed | 💭 later | — |
 
 **Controls now enforced on `main`.** As of 2026-08-04 the increment-3/4 stack is
@@ -237,7 +237,7 @@ to rediscover them:
 | Event bus / service extraction | No driver. See [ADR-0007](ADR/0007-modular-monolith-over-microservices.md). |
 | Authentication provider integration | The permission model is the interesting part; OIDC wiring is not. |
 | Multi-region and DR | Meaningless without real institutional connectivity. |
-| Linked-retry provenance for returned payments | FEEDBACK-M2 F-007 ruling: a returned instruction is terminal and a retry is a **new** instruction — already possible via capture today. The linkage (`retries_id`-style provenance and the exception workflow around it) belongs to increment 6 (reconciliation), where return-exception handling natively lives. |
+| Linked-retry provenance for returned payments | FEEDBACK-M2 F-007 ruling: a returned instruction is terminal and a retry is a **new** instruction — already possible via capture today. The linkage was **delivered by TASK-010** (PR #19, `37d2d02`): `retries_id` with a database immutability trigger, both sides rendered, and reconciliation breaks naming the retry (ADR-0024). *(This row previously routed it to increment 6; TASK-008's brief scoped it in neither direction — 008-REQ O-1 — and the ruling routed it to TASK-010.)* |
 | Audit logging of *refused* control attempts | FEEDBACK-M1 surfaced that a refused submission/approval leaves no audit event (audit writes sit inside the successful effect). C-05 scopes the trail to state *changes*, so this is new scope — a distinct security-event control with its own volume and retention, briefed separately when prioritised. Distinct from TASK-005, which covers *successful* writes that currently go unaudited. |
 
 ## How to pick up the next task
