@@ -224,7 +224,7 @@ to rediscover them:
 - Rule-based fraud scoring with explainable contributing reasons
 - Case management and disposition with retained rationale
 
-## Increment 8 — Operator interface 💭 *(relocating to `clofin-cockpit` — D1 ruling 2026-08-15, ADR-0026; phase 8.1 in flight as [TASK-011](briefs/011-TASK-cockpit-initialization.md))*
+## Increment 8 — Operator interface 🔨 *(relocated to `clofin-cockpit` — D1 ruling 2026-08-15, ADR-0026; phases 8.1–8.4 delivered as [TASK-011](briefs/011-TASK-cockpit-initialization.md) through [TASK-014](briefs/014-TASK-cockpit-scenario-runner.md) — see the global-state table; the authenticated phase is a later decision. This heading said "phase 8.1 in flight" until 2026-09-05, three closed phases after it stopped being true — an L-16 restatement found at the `ref-2` audit's commissioning.)*
 
 - Operator console: instruction capture, approval queue, break workbench *(toolchain is `clofin-cockpit`'s own decision — its ADR-0001 chose TypeScript with no framework, rejecting React; this line previously predicted "React/TypeScript" and is corrected per 011-REQ)*
 - Chosen deliberately late: the API contract and controls are the substance,
