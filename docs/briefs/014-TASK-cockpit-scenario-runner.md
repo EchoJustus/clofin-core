@@ -152,3 +152,8 @@ literal `PARTIAL — charter items 1-4 of 8` line and the balance table) is
 rendered HTML the API does not serve; `summary.test.ts` pins the rendering
 against the recorded release body, and the live read succeeded, so the residual
 is presentational, not evidentiary.
+
+*2026-09-05 — the freeze this brief states as "until the 2026-09-01 audit" held
+through commissioning: `git diff f174116 c97a4f2 -- . ':!docs'` is empty, and
+the audit was commissioned for execution on 2026-09-05 with the RC at
+`c97a4f2`. See `docs/audits/README.md` → decision of 2026-09-05.*

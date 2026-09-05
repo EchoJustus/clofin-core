@@ -12,6 +12,47 @@
 Append-only. A later change appends a new dated block; an existing block is
 never edited — the record of what was decided, and when, is the point.
 
+**2026-09-05 — The `ref-2` release audit is commissioned for execution; pins
+refreshed; scope full whole-repo.** The audit scheduled for 2026-09-01 by the
+decision of 2026-08-15 (second) begins now — four days late, the delay being
+the operator's external-model allocation, not the subject. Its 2026-08-15 pins
+are superseded: `main` moved past `812f732` by PRs #21–#28 (the cockpit
+increments' `clofin-core` halves — ADR-0026 in PR #21; the CORS allowlist and
+`sourceCommit` in PR #23 at `f174116`; two REQ-only PRs; four documentation
+syncs). The code freeze declared for TASK-013 and TASK-014 held:
+`git diff f174116 c97a4f2 -- . ':!docs'` is empty. **The RC is `main` at
+`c97a4f2`** (`c97a4f25a4cb2d9210613939cb55c3dafcddf32f`, the merge of PR #28);
+the control-plane pin is the `meta` commit carrying this block, whose literal
+value session A records from `git rev-parse origin/meta`, and `meta` is not
+written while the audit runs. **Scope is full whole-repo, not delta-scoped**,
+because the 2026-08-05 rule's trigger fires — TASK-008 changed enforcement
+code in the authorisation domain and added migration `0012`; TASK-010 added
+`0013` — and because items 5–7 have never been performed at all. The delta
+orders the work inside items 3–4 (touched sets and documents first) so an
+interrupted session leaves the newest code covered. Three sessions, with one
+deviation from the charter's default split recorded here: **A** items 1–2;
+**B** items 5–7, the mandatory-first scope carried from `ref-1`, *before*
+anything `ref-1` covered; **C** items 3–4 delta-first, then 8 and the report
+(a session D performs 8 and the report from the workpapers if C's context ends
+first). Inherited: both deferral notes (2026-08-14, 2026-08-15) and their five
+increments; the three pre-declared inputs (012-REQ N-1, 013-REQ O-1, 013-REQ
+O-2); and a **fourth, found at commissioning** — the ROADMAP's increment-8
+heading at the RC says "phase 8.1 in flight" while its global-state table shows
+8.1–8.4 `CLOSED`, an L-16 restatement the guard does not compare, repaired on
+`meta` today and riding the next sync; it remains visible at the RC and the
+auditor is told so. The filled prompts are recorded verbatim in
+[`REL-ref-2-COMMISSION.md`](REL-ref-2-COMMISSION.md); the register row below
+is *(pending)*. *Copies of the superseded date, enumerated (L-16):* this
+section's 2026-08-15 (second) block — append-only, and it stands as the record
+of the schedule; briefs 012, 013 and 014 name "the 2026-09-01 Sol audit" in
+their status rows, scope text and changelogs — each gains a dated changelog
+line pointing here, the texts themselves untouched; ADR-0027 on `main` says
+"scheduled for 2026-09-01", which was true when written and sits inside the
+frozen audit subject, so it is not edited; 012-REQ is the Worker's report and
+is never edited. **Ferry:** deliverable and workpapers through the bridge
+(`clofin-core/audit/inbox/`, `…/workpapers/ref-2/`), transcripts under
+`…/chats/`; Master Control reads the inbox directly.
+
 **2026-08-14 — Milestone-3 batch audit deferred, by operator decision.**
 TASK-006 (5v.1) and TASK-007 (5v.2) are merged and `CLOSED` with their REQ
 objections ruled, but **neither has received an independent audit**, and their
@@ -418,6 +459,7 @@ is the most valuable thing this gate can produce.
 | [`FEEDBACK-M1-foundation`](FEEDBACK-M1-foundation.md) — **ingested** | Milestone 1 batch — 001-REQ, 002-REQ, 003-REQ, plus the never-audited increment-1 substrate | commissioned 2026-08-03 · received & ingested 2026-08-03 | **2 B / 4 S / 0 C** | Executed via the **CodeSpace path** (external agent, read-only clone; transcript in the bridge at `audit/chats/20260803-01-first-audit.json`). Both blockers **independently verified by Master Control before the file arrived**: F-001 in source, F-002 reproduced empirically (with the `BEFORE TRUNCATE` guard verified effective). **Triage — all six actioned, none disputed, none deferred:** F-001 → creator-only submit (satisfies C-01's "creates *or submits*" by collapsing the two; stated explicitly in the OpenAPI contract per the auditor's caveat); F-002 → `BEFORE TRUNCATE` statement triggers on all four append-only tables **plus** the test-cleanup consequence the auditor caught — `test_db.clj` deliberately truncates past the triggers, so cleanup switches to an explicit, commented disable/re-enable bypass — and the runtime role split recorded as named debt; F-003 → deferred entry-level constraint (line cardinality + balance at commit); F-004 → `FOR UPDATE` on referenced accounts in stable order + latch-based race test; F-005 → `approval.recorded` action, `payment.approved` only on the completing transition; F-006 → `approval.invalidated` events per approval, same transaction, evidence pack extended. All six land as **one consolidated remediation on PR #5's branch** by the TASK-003 Worker (findings against TASK-001 ride the stack; briefs 001/002 stay `IMPLEMENTED` — their findings are should-fix). Lessons L-5…L-8. **Remediation log below.** | GPT-5.6 Terra · CodeSpace path · 2026-08-03 · effort not recorded |
 | [`FEEDBACK-M2-settlement-and-audit-coverage`](FEEDBACK-M2-settlement-and-audit-coverage.md) — **ingested** | Milestone 2 batch — 004-REQ, 005-REQ, incl. the TASK-005 tail and the L-9 record | commissioned 2026-08-04 · received & ingested 2026-08-04 | **1 B / 4 S / 0 C** (+1 candidate refuted) | Three-session strategy (evidence → analysis → verification) per Master Control's design. All five findings **independently verified in source by Master Control**, then actioned; none disputed, none deferred; the refuted concurrency candidate (C-06) is recorded as positive evidence, not actioned. **F-007 (blocking):** brief AC-7 promised returned-instruction re-batching the lifecycle forbids — an L-4 recurrence on Master Control's side plus an L-10 test gap; ruled: *returned is terminal, retry is a new instruction*, index tightened by migration `0010`, linked-retry provenance deferred to increment 6. F-008/F-009 (receipt vs disposition; replay identity) and F-010 (L-5 matrix gap) and F-011 (fail-closed tx precondition) all actioned in one remediation batch. **Verdicts:** TASK-004 REMEDIATION-REQUIRED → brief reopened `IN PROGRESS`; TASK-005 APPROVED-WITH-CONDITIONS (F-011) → stays `CLOSED` with the condition recorded; M1's six findings re-verified closed. **`ref-1` is gated on this remediation.** Lessons L-10…L-13 adopted. | GPT-5.6 Terra · CodeSpace path · 2026-08-04 · effort not recorded |
 | [`FEEDBACK-REL-ref-1`](FEEDBACK-REL-ref-1.md) — **ingested (PARTIAL)** | Release audit of the `ref-1` candidate, `main` `5d21334` — whole-repo scope commissioned | commissioned 2026-08-04 · received & ingested 2026-08-05 | **2 B / 17 S / 0 C** (severities assigned by Master Control; the audit stopped before its verdict phase) | **Partial: charter items 1–4 of 8 performed; items 5–7 not performed; item 8 partial.** Halted by external-model quota exhaustion; closed under the resource-interruption fallback recorded above. Uncovered items carry forward as mandatory-first scope for `ref-2`. **Both blocking findings independently confirmed in source by Master Control** — A-006 (`GET /organisations/:id` neither authenticates nor authorises; the namespace does not require `clofin.api.principal` at all, falsifying C-08's "on every operation") and A-012 (`CreatePaymentInstructionRequest` *requires* `createdBy` while the handler *refuses* it — no conformant request can succeed). **Disposition: all 19 actioned in one remediation batch**, with four mechanisms deferred to a named target (A-007 log sanitiser, A-008 live-schema catalog hashing, A-010 transitive SBOM, A-011 deep contract validation → the operational-hardening brief); every one of those four has its **claim narrowed now**, so no document keeps an unsupported statement. Dominant class: a control statement quantified over a set its enforcement does not cover — **lesson L-14**. **Remediated and merged in PR #9 (`5c7b4ba`, migration `0011`)**, verified by Master Control: A-006's handler now authenticates and authorises (403 for a foreign tenant, deliberately not 404 — scoping the lookup by the principal would make the boundary an existence oracle); A-012's contract is satisfiable; A-014's guards now read `pg_constraint` and compare **both directions** across sixteen vocabularies, which surfaced two vocabularies with no owner in code at all. Both Worker objections ratified — the `:organisation/read` grant to all five roles, and **publishing caller-facing and stored disposition enums separately rather than widening a stored enum to a value its column can never hold**, which corrected Master Control's own instruction under L-14. **`ref-1` tagged on this commit.** | GPT-5.6 Sol · CodeSpace path · 2026-08-05 · effort not recorded |
+| *(pending)* | Release audit of the `ref-2` candidate, `main` `c97a4f2` — **full whole-repo** scope, delta-ordered; commission recorded in [`REL-ref-2-COMMISSION.md`](REL-ref-2-COMMISSION.md) | commissioned 2026-09-05 (scheduled 2026-09-01; pins refreshed at commissioning) | — | Three sessions on the CodeSpace path: **A** items 1–2 · **B** items 5–7, the mandatory-first scope carried from `ref-1` · **C** items 3–4 delta-first, then 8 and the report. Inherits both deferral notes and the four pre-declared inputs (012-REQ N-1, 013-REQ O-1, 013-REQ O-2, the ROADMAP increment-8 restatement). Deliverable `FEEDBACK-REL-ref-2.md` via the bridge inbox; findings numbered `2A-` / `2B-` / `2C-nnn`. This row moves to *ingested* with the coverage actually achieved, never before. | GPT-5.6 Sol · CodeSpace path · effort echoed by each session into its provenance header |
 
 **Milestone 2 batch audit — commissioned 2026-08-04.** Covers TASK-004 and
 TASK-005 (004-REQ, 005-REQ), including the TASK-005 tail and the L-9 process

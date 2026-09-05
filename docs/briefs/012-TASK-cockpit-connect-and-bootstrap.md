@@ -162,3 +162,8 @@ else"); the audit confirms it independently and it rides the remediation
 batch. **The Worker's post-PR self-review corrections (§7 of the REQ) are
 accepted as filed** — an L-9 statement corrected in the open beats a fix
 folded in silently, and that is the behaviour the lesson exists to produce.
+
+*2026-09-05 — the Sol audit this brief names as "2026-09-01" was commissioned
+for execution on 2026-09-05 with refreshed pins (RC `c97a4f2`); N-1 is carried
+as pre-declared input unchanged. See `docs/audits/README.md` → decision of
+2026-09-05 and `docs/audits/REL-ref-2-COMMISSION.md`.*
