@@ -138,3 +138,9 @@ and replaced it with a narrower rule honest about what a text search can
 establish (L-6, caught by running the control); and the two in-the-open
 corrections (§8), including the frame's own drifted sentence found in the
 exact screenshot the frame exists to make honest.
+
+*2026-09-05 — the Sol audit this brief names as "2026-09-01" was commissioned
+for execution on 2026-09-05 with refreshed pins (RC `c97a4f2`); O-1 and O-2
+are carried as pre-declared inputs unchanged, joined by a fourth found at
+commissioning. See `docs/audits/README.md` → decision of 2026-09-05 and
+`docs/audits/REL-ref-2-COMMISSION.md`.*
