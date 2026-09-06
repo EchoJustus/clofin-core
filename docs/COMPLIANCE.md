@@ -870,7 +870,15 @@ resolution is a new approved entry through
 | `clofin.audit.repository/assert-unit-of-work!` in `clofin.recon.service` | Every reconciliation write and its audit event commit together or not at all |
 
 **Evidence.** `GET /reconciliation-statements/{id}` returns every line, every
-match with the rule that produced it, and every break the statement opened.
+match with the rule that produced it, and the breaks the statement opened —
+**bounded by the row cap, and the response says when the bound was reached**:
+`breaksLimit` and `breaksTruncated` travel with the list, as
+`adjustmentsLimit` and `adjustmentsTruncated` do on a break. The sentence used
+to say "every break", which was a universal quantifier over a capped read: a
+statement with 504 breaks returned 501 of them and nothing said so, while
+`GET /reconciliation-status` counted all 504 (release-audit finding
+**2C-001**, standing lesson **L-14**). Counting, not the list, is what answers
+"how many"; pagination for these nested collections is named debt in §4.
 `GET /reconciliation-breaks` lists breaks oldest first with their derived ages.
 `GET /reconciliation-status` reports matched, unmatched and breaks by state for
 an account and period, counted over the rows rather than over a page.
@@ -916,3 +924,4 @@ Being explicit about gaps is part of the control design.
 | Live-schema catalogue hashing | **Not built. Target: the operational-hardening brief.** C-10 covers the migration *history*: the runner hashes indexed SQL files, so a direct `ALTER TABLE` or a dropped trigger leaves every checksum and the reported `schemaVersion` unchanged. The mechanism is a canonical digest over the catalogue — tables, columns, constraints, triggers, functions, indexes, privileges — recorded per environment and comparable between them. Audit finding **A-008**. Partially mitigated today by `clofin.db.vocabulary-test`, which compares every closed vocabulary with the live catalogue on each integration run and would fail if a constraint were widened by hand |
 | Transitive dependency SBOM | **Not built. Target: the operational-hardening brief.** C-12 covers the seven **direct** dependencies in `deps.edn`; nothing here inventories the resolved graph, and ADR-0004's claim to "a short, auditable SBOM" describes a document the repository does not contain. The mechanism is a generated SBOM (CycloneDX or SPDX) produced in CI from the resolved classpath, reviewed on change, with an upstream security process named per component. Audit finding **A-010** |
 | Deep OpenAPI/handler contract validation | **Not built. Target: the operational-hardening brief.** `clofin.contract-test` proves route identity, published-vocabulary equality and the declared actor boundary. It does not invoke a handler, so request bodies, required members, response schemas and media types are maintained by review — which is how a `CreatePaymentInstructionRequest` that *required* a member the handler *refuses* passed green (findings **A-011** and **A-012**). The mechanism is schema-validating every fixture request and recorded response against the operation it names, so an unsatisfiable schema fails the build rather than an audit |
+| Pagination for nested reconciliation collections | **Not built, and the bound is now visible.** A statement's breaks and a break's adjustments are capped at 500 with `breaksTruncated` / `adjustmentsTruncated` on the response (C-13, finding **2C-001**); there is no cursor, so the rows past the cap are reachable only by counting them through `GET /reconciliation-status`. A cursor contract has been deferred since increment 2 for the reason it is still deferred — designed without a consumer it would be guesswork — and the finding was that the omission was *silent*, which it no longer is |

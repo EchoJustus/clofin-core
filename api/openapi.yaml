@@ -2068,6 +2068,43 @@ paths:
               schema:
                 $ref: "#/components/schemas/Problem"
 
+  /reconciliation-adjustments/{id}:
+    get:
+      tags: [Reconciliation]
+      operationId: getReconciliationAdjustment
+      summary: Retrieve a reconciliation adjustment
+      description: |
+        One adjustment — what it proposes, how many approvals it needs, and what
+        was decided about it. The same representation the break embeds, because
+        a caller that follows a `Location` and a caller that reads the break
+        must be told the same thing.
+
+        This is where the `Location` of a proposal and of a decision points.
+        Requires `reconciliation/read`, which `approver` holds, for the reason
+        `getReconciliationBreak` gives.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: "#/components/parameters/ActorId"
+        - $ref: "#/components/parameters/OptionalOrganisationId"
+      responses:
+        "200":
+          description: The adjustment.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReconciliationAdjustment"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
   /reconciliation-adjustments/{id}/approvals:
     post:
       tags: [Reconciliation]
@@ -3950,12 +3987,26 @@ components:
       allOf:
         - $ref: "#/components/schemas/ReconciliationBreak"
         - type: object
-          required: [adjustments]
+          required: [adjustments, adjustmentsLimit, adjustmentsTruncated]
           properties:
             adjustments:
               type: array
+              description: |
+                Every adjustment raised against this break, oldest first,
+                **bounded by `adjustmentsLimit`**. Read `adjustmentsTruncated`
+                before treating the list as the whole set.
               items:
                 $ref: "#/components/schemas/ReconciliationAdjustment"
+            adjustmentsLimit:
+              type: integer
+              examples: [500]
+              description: The largest number of adjustments this response can carry.
+            adjustmentsTruncated:
+              type: boolean
+              description: |
+                Stated on every response, not only when true: a consumer should
+                not have to infer from the absence of a field that nothing was
+                left out.
 
     ReconciliationBreakList:
       type: object
@@ -3989,7 +4040,8 @@ components:
         matches and the breaks it opened.
       required: [id, organisationId, scheme, currency, statementReference,
                  format, formatVersion, periodStart, periodEnd, disposition,
-                 receivedAt, receivedBy, simulated, lines, matches, breaks]
+                 receivedAt, receivedBy, simulated, lines, matches, breaks,
+                 breaksLimit, breaksTruncated]
       properties:
         id: { type: string, format: uuid }
         organisationId: { type: string, format: uuid }
@@ -4039,8 +4091,22 @@ components:
             $ref: "#/components/schemas/ReconciliationMatch"
         breaks:
           type: array
+          description: |
+            The breaks this statement opened, oldest first, **bounded by
+            `breaksLimit`**. Read `breaksTruncated` before treating the list as
+            the whole set; `GET /reconciliation-status` counts over the rows
+            rather than over this list.
           items:
             $ref: "#/components/schemas/ReconciliationBreak"
+        breaksLimit:
+          type: integer
+          examples: [500]
+          description: The largest number of breaks this response can carry.
+        breaksTruncated:
+          type: boolean
+          description: |
+            Stated on every response, not only when true: a consumer should not
+            have to infer from the absence of a field that nothing was left out.
 
     AssignBreakRequest:
       type: object

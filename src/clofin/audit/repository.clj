@@ -218,25 +218,36 @@
     {:events     (mapv row->event (take row-cap rows))
      :truncated? (> (count rows) row-cap)}))
 
-(defn events-for-payment
-  "Every audit event about an instruction **and about its approvals**, oldest
+(defn events-for-subject-and-its-approvals
+  "Every audit event about a subject **and about the approvals of it**, oldest
   first.
 
   An approval's events — `approval.recorded`, `approval.invalidated`,
   `approval.withdrawn` — carry the *approval* as their subject, because that is
   what they are about: a decision came into existence, or stopped standing.
-  Keying them on the payment would be the mislabelling audit finding F-005
-  corrected in the other direction.
+  Keying them on the thing decided would be the mislabelling audit finding
+  F-005 corrected in the other direction.
 
-  But an evidence pack for a payment has to show them, or it cannot answer
-  \"who approved this, and what happened to their approval?\" — which is most
-  of what an approval trail is for. So the relation is made here, in the query,
-  rather than by flattening it into the subject column: an approval belongs to
-  exactly one instruction, and `approval.instruction_id` already says which.
-  Audit finding **F-006** required this extension.
+  But an evidence pack has to show them, or it cannot answer \"who approved
+  this, and what happened to their approval?\" — which is most of what an
+  approval trail is for. So the relation is made here, in the query, rather
+  than by flattening it into the subject column. Audit finding **F-006**
+  required the extension for a payment.
+
+  **Both** approval relationships are traversed, and that is release-audit
+  finding **2C-012**. `approval` names exactly one subject —
+  `approval_names_one_subject` in migration `0012` — and since that migration
+  the subject may be a `reconciliation_adjustment` as well as a
+  `payment_instruction`. The join read `instruction_id` only, so an
+  investigator starting from an adjustment saw it proposed and rejected and
+  never saw the decision that rejected it, while the same investigator starting
+  from a payment saw everything. The approval was never lost; it was
+  unreachable by the route the pack offers. Standing lesson **L-21**: the
+  audited set is every subject relationship, not the first parent type that
+  implemented one.
 
   Harmless when `subject-id` is itself an approval: no approval names an
-  approval as its instruction, so the sub-select adds nothing and the pack is
+  approval as either subject, so the sub-select adds nothing and the pack is
   the subject's own events."
   [source organisation-id subject-id]
   (mapv row->event
@@ -244,9 +255,11 @@
                                "where organisation_id = ?
                                   and (subject_id = ?
                                        or subject_id in (select id from approval
-                                                          where instruction_id = ?))"
+                                                          where instruction_id = ?
+                                                             or adjustment_id = ?))"
                                (ordered "asc"))
-                          organisation-id subject-id subject-id (inc row-cap)])))
+                          organisation-id subject-id subject-id subject-id
+                          (inc row-cap)])))
 
 (defn evidence-pack
   "Every state change of one subject, in order, with its actor (PR-074, AC-12).
@@ -259,7 +272,7 @@
   The pack states its own boundaries: the period it spans and whether it hit
   the row cap. An auditor should never have to infer completeness."
   [source organisation-id subject-id]
-  (let [rows (events-for-payment source organisation-id subject-id)
+  (let [rows (events-for-subject-and-its-approvals source organisation-id subject-id)
         events (vec (take row-cap rows))]
     (when (seq events)
       {:subject-id  subject-id

@@ -23,7 +23,9 @@
   is the behaviour a caller meets rather than a service function called
   directly."
   (:require [clofin.db.core :as db]
+            [clofin.money :as money]
             [clofin.recon.repository :as recon]
+            [clofin.recon.service :as service]
             [clofin.system :as system]
             [clofin.test-db :as tdb]
             [clojure.data.json :as json]
@@ -408,3 +410,185 @@
       (is (= 409 (:status serial)) (pr-str serial))
       (is (= "replay-key-conflict" (:reason serial)) (pr-str serial))
       (is (false? (boolean (:replayed serial))) (pr-str serial)))))
+
+;; ---------------------------------------------------------------------------
+;; AC-8 (2B-004) — the locks, proved with two connections
+;;
+;; `clofin.recon.repository`'s docstring states the lock order and
+;; `clofin.recon.service` reads every gated row `for update`, and until now
+;; nothing failed if either stopped being true. Ordinary functional tests stay
+;; green after a lock is removed, because nothing in them ever loses a race —
+;; which is the whole of the finding: the recorded design was not the
+;; adversarial proof standing lesson **L-8** asks for.
+;;
+;; Both tests below force the interleaving rather than hoping for it. The
+;; window between a validating read and the write it gates is microseconds
+;; wide, so two threads simply started at once reproduce nothing; the first
+;; transaction therefore holds its lock open across a sleep and the second runs
+;; into it. This is the harness `clofin.ledger.repository-test` built for
+;; F-004, reused rather than reinvented.
+;; ---------------------------------------------------------------------------
+
+(defn- a-break!
+  "One break to contend over, opened by a real ingestion."
+  [{:keys [pool org controller] :as f}]
+  (settle! f)
+  (let [{:keys [from to]} (period)
+        document (:json (call pool :get "/settlement-statements"
+                              :actor controller
+                              :query (str "organisationId=" org "&scheme=SIM-RTGS&currency=SGD"
+                                          "&from=" from "&to=" to
+                                          "&perturbation=unknown-line")))
+        response ((ingest-fn f document))]
+    (is (= 200 (:status response)) (str (:body response)))
+    (let [brk (first (get-in response [:json "breaks"]))]
+      (is (some? brk) "the perturbed statement must open a break to contend over")
+      brk)))
+
+(defn- break-state
+  [pool id]
+  (:state (db/query-one pool ["select state from reconciliation_break where id = ?"
+                              (uuid id)])))
+
+(defn- events-about
+  [pool org subject-id]
+  (mapv :action (db/query pool ["select action from audit_event
+                                  where organisation_id = ? and subject_id = ?
+                                  order by occurred_at, id"
+                                org (uuid subject-id)])))
+
+(deftest ac-8-an-assignment-serialises-behind-an-in-flight-resolution
+  (testing "the resolving transaction holds the break's row lock; the
+            assignment must wait for it to commit and then be refused against
+            the state it actually finds, not the one it read on the way in"
+    (let [f (setup)
+          brk (a-break! f)
+          pool (:pool f)
+          break-id (get brk "id")
+          locked (CountDownLatch. 1)
+          resolved-at (atom nil)
+          assigned-at (atom nil)]
+
+      ;; The resolving transaction: take the lock, hold it while the assignment
+      ;; arrives, then post an adjustment below the organisation's lowest band
+      ;; — which resolves the break — and commit.
+      (.start (Thread.
+               (fn []
+                 (db/with-transaction [tx pool]
+                   (recon/lock-break! tx (:org f) (uuid break-id))
+                   (.countDown locked)
+                   (Thread/sleep 1500)
+                   (service/propose-adjustment!
+                    tx {:organisation-id (:org f)
+                        :break-id        (uuid break-id)
+                        :adjustment-id   (random-uuid)
+                        :amount          (money/of "SGD" 99999)
+                        :direction       :credit
+                        :narrative       "Agreeing with the scheme"
+                        :actor           {:id (:controller f)}
+                        :correlation-id  (str (random-uuid))
+                        :entry-id        (random-uuid)
+                        :occurred-at     (java.time.Instant/now)}))
+                 (reset! resolved-at (System/nanoTime)))))
+
+      (is (.await locked 10 TimeUnit/SECONDS)
+          "the resolving transaction must hold the lock before the assignment starts")
+
+      (let [assignment (call pool :post (str "/reconciliation-breaks/" break-id "/assignment")
+                             :actor (:controller f)
+                             :body {"organisationId" (str (:org f))
+                                    "assigneeId" (str (:maker f))})]
+        (reset! assigned-at (System/nanoTime))
+
+        (is (some? @resolved-at)
+            "the resolution must have committed before the assignment answered")
+        (is (< @resolved-at @assigned-at)
+            "the assignment must have blocked on the lock rather than reading
+             around it: an answer that arrived first read a state that was
+             about to change underneath it")
+
+        (is (= 409 (:status assignment))
+            (str "exactly one transition wins, and it is the one that committed "
+                 "first — " (:body assignment)))
+        (is (= "Cannot assign a reconciliation break that is resolved"
+               (get-in assignment [:json "detail"]))
+            (str "refused with the reason the lifecycle table records, not a "
+                 "generic conflict — " (:body assignment)))
+        (is (= "resolved" (get-in assignment [:json "errors" "break-state"]))
+            (str "and it names the state it actually found — " (:body assignment))))
+
+      (is (= "resolved" (break-state pool break-id))
+          "and the state the winner wrote is the state that stands")
+
+      (testing "one audit event for the transition that happened, and none for
+                the one that did not"
+        (let [actions (events-about pool (:org f) break-id)]
+          (is (= 1 (count (filter #{"reconciliation-break.resolved"} actions)))
+              (str "exactly one resolution event — " (pr-str actions)))
+          (is (empty? (filter #{"reconciliation-break.assigned"} actions))
+              (str "the refused assignment recorded nothing — " (pr-str actions))))))))
+
+(deftest ac-8-two-decisions-on-one-adjustment-serialise-and-only-one-lands
+  (testing "both approvers see a `proposed` adjustment, both proceed, and the
+            second is refused against what it finds under its own lock — at
+            most one journal entry, whatever the scheduling"
+    (let [f (setup)
+          brk (a-break! f)
+          pool (:pool f)
+          ;; At or above the organisation's lowest band, so the adjustment is
+          ;; proposed and waits for an approver other than its proposer.
+          proposal (call pool :post (str "/reconciliation-breaks/" (get brk "id") "/adjustments")
+                         :actor (:controller f)
+                         :body {"organisationId" (str (:org f))
+                                "amount" {"currency" "SGD" "minorUnits" 100000}
+                                "direction" "credit"
+                                "narrative" "Agreeing with the scheme"})
+          _ (is (= 201 (:status proposal)) (str (:body proposal)))
+          adjustment-id (get-in proposal [:json "id"])
+          _ (is (= "proposed" (get-in proposal [:json "status"])))
+          entries-before (:count (db/query-one pool ["select count(*) as count from journal_entry"]))
+          decide (fn [actor]
+                   (fn [] (call pool :post
+                                (str "/reconciliation-adjustments/" adjustment-id "/approvals")
+                                :actor actor
+                                :body {"organisationId" (str (:org f))})))
+          ;; The same gate the receipt-collision matrix uses, on the unlocked
+          ;; read `decide-adjustment!` opens with: both transactions address a
+          ;; `proposed` adjustment before either takes the break's lock.
+          original recon/find-adjustment
+          both (CountDownLatch. 2)
+          seen (atom #{})
+          [a b] (with-redefs [recon/find-adjustment
+                              (fn [source organisation-id id]
+                                (let [result (original source organisation-id id)
+                                      thread (Thread/currentThread)
+                                      [before _] (swap-vals! seen conj thread)]
+                                  (when-not (contains? before thread)
+                                    (.countDown both)
+                                    (.await both 60 TimeUnit/SECONDS))
+                                  result))]
+                  (both-at-once (decide (:checker f)) (decide (:checker-2 f))))
+          answers (map outcome [a b])]
+
+      (is (= #{201 409} (set (map :status answers)))
+          (str "one decision lands and the other is refused against the state it "
+               "finds under its own lock — " (pr-str answers)))
+
+      (is (= "posted" (:status (db/query-one
+                                pool ["select status from reconciliation_adjustment where id = ?"
+                                      (uuid adjustment-id)])))
+          "the winner posted it")
+
+      (is (= 1 (- (:count (db/query-one pool ["select count(*) as count from journal_entry"]))
+                  entries-before))
+          "at most one journal entry: two postings of one adjustment would be
+           the same money moved twice")
+
+      (is (= 1 (:count (db/query-one
+                        pool ["select count(*) as count from approval
+                                where adjustment_id = ? and invalidated_at is null"
+                              (uuid adjustment-id)])))
+          "and one live decision, because the loser's never happened")
+
+      (is (= "resolved" (break-state pool (get brk "id")))
+          "the break the adjustment addressed is resolved exactly once"))))

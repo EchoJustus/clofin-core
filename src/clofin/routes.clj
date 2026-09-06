@@ -226,6 +226,11 @@
     :handler (reconciliation/propose-adjustment pool)
     :summary "Propose an adjustment that resolves a reconciliation break"}
 
+   {:method :get :path "/reconciliation-adjustments/:id"
+    :operation-id "getReconciliationAdjustment"
+    :handler (reconciliation/show-adjustment pool)
+    :summary "Retrieve a reconciliation adjustment"}
+
    {:method :post :path "/reconciliation-adjustments/:id/approvals"
     :operation-id "approveReconciliationAdjustment"
     :handler (reconciliation/decide-adjustment pool)

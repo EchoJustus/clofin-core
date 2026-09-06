@@ -556,12 +556,23 @@
       (err/not-found! "No such reconciliation break in this organisation" {:id (str id)})))
 
 (defn breaks-for-statement
-  "Every break a statement opened, oldest first."
+  "The breaks a statement opened, oldest first, capped at `row-cap`.
+
+  Returns `{:breaks […] :truncated? bool}`, the shape `list-breaks` already
+  returns and for the same reason (ADR-0011). It used to return a vector of
+  `(inc row-cap)` rows: the sentinel row that tells the query it hit the cap was
+  fetched and then *returned*, so a statement with 504 breaks answered with 501
+  of them and no indication that three were missing, while the status endpoint
+  counted all 504. A nested evidence projection that silently omits durable
+  disagreements while claiming completeness is release-audit finding
+  **2C-001**; standing lesson **L-17** is that a guard has to hold on the nested
+  read as well as on the top-level one."
   [source statement-id]
-  (mapv row->break
-        (db/query source [(str break-columns
-                               "where statement_id = ? order by opened_at, id limit ?")
-                          statement-id (inc row-cap)])))
+  (let [rows (db/query source [(str break-columns
+                                    "where statement_id = ? order by opened_at, id limit ?")
+                               statement-id (inc row-cap)])]
+    {:breaks     (mapv row->break (take row-cap rows))
+     :truncated? (> (count rows) row-cap)}))
 
 (defn list-breaks
   "An organisation's breaks, oldest first, capped at `row-cap`.
@@ -685,12 +696,18 @@
                       {:id (str id)})))
 
 (defn adjustments-for-break
-  "Every adjustment raised against a break, oldest first."
+  "The adjustments raised against a break, oldest first, capped at `row-cap`.
+
+  Returns `{:adjustments […] :truncated? bool}`. The same shape and the same
+  finding as `breaks-for-statement` above (**2C-001**): the sentinel row was
+  returned rather than counted, and a break carrying 502 proposals answered
+  with 501 and said nothing about the rest."
   [source break-id]
-  (mapv row->adjustment
-        (db/query source [(str adjustment-columns
-                               "where break_id = ? order by created_at, id limit ?")
-                          break-id (inc row-cap)])))
+  (let [rows (db/query source [(str adjustment-columns
+                                    "where break_id = ? order by created_at, id limit ?")
+                               break-id (inc row-cap)])]
+    {:adjustments (mapv row->adjustment (take row-cap rows))
+     :truncated?  (> (count rows) row-cap)}))
 
 (defn mark-posted!
   "Record that an adjustment posted, exactly once. Returns it as stored, or nil

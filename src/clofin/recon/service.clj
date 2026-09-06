@@ -108,14 +108,19 @@
   answers with the matching it recorded rather than with a fresh run against a
   ledger that has moved."
   [source stored]
-  {:statement          stored
-   :replayed?          true
-   :disposition        (:disposition stored)
-   :disposition-reason (:disposition-reason stored)
-   :detail             (when (statement/refused? (:disposition stored))
-                         (statement/refusal-detail (:disposition-reason stored)))
-   :matches            (recon/matches-for source (:id stored))
-   :breaks             (recon/breaks-for-statement source (:id stored))})
+  ;; `breaks-for-statement` bounds its answer and says when it did, so both
+  ;; halves travel together and a caller is never handed a short list that
+  ;; looks complete (**2C-001**).
+  (let [{:keys [breaks truncated?]} (recon/breaks-for-statement source (:id stored))]
+    {:statement          stored
+     :replayed?          true
+     :disposition        (:disposition stored)
+     :disposition-reason (:disposition-reason stored)
+     :detail             (when (statement/refused? (:disposition stored))
+                           (statement/refusal-detail (:disposition-reason stored)))
+     :matches            (recon/matches-for source (:id stored))
+     :breaks             breaks
+     :breaks-truncated?  truncated?}))
 
 (defn- decide-against-existing
   "The one decision for a receipt that already exists under this reference.
@@ -152,7 +157,8 @@
      :disposition-reason "replay-key-conflict"
      :detail             (statement/refusal-detail "replay-key-conflict")
      :matches            []
-     :breaks             []}))
+     :breaks             []
+     :breaks-truncated?  false}))
 
 (defn- receipt!
   "Commit one statement receipt and the single audit event that says it arrived.
@@ -225,7 +231,12 @@
 
   Returns
   `{:statement … :replayed? bool :disposition … :disposition-reason … :detail …
-    :matches […] :breaks […]}`.
+    :matches […] :breaks […] :breaks-truncated? bool}`.
+
+  `:breaks` is bounded by `clofin.recon.repository/row-cap`, and
+  `:breaks-truncated?` says when the bound was reached — the pair travels
+  together so a caller is never handed a short list that looks complete
+  (release-audit finding **2C-001**).
 
   **It does not throw for a processing refusal.** A refusal is a value, and the
   caller renders the error *after* committing — which is what makes the receipt
@@ -285,7 +296,7 @@
                           {:statement stored :replayed? false
                            :disposition "refused" :disposition-reason code
                            :detail (statement/refusal-detail code)
-                           :matches [] :breaks []}
+                           :matches [] :breaks [] :breaks-truncated? false}
                           ;; Lost the race for the key. The winner committed
                           ;; before this insert could take it, so its receipt is
                           ;; visible now — and it goes through the *same*
@@ -348,7 +359,11 @@
                        :disposition "applied" :disposition-reason nil
                        :detail nil
                        :matches matches
-                       :breaks opened})))))))))))
+                       :breaks opened
+                       ;; Every break this run opened is in hand, so nothing
+                       ;; was left out here. The bound that matters is on the
+                       ;; *read* the handler renders (**2C-001**).
+                       :breaks-truncated? false})))))))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Ownership

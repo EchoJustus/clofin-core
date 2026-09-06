@@ -602,3 +602,106 @@
          cannot carry a USD statement")
     (is (nil? (recon/account-by-code tdb/*pool* (random-uuid) "SGD" "1300-IN-TRANSIT"))
         "and every lookup is scoped by organisation")))
+
+;; ---------------------------------------------------------------------------
+;; AC-5 (2C-001) — the nested reads are bounded, and they say so
+;;
+;; Both used to fetch `(inc row-cap)` rows and return all of them: the sentinel
+;; row that tells the query it hit the cap was handed to the caller. A statement
+;; with 504 breaks answered with 501 and no truncation indicator, while
+;; `GET /reconciliation-status` counted all 504 — an evidence projection
+;; claiming a completeness it did not have.
+;;
+;; The organisation-level `list-breaks` has always had the right shape. These
+;; assert that the nested reads have it too, which is the dimension the guard
+;; was missing (standing lesson **L-17**).
+;; ---------------------------------------------------------------------------
+
+(defn- statement-with-breaks!
+  "One statement carrying `n` breaks. Returns the statement id.
+
+  The breaks are written straight to the repository rather than produced by
+  matching: what is under test is the *read*, and driving the matcher 504 times
+  would test the matcher slowly."
+  [f n]
+  (db/with-transaction [tx tdb/*pool*]
+    (let [stmt (:id (recon/insert-statement! tx (receipt f :reference (str (random-uuid)))))]
+      (recon/insert-lines! tx stmt
+                           [{:line-no 1 :scheme-reference "SIM-STMT-LN-1"
+                             :payment-reference "abc" :line-type "settlement"
+                             :amount (money/of "SGD" 125000)
+                             :value-date (java.time.LocalDate/parse "2026-08-12")}])
+      (dotimes [_ n]
+        (recon/insert-break! tx {:id (random-uuid)
+                                 :organisation-id (:org f)
+                                 :statement-id stmt
+                                 :account-id (:id (reconciled-account f))
+                                 :kind "statement-line-unmatched"
+                                 :line-no 1
+                                 :entry-id nil
+                                 :currency "SGD"
+                                 :statement-amount (money/of "SGD" 125000)
+                                 :ledger-amount nil
+                                 :detail "The scheme reports money CloFin does not"
+                                 :assignee-id (:actor f)}))
+      stmt)))
+
+(deftest ac-5-a-statement-s-breaks-are-capped-and-the-cap-is-reported
+  (let [f (setup)]
+    (testing "504 breaks: the cap is the answer's size, and the sentinel row
+              that detected the cap is counted rather than returned"
+      (let [stmt (statement-with-breaks! f 504)
+            {:keys [breaks truncated?]} (recon/breaks-for-statement tdb/*pool* stmt)]
+        (is (= recon/row-cap (count breaks))
+            (str "504 breaks must answer with " recon/row-cap ", not with "
+                 (count breaks) " — 501 is the cap plus the row that found it"))
+        (is (true? truncated?))
+        (is (= 504 (:count (db/query-one
+                            tdb/*pool*
+                            ["select count(*) as count from reconciliation_break
+                               where statement_id = ?" stmt])))
+            "and all 504 are durable: nothing is lost, the projection is bounded")))
+
+    (testing "exactly at the cap is not truncated — the boundary, at the boundary"
+      (let [stmt (statement-with-breaks! f recon/row-cap)
+            {:keys [breaks truncated?]} (recon/breaks-for-statement tdb/*pool* stmt)]
+        (is (= recon/row-cap (count breaks)))
+        (is (false? truncated?))))
+
+    (testing "and an ordinary statement says so too, rather than saying nothing"
+      (let [stmt (statement-with-breaks! f 3)
+            {:keys [breaks truncated?]} (recon/breaks-for-statement tdb/*pool* stmt)]
+        (is (= 3 (count breaks)))
+        (is (false? truncated?))))))
+
+(deftest ac-5-a-break-s-adjustments-are-capped-and-the-cap-is-reported
+  (let [f (setup)
+        brk (open-break! f)
+        raise! (fn [n]
+                 (db/with-transaction [tx tdb/*pool*]
+                   (dotimes [_ n]
+                     (recon/insert-adjustment!
+                      tx {:id (random-uuid) :organisation-id (:org f) :break-id (:id brk)
+                          :amount (money/of "SGD" 125000) :direction :debit
+                          :narrative "A proposal" :approvals-required 1
+                          :created-by (:actor f)}))))]
+    (raise! 502)
+    (let [{:keys [adjustments truncated?]} (recon/adjustments-for-break tdb/*pool* (:id brk))]
+      (is (= recon/row-cap (count adjustments))
+          (str "502 adjustments must answer with " recon/row-cap ", not 501"))
+      (is (true? truncated?))
+      (is (= 502 (:count (db/query-one
+                          tdb/*pool*
+                          ["select count(*) as count from reconciliation_adjustment
+                             where break_id = ?" (:id brk)])))))
+
+    (testing "a break with a handful of proposals is not truncated"
+      (let [other (open-break! f)]
+        (db/with-transaction [tx tdb/*pool*]
+          (recon/insert-adjustment!
+           tx {:id (random-uuid) :organisation-id (:org f) :break-id (:id other)
+               :amount (money/of "SGD" 125000) :direction :debit
+               :narrative "A proposal" :approvals-required 1 :created-by (:actor f)}))
+        (let [{:keys [adjustments truncated?]} (recon/adjustments-for-break tdb/*pool* (:id other))]
+          (is (= 1 (count adjustments)))
+          (is (false? truncated?)))))))
