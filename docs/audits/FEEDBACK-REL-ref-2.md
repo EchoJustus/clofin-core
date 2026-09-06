@@ -23,6 +23,10 @@
 > rule: official artifacts in git, workpapers in the bridge); their links are
 > rendered as file names so no link in this tree dangles. Session D's prompt
 > is recorded in [`REL-ref-2-SESSION-D-PROMPT.md`](REL-ref-2-SESSION-D-PROMPT.md).
+> The quotations below reproduce ROADMAP lines that contain links relative to
+> `docs/`; they are evidence and are not edited. `scripts/check-doc-links.sh`
+> learned to skip fenced code blocks in the sync that carried this file, so a
+> quoted link is never mistaken for one this document makes.
 
 ## 1. Provenance and Coverage
 
