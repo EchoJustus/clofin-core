@@ -292,12 +292,23 @@ The transactional property is made structural rather than remembered.
 `clofin.audit.repository/record!` takes a `tx` and never opens one, so the only
 connection available to a caller *is* the transaction carrying the change.
 Every service that composes a change with its event likewise takes the caller's
-transaction and requires no `clofin.db.*` namespace at all —
-`clofin.payments.approval-service`, `clofin.ledger.service`,
-`clofin.organisations.service` and `clofin.settlement.service`. A service that
-could open its own connection is a service that could write an audit event
-outside the change it describes, and `clofin.ledger.purity-test` fails the build
-if any of them acquires one.
+transaction and requires no `clofin.db.*` namespace at all — all **five** of
+them: `clofin.payments.approval-service`, `clofin.ledger.service`,
+`clofin.organisations.service`, `clofin.settlement.service` and
+`clofin.recon.service`. A service that could open its own connection is a
+service that could write an audit event outside the change it describes, and
+`clofin.ledger.purity-test` fails the build if any of them acquires one.
+
+This paragraph named four and omitted `clofin.recon.service` from TASK-008
+onward, understating a built control-bearing service — ingestion, assignment,
+proposal and decision all compose their events here — and contradicting this
+control's own reconciliation row in the matrix below by omission (release-audit
+finding **2B-005**, standing lesson **L-15**: a document that understates what
+exists is as false as one that overstates it, and less likely to be caught
+because nobody is looking). The list is now compared with
+`clofin.ledger.purity-test/service-namespaces` in both directions, so a sixth
+service arriving without a line here fails the build rather than passing
+unnoticed.
 
 **And the other half, which was documentation until audit finding F-011.** Those
 services could not *open* a transaction; nothing made a caller *supply* one.
@@ -847,7 +858,17 @@ rule id is written to `reconciliation_match`. Agreement is a separate pass, so a
 pair identified as one movement can still be a break for disagreeing about the
 amount, the date or the direction of travel. The break lifecycle is data, and
 resolution is a new approved entry through
-`clofin.ledger.service/post-entry!` — the same path a release takes.
+`clofin.ledger.service/post-entry!` — **the same path a release takes**, which
+became true on 2026-09-06 and was written here before it was. Settlement posted
+its release and finality entries through `clofin.ledger.repository/post-entry!`
+directly, so those entries carried no `journal-entry.posted` event and their
+evidence packs answered `404`, while an identical entry raised through the
+ledger API carried both: journal evidence depended on which producer created
+the entry (release-audit finding **2C-009**). Both settlement sites now go
+through the service, and `clofin.ledger.purity-test` asserts that
+`clofin.ledger.service` is the **only** production namespace calling the
+repository primitive — so the sentence is now enforced rather than described
+(standing lesson **L-21**).
 
 **Enforcement points.**
 

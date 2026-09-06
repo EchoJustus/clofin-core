@@ -297,8 +297,19 @@
     (testing "the batch's ack is recorded like any other response"
       (is (= ["ack"] (mapv #(get % "kind") (get json "schemeResponses")))))
 
-    (is (= (+ before 3) (audit-count))
-        "exactly two payment.released and one settlement-batch.submitted — nothing else")))
+    (is (= (+ before 5) (audit-count))
+        "exactly two payment.released, one settlement-batch.submitted and one
+         journal-entry.posted per release entry — nothing else. The two entry
+         events arrived on 2026-09-06: settlement posted through the ledger
+         repository, so its entries carried no posting event of their own while
+         an identical entry raised through the ledger API did (2C-009, L-21)")
+
+    (testing "and each release entry has its own posting event, which is what
+              makes journal evidence independent of which producer wrote it"
+      (is (= 2 (count (db/query tdb/*pool*
+                                ["select id from audit_event
+                                   where organisation_id = ? and action = ?"
+                                 (:org f) "journal-entry.posted"])))))))
 
 (deftest ac-3-a-batch-cannot-be-submitted-twice
   (let [f (setup)
@@ -791,9 +802,11 @@
           "and NOT a second `completed` — that transition happened at the sweep,
            under a different actor and a different correlation id, and counting
            one as the other is F-005's mislabelling with a new name")
-      (is (= (+ before 2) (audit-count))
-          "two events for two facts: the payment settled, and the batch's
-           outcome was restated")
+      (is (= (+ before 3) (audit-count))
+          "three events for three facts: the payment settled, the batch's
+           outcome was restated, and the finality entry was posted. The third
+           arrived on 2026-09-06 — settlement's entries had no posting event
+           of their own (2C-009, L-21)")
 
       (testing "the event carries a real before and a real after"
         (let [row (db/query-one
@@ -1088,3 +1101,70 @@
         (is (= "submitted" (get json "status"))
             "the silent one keeps the batch unresolved — which is what a timeout is")
         (is (true? (get json "simulated")))))))
+
+;; ---------------------------------------------------------------------------
+;; AC-16 (2C-009) — every journal entry has its own posting event
+;;
+;; Settlement posted its release and finality entries through
+;; `clofin.ledger.repository/post-entry!` rather than through the service that
+;; emits `journal-entry.posted`. The payment and batch events were atomic and
+;; correct; the *entries* had none, and their evidence packs answered `404`,
+;; while an identical entry raised through the ledger API had both. Journal
+;; evidence depended on which producer created the entry — standing lesson
+;; **L-21**, and the producer census in `clofin.ledger.purity-test` is the
+;; other half of this fix.
+;; ---------------------------------------------------------------------------
+
+(defn- entries-in
+  [org]
+  (mapv :id (db/query tdb/*pool* ["select id from journal_entry
+                                    where organisation_id = ? order by recorded_at, id" org])))
+
+(deftest ac-16-every-settlement-journal-entry-carries-its-own-posting-event
+  (doseq [[label finish!] [["release and settle" settle!]
+                           ["release and return" return!]]]
+    (testing (str "a public settlement walk that does " label)
+      (let [f (setup)
+            instruction (raise! f)
+            batch (get (:json (create-batch! f [instruction])) "id")]
+        (submit-batch! f batch)
+        (finish! f batch instruction (str "SIM-REF-" (rand-int 100000000)))
+
+        (let [entries (entries-in (:org f))]
+          (is (= 2 (count entries))
+              (str label " must post two entries — the release and the finality "
+                   "— and posted " (count entries)))
+
+          (doseq [entry entries]
+            (let [actions (actions-for (:org f) entry)]
+              (is (= ["journal-entry.posted"] actions)
+                  (str "every journal entry needs exactly one posting event, "
+                       "whichever producer wrote it. Entry " entry " has "
+                       (pr-str actions))))
+
+            (testing "and its evidence pack answers, rather than 404"
+              (let [pack (call :get (str "/audit/evidence/" entry)
+                               :actor (:auditor f)
+                               :query (str "organisationId=" (:org f)))]
+                (is (= 200 (:status pack))
+                    (str "the evidence pack for entry " entry " answered "
+                         (:status pack) " — at the RC both settlement entries "
+                         "answered 404 because neither had an event"))
+                (is (= "journal-entry" (get-in pack [:json "subjectType"])))
+                (is (seq (get-in pack [:json "events"])))))))))))
+
+(deftest ac-16-the-posting-event-names-the-actor-who-caused-it
+  (testing "an event whose actor is null is an event an investigation cannot
+            use; the release and the finality are both acts of the controller
+            who submitted and answered the batch"
+    (let [f (setup)
+          instruction (raise! f)
+          batch (get (:json (create-batch! f [instruction])) "id")]
+      (submit-batch! f batch)
+      (settle! f batch instruction "SIM-STL-ACTOR")
+      (doseq [entry (entries-in (:org f))]
+        (let [event (first (audit-store/events-for-subject tdb/*pool* (:org f) entry))]
+          (is (= (:controller f) (:actor-id event))
+              (str "entry " entry "'s posting event names " (pr-str (:actor-id event))))
+          (is (some? (:correlation-id event))
+              "and carries the correlation id of the request that caused it"))))))

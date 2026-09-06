@@ -66,6 +66,7 @@
             [clofin.audit.repository :as audit-store]
             [clofin.error :as err]
             [clofin.ledger.repository :as ledger]
+            [clofin.ledger.service :as ledger-service]
             [clofin.payments.posting :as posting]
             [clofin.payments.repository :as payments]
             [clofin.settlement.batch :as batch]
@@ -225,11 +226,23 @@
                                  ;; ADR-0018: a release posts. The value leaves
                                  ;; the pooled client-funds asset and sits in
                                  ;; settlement-in-transit until finality.
-                                 (ledger/post-entry!
-                                  tx (first (posting/release-entries
-                                             instruction {:accounts    accounts
-                                                          :entry-ids   [entry-id]
-                                                          :occurred-at occurred-at})))
+                                 ;;
+                                 ;; Through the **service**, not the repository.
+                                 ;; The service is what emits
+                                 ;; `journal-entry.posted`, and posting around
+                                 ;; it produced entries with no event of their
+                                 ;; own and a `404` from their evidence pack,
+                                 ;; while the identical entry raised through the
+                                 ;; ledger API had both (release-audit finding
+                                 ;; **2C-009**, standing lesson **L-21**).
+                                 (ledger-service/post-entry!
+                                  tx {:entry (first (posting/release-entries
+                                                     instruction
+                                                     {:accounts    accounts
+                                                      :entry-ids   [entry-id]
+                                                      :occurred-at occurred-at}))
+                                      :actor-id       (:id actor)
+                                      :correlation-id correlation-id})
                                  moved))
                              instructions
                              entry-ids)
@@ -562,7 +575,13 @@
                                                          (:currency batch-row))
                                            :entry-id    entry-id
                                            :occurred-at occurred-at})]
-                (ledger/post-entry! tx entry)
+                ;; The service, for the same reason as the release above
+                ;; (**2C-009**): the entry gets its own `journal-entry.posted`
+                ;; in this transaction, so every journal entry in the tenant has
+                ;; one whichever producer wrote it.
+                (ledger-service/post-entry! tx {:entry entry
+                                                :actor-id (:id actor)
+                                                :correlation-id correlation-id})
                 (audit-store/record! tx {:organisation-id organisation-id
                                          :actor-id        (:id actor)
                                          :action          (audit-action resolved)

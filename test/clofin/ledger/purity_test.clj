@@ -12,7 +12,8 @@
   pass while the source still contains the dependency this rule forbids."
   (:require [clojure.java.io :as io]
             [clojure.string :as str]
-            [clojure.test :refer [deftest is testing]]))
+            [clojure.test :refer [deftest is testing]]
+            [clojure.walk]))
 
 (def pure-namespaces
   "Domain namespaces that must not reach for infrastructure.
@@ -165,3 +166,125 @@
       (is (.exists (io/file path))
           (str namespace-sym " no longer exists at " path
                " — update or remove its entry rather than leaving the guard stale.")))))
+
+;; ---------------------------------------------------------------------------
+;; 2C-009 — the producer census
+;;
+;; `clofin.ledger.service/post-entry!` posts an entry **and** emits
+;; `journal-entry.posted` in the same transaction. Settlement posted through
+;; `clofin.ledger.repository/post-entry!` instead, so its release and finality
+;; entries had no event of their own and their evidence packs answered `404` —
+;; while the identical entry raised through the ledger API had both. Journal
+;; evidence depended on which producer created the entry.
+;;
+;; The list of who may post is now a fact this test asserts rather than a
+;; convention. Standing lesson **L-21**: the audited set is every committing
+;; producer, discovered from the code, not the first service that implemented
+;; one.
+;; ---------------------------------------------------------------------------
+
+(def audited-write-primitives
+  "Repository writes that a service must wrap, and the service that wraps each.
+
+  A production namespace calling one of these directly commits the change
+  without the audit event that describes it — the state C-05 calls
+  unrepresentable."
+  {"clofin.ledger.repository/post-entry!" 'clofin.ledger.service})
+
+(defn- production-sources
+  []
+  (->> (file-seq (io/file "src"))
+       (filter #(and (.isFile ^java.io.File %)
+                     (str/ends-with? (.getName ^java.io.File %) ".clj")))
+       (sort-by #(.getPath ^java.io.File %))))
+
+(defn- namespace-of
+  [file]
+  (second (ns-form (.getPath ^java.io.File file))))
+
+(defn- alias->namespace
+  "`{ledger clofin.ledger.repository}` for one file's `:require` clauses."
+  [form]
+  (into {}
+        (for [clause (drop 2 form)
+              :when (and (seq? clause) (= :require (first clause)))
+              spec (rest clause)
+              :when (sequential? spec)
+              :let [[nsym & opts] spec
+                    alias* (:as (apply hash-map opts))]
+              :when alias*]
+          [(str alias*) (str nsym)])))
+
+(defn- calls-to
+  "Every `alias/name` symbol used in a file, resolved through its `:require`
+  aliases to a fully-qualified `namespace/name`."
+  [file]
+  (let [path (.getPath ^java.io.File file)
+        aliases (alias->namespace (ns-form path))
+        found (atom #{})]
+    (with-open [r (java.io.PushbackReader. (io/reader path))]
+      (let [eof (Object.)]
+        (doseq [form (take-while #(not (identical? eof %))
+                                 (repeatedly #(read {:read-cond :allow :eof eof} r)))]
+          (clojure.walk/postwalk
+           (fn [x]
+             (when (and (symbol? x) (namespace x))
+               (when-let [full (get aliases (namespace x))]
+                 (swap! found conj (str full "/" (name x)))))
+             x)
+           form))))
+    @found))
+
+(deftest ac-16-only-the-audited-service-calls-an-audited-write-primitive
+  (testing "every committing producer, discovered from the code (L-21). A
+            namespace that posts a journal entry without going through
+            `clofin.ledger.service` writes one with no `journal-entry.posted`
+            and an evidence pack that answers 404 (2C-009)"
+    (doseq [[primitive owner] audited-write-primitives]
+      (let [callers (into (sorted-set)
+                          (comp (filter #(contains? (calls-to %) primitive))
+                                (map namespace-of))
+                          (production-sources))
+            ;; The primitive's own namespace defines it rather than calling it.
+            defining (symbol (namespace (symbol primitive)))
+            callers (disj callers defining)]
+        (is (seq callers)
+            (str "no production namespace calls " primitive
+                 " — either the scan is broken or the primitive is dead"))
+        (is (= #{owner} callers)
+            (str primitive " must be called by " owner " and by nothing else in "
+                 "src/; it is called by " (pr-str (vec callers))
+                 ". A second caller posts a journal entry whose evidence pack "
+                 "answers 404 (2C-009, L-21)."))))))
+
+;; ---------------------------------------------------------------------------
+;; 2B-005 — C-05's service list, compared with this one
+;; ---------------------------------------------------------------------------
+
+(defn- compliance-section
+  "The text of one `### C-nn` section of `docs/COMPLIANCE.md`."
+  [id]
+  (let [text (slurp (io/file "docs/COMPLIANCE.md"))
+        from (str/index-of text (str "### " id " "))]
+    (assert from (str id " has no section in docs/COMPLIANCE.md"))
+    (let [rest* (subs text from)
+          to (str/index-of rest* "\n### ")]
+      (if to (subs rest* 0 to) rest*))))
+
+(deftest ac-17-c-05-names-every-audit-composing-service
+  (testing "C-05 named four services and there are five: `clofin.recon.service`
+            composes ingestion, assignment, proposal and decision with their
+            events, and the document understated a built control-bearing
+            service while contradicting its own later reconciliation section by
+            omission (2B-005). Both directions, against a source that moves
+            independently of the prose (L-16)"
+    (let [section (compliance-section "C-05")
+          in-code (into (sorted-set) (map str) (keys service-namespaces))
+          named (into (sorted-set) (re-seq #"clofin\.[a-z-]+\.[a-z-]*service" section))]
+      (is (seq named) "C-05 names no service at all, so this guard checks nothing")
+      (is (= in-code named)
+          (str "C-05's section names " (pr-str (vec named))
+               " and clofin.ledger.purity-test/service-namespaces holds "
+               (pr-str (vec in-code))
+               ". A service missing from the document understates the control; "
+               "a name in the document that is not a service overstates it.")))))

@@ -1122,8 +1122,11 @@
         "nothing posted, so nothing says it did")
     (is (nil? (get after "reconciliation-break.resolved"))
         "and the break did not resolve")
-    (is (nil? (get after "journal-entry.posted"))
-        "no entry reached the journal at all")
+    (is (= (get before "journal-entry.posted" 0) (get after "journal-entry.posted" 0))
+        "no entry reached the journal: the rejection posted nothing. Counted as
+         a delta rather than as a tenant-wide zero, which it was only because
+         settlement's own release and finality entries emitted no posting event
+         until 2026-09-06 (2C-009)")
 
     (testing "a refused decision writes nothing — the self-approval attempt below
               rolls its whole transaction back"
