@@ -50,14 +50,30 @@
   description rather than leaving the stronger reading available. The `or` is
   not defensive tidying — a null or absent field would render on a client as a
   blank where a commit should be, which is the one thing this field must never
-  do."
+  do.
+
+  `instanceId` is the same kind of value with the opposite default: an opaque
+  identifier the operator passed at start-up, echoed verbatim, and **absent
+  when none was passed**. Absence is meaningful here, which is why there is no
+  `\"unknown\"` — a caller that passed nothing gets no field rather than a
+  string that looks like an answer. Its use is the capture harness, which mints
+  one per run and refuses a stack that does not echo it back; what that
+  establishes is not that these bytes are that commit, but that the process
+  answering is the one the harness started (release-audit finding **2C-006**,
+  standing lesson **L-19**)."
   [config]
   (fn [_request]
-    (resp/ok {"service" "clofin-core"
-              "description" "Open-source enterprise payments and reconciliation core"
-              "environment" (name (:environment config))
-              "disclaimer" (str "CloFin operates on synthetic data only. It is not connected "
-                                "to any bank, payment scheme or central bank, holds no "
-                                "regulatory authorisation, and never processes real funds.")
-              "sourceCommit" (or (:source-commit config) build-info/unknown)
-              "documentation" "https://github.com/EchoJustus/clofin-core"})))
+    (resp/ok (cond-> {"service" "clofin-core"
+                      "description" "Open-source enterprise payments and reconciliation core"
+                      "environment" (name (:environment config))
+                      "disclaimer" (str "CloFin operates on synthetic data only. It is not connected "
+                                        "to any bank, payment scheme or central bank, holds no "
+                                        "regulatory authorisation, and never processes real funds.")
+                      "sourceCommit" (or (:source-commit config) build-info/unknown)
+                      "documentation" "https://github.com/EchoJustus/clofin-core"}
+               ;; `not-empty`, not truthiness: an empty string is a value in
+               ;; Clojure and would publish a field whose whole meaning is that
+               ;; it was passed. `load-config` already blanks it to nil; this is
+               ;; the same rule where the map is built by hand.
+               (not-empty (:instance-id config)) (assoc "instanceId"
+                                                        (:instance-id config))))))

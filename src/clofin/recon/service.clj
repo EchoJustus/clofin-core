@@ -117,6 +117,43 @@
    :matches            (recon/matches-for source (:id stored))
    :breaks             (recon/breaks-for-statement source (:id stored))})
 
+(defn- decide-against-existing
+  "The one decision for a receipt that already exists under this reference.
+
+  Made by the pre-check at the top of `ingest-statement!` **and** by both
+  collision recoveries, because it is the same question in all three places: a
+  receipt already holds this identity — is it this document?
+
+  - Digest matches: the same document again. Reproduce the stored answer and do
+    *no work at all*.
+  - Digest differs: two different documents claiming one identity. Refused, and
+    **not** a replay. No second row either: the first receipt already stands as
+    the evidence of what arrived, and the replay key exists precisely to stop a
+    second one. The code and its prose come from
+    `clofin.recon.statement/refusal-reasons` rather than being written here — a
+    term defined at its only call site is a term nothing can enumerate (audit
+    finding **A-016**).
+
+  Factored out because it was not one decision before, and the difference was a
+  defect. An arbitration loser had learned only that the key was taken, which is
+  exactly what the serial path learns from its first read — but both collision
+  branches replayed the winner's receipt on the strength of the key alone, so a
+  document nobody had processed was acknowledged as an exact replay of a
+  different one, while the same contradiction sent serially was refused `409`
+  (release-audit finding **2C-002**, standing lesson **L-18**, and the promise
+  ADR-0023 makes in so many words). Three copies of one decision drift; one
+  cannot."
+  [tx existing content-digest]
+  (if (statement/same-message? (:content-digest existing) content-digest)
+    (replay tx existing)
+    {:statement          existing
+     :replayed?          false
+     :disposition        "refused"
+     :disposition-reason "replay-key-conflict"
+     :detail             (statement/refusal-detail "replay-key-conflict")
+     :matches            []
+     :breaks             []}))
+
 (defn- receipt!
   "Commit one statement receipt and the single audit event that says it arrived.
 
@@ -200,12 +237,12 @@
   ## The order, and why it is this order
 
   1. **Look for an existing receipt under this reference**, before doing any
-     work rather than after colliding with it.
-     - Digest matches: the same document again. Reproduce the stored answer and
-       do *no work at all* — no second match, no second break, no second event.
-     - Digest differs: two different documents claiming one identity. Refused,
-       and **not** a replay — answering `replayed: true` there would tell a
-       caller CloFin had already seen a document nobody had sent (**F-009**).
+     work rather than after colliding with it. What to do about one is
+     `decide-against-existing`, and it is the same function the two collision
+     recoveries below call: a transaction that *loses* the replay key has
+     learned exactly what this read learns, and answering it differently is how
+     a caller came to be told CloFin had already seen a document nobody had sent
+     (**F-009**, and its concurrent twin **2C-002**).
   2. **Resolve the account this statement reconciles.** An organisation with no
      `1300-IN-TRANSIT` in the currency is refused *with a receipt*, because the
      statement did arrive.
@@ -221,26 +258,8 @@
   (let [content-digest (statement/digest statement)
         existing (recon/find-statement-by-reference tx organisation-id
                                                     (:statement-reference statement))]
-    (cond
-      (and existing (statement/same-message? (:content-digest existing) content-digest))
-      (replay tx existing)
-
-      ;; A different document under a taken identity. No work, and no second
-      ;; row: the first receipt already stands as the evidence of what arrived,
-      ;; and the replay key exists precisely to stop a second one. The code and
-      ;; its prose come from `clofin.recon.statement/refusal-reasons` rather than
-      ;; being written here — a term defined at its only call site is a term
-      ;; nothing can enumerate (audit finding **A-016**).
-      existing
-      {:statement          existing
-       :replayed?          false
-       :disposition        "refused"
-       :disposition-reason "replay-key-conflict"
-       :detail             (statement/refusal-detail "replay-key-conflict")
-       :matches            []
-       :breaks             []}
-
-      :else
+    (if existing
+      (decide-against-existing tx existing content-digest)
       (let [account (recon/account-by-code tx organisation-id (:currency statement)
                                           (:reconciled adjustment/account-roles))
             refuse! (fn [code]
@@ -267,12 +286,17 @@
                            :disposition "refused" :disposition-reason code
                            :detail (statement/refusal-detail code)
                            :matches [] :breaks []}
-                          ;; Lost the race to a concurrent identical delivery.
-                          ;; The winner committed before this insert could take
-                          ;; the key, so its receipt is visible now and is the
-                          ;; answer both callers get.
-                          (replay tx (replay-of tx organisation-id
-                                                (:statement-reference statement))))))]
+                          ;; Lost the race for the key. The winner committed
+                          ;; before this insert could take it, so its receipt is
+                          ;; visible now — and it goes through the *same*
+                          ;; decision the read at the top of this function
+                          ;; makes, because losing a race is not evidence that
+                          ;; the winner's document is this one (**L-18**).
+                          (decide-against-existing
+                           tx
+                           (replay-of tx organisation-id
+                                      (:statement-reference statement))
+                           content-digest))))]
         (if-not account
           (refuse! "no-reconciled-account")
           (let [{:keys [expectations truncated?]}
@@ -305,8 +329,13 @@
                                    :actor actor
                                    :correlation-id correlation-id})]
                 (if-not stored
-                  (replay tx (replay-of tx organisation-id
-                                        (:statement-reference numbered)))
+                  ;; The same recovery, and the same decision (**L-18**): this
+                  ;; transaction matched a whole statement and then lost the
+                  ;; key, which tells it nothing about what the winner holds.
+                  (decide-against-existing
+                   tx
+                   (replay-of tx organisation-id (:statement-reference numbered))
+                   content-digest)
                   (do
                     (recon/insert-lines! tx (:id stored) (:lines numbered))
                     (recon/insert-matches! tx (:id stored) matches)

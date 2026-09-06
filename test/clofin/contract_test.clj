@@ -88,12 +88,45 @@
 (deftest service-info-declares-exactly-the-fields-it-returns
   (let [schema (get-in (load-spec) ["components" "schemas" "ServiceInfo"])
         declared (set (keys (get schema "properties")))
-        returned (set (keys (:body ((health/info {:environment :test}) {}))))]
-    (is (= declared returned)
+        required (set (get schema "required"))
+        ;; Both configurations, because one of the fields is optional and a
+        ;; comparison against a single response would check only the half of
+        ;; the declaration that happened to be exercised (L-17).
+        without (set (keys (:body ((health/info {:environment :test}) {}))))
+        with (set (keys (:body ((health/info {:environment :test
+                                              :instance-id "run-7"}) {}))))]
+    (is (= declared with)
         (str "ServiceInfo declares " (pr-str (vec (sort declared)))
-             " and GET / returns " (pr-str (vec (sort returned)))))
+             " and GET / returns " (pr-str (vec (sort with)))
+             " when every optional field has a value"))
+    (is (every? without required)
+        (str "ServiceInfo requires " (pr-str (vec (sort required)))
+             " and GET / returns only " (pr-str (vec (sort without)))
+             " when no optional field has a value — a required field must be"
+             " answered whatever the configuration"))
+    (is (= without (disj with "instanceId"))
+        (str "the only field whose presence depends on the configuration is"
+             " instanceId; GET / returned " (pr-str (vec (sort without)))
+             " without one and " (pr-str (vec (sort with))) " with one"))
     (testing "sourceCommit is required, because it is always answered"
-      (is (contains? (set (get schema "required")) "sourceCommit")))))
+      (is (contains? required "sourceCommit")))
+    (testing "instanceId is not, because absence is its answer for a caller
+              that passed nothing (ADR-0027 amendment 3a)"
+      (is (contains? declared "instanceId"))
+      (is (not (contains? required "instanceId"))))))
+
+(deftest the-contract-says-instance-id-is-self-reported-too
+  (testing "L-14 and L-19: what an echoed identifier establishes is that the
+            process answering is the one the caller started, and the sentence
+            beside the field may not claim more than that"
+    (let [description (str/lower-case
+                       (get-in (load-spec)
+                               ["components" "schemas" "ServiceInfo"
+                                "properties" "instanceId" "description"]))]
+      (is (str/includes? description "self-reported"))
+      (is (not (str/includes? description "proves")))
+      (is (not (str/includes? description "attest"))
+          "nothing here attests anything, so the word must not appear at all"))))
 
 (deftest the-contract-says-source-commit-is-self-reported-rather-than-attested
   (testing "L-14: the sentence beside the field may not claim more than the field is"

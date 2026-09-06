@@ -17,10 +17,13 @@
      none. `ref-1`'s audit was **partial**, and a walkthrough that showed the
      SHA without that qualifier would be standing lesson **L-14** in the
      project's most public artifact.
-  3. Creates a detached worktree at the commit, migrates a scratch database
-     with the commit's own migration runner, and starts the commit's own
-     service. See `clofin.tools.capture.stack` for why the SHA is established
-     rather than discovered.
+  3. Creates a detached worktree at the commit, refuses the port if anything is
+     already answering on it, mints an instance id for the run, migrates a
+     scratch database with the commit's own migration runner, and starts the
+     commit's own service — which must echo that instance id and the commit
+     under capture before the run continues. See `clofin.tools.capture.stack`
+     for why the SHA is established rather than discovered, and for what the
+     echoed identity does and does not prove.
   4. Captures `GET /` as a fixture — the scope statement, byte for byte,
      never transcribed.
   5. Runs each scenario, recording every request and response, then reads the
@@ -147,7 +150,11 @@
         commit      (:source-commit base-stamp)
         worktree    (stack/worktree! root commit
                                      (io/file out (str "stack-" (subs commit 0 7))))
-        log-file    (str (io/file out "stack.log"))]
+        log-file    (str (io/file out "stack.log"))
+        ;; Minted here, after anything already listening on the port has long
+        ;; since started, so no process this run did not spawn can echo it back
+        ;; (**2C-006**, lesson **L-19**).
+        instance-id (str (random-uuid))]
     (println (format "capture: %s -> %s (tag %s, %s)"
                      ref commit (:tag base-stamp)
                      (get-in base-stamp [:release-audit :label])))
@@ -155,10 +162,12 @@
                      (get-in base-stamp [:release-audit :source-ref])
                      (get-in base-stamp [:release-audit :source])))
     (stack/assert-formatter-matches! root worktree)
+    (stack/assert-port-free! port)
     (store/reset-schema! db)
     (stack/migrate! {:worktree worktree :db db :clojure-bin clojure-bin :log-file log-file})
     (let [running (stack/start! {:worktree worktree :db db :port port
-                                 :clojure-bin clojure-bin :log-file log-file})]
+                                 :clojure-bin clojure-bin :log-file log-file
+                                 :instance-id instance-id :source-commit commit})]
       (try
         (let [applied (stack/assert-schema-matches! (:readyz running) worktree)
               stamp   (assoc base-stamp :schema-version-applied applied)
@@ -177,18 +186,27 @@
                            ;; manifest depend on where the reader happens to
                            ;; be standing.
                            name* (str "bundles/" (:id scenario) ".json")
+                           ;; Before every file, not only at start-up: a child
+                           ;; that dies halfway through a capture leaves a port
+                           ;; a stranger can take, and everything written after
+                           ;; that would be attributed to this commit
+                           ;; (**2C-006**, lesson **L-19**).
+                           _ (stack/assert-same-process! running)
                            w (bundle/write! {:path (io/file out name*)
                                              :bundle b
                                              :service-info info})]
                        (assoc w :id (:id scenario) :title (:title scenario) :name name*))))
+                  _       (stack/assert-same-process! running)
                   fixture (bundle/write-fixture!
                            {:path (io/file out "service-info.json")
                             :provenance stamp
                             :service-info info})
+                  _       (stack/assert-same-process! running)
                   quotes  (bundle/write-quotations!
                            {:path (io/file out "quotations.json")
                             :provenance stamp
                             :quotations (quotations/extract worktree commit)})]
+              (stack/assert-same-process! running)
               (bundle/write-manifest! {:path (io/file out "manifest.json")
                                        :provenance stamp
                                        :fixture (assoc fixture :name "service-info.json")

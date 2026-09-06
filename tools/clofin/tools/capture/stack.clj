@@ -27,15 +27,44 @@
   3. Migrations and the service are run **from inside that worktree**, by
      path. The running process is a child of this one, started from a
      directory whose `HEAD` was just verified.
-  4. The live service's `GET /readyz` reports its applied schema version, and
+  4. The port is refused if anything already answers on it, a fresh **instance
+     id** is minted for the run and passed to the child, and the child's
+     liveness and echoed identity are checked before any `200` is accepted and
+     again before every file is written.
+  5. The live service's `GET /readyz` reports its applied schema version, and
      that is compared with the last entry in the worktree's
-     `resources/migrations/index.txt`. If a stack somehow answers on the port
-     that is not the one just started, the two disagree and the run stops.
+     `resources/migrations/index.txt`.
 
-  Step 4 is the one worth keeping. Steps 1–3 make the SHA correct; step 4 is
-  the check that fails when an assumption behind them is false — the shape
-  standing lesson **L-13** asks for, where the precondition is enforced at
-  runtime rather than documented and hoped for.
+  Steps 4 and 5 are the ones worth keeping. Steps 1–3 make the SHA correct;
+  4 and 5 are the checks that fail when an assumption behind them is false —
+  the shape standing lesson **L-13** asks for, where the precondition is
+  enforced at runtime rather than documented and hoped for.
+
+  ## What identity is, and what it is not
+
+  Step 5 used to be the whole of it, and it was not enough: **a schema version
+  is a check, not an identity**. The release audit started an unrelated local
+  responder reporting schema `0013`, asked this namespace to spawn `/bin/false`
+  onto that port, and watched the harness accept the stranger's `200` — the
+  child had exited 1 and was never asked (finding **2C-006**, blocking;
+  standing lesson **L-19**).
+
+  So a capture binds to **the process it started**. The instance id is minted
+  here, after the stranger would already have been listening, so no process the
+  harness did not spawn can echo it. Both `instanceId` and `sourceCommit` are
+  the service's own answers — self-reported, and `GET /` says so. The harness
+  does not claim they attest anything about the bytes running; it claims
+  something narrower and sufficient: *the process that answered is the one this
+  run spawned from the worktree it verified clean at that commit.*
+
+  `CLOFIN_SOURCE_COMMIT` is passed to the child for the same reason, and it
+  closes a second hole. A child process inherits its parent's environment, and
+  `make capture-trace` exports `CLOFIN_SOURCE_COMMIT` as the *harness's* own
+  `HEAD` — so the tagged commit's service inherited it and reported `main`'s
+  SHA under `sourceCommit`, which is the confidently-wrong value the paragraph
+  above says the harness must never produce. It is now set explicitly from the
+  commit under capture, and the check refuses if what comes back is anything
+  else.
 
   ## What it deliberately will not do
 
@@ -44,7 +73,8 @@
   cleanliness, not whether it was rebuilt since it started. Offering the option
   would mean offering a bundle whose stamp is a guess, and every consumer
   downstream treats the stamp as fact."
-  (:require [clojure.java.io :as io]
+  (:require [clojure.data.json :as json]
+            [clojure.java.io :as io]
             [clojure.java.shell :as shell]
             [clojure.string :as str])
   (:import [java.lang ProcessBuilder ProcessBuilder$Redirect]
@@ -120,15 +150,25 @@
 ;; Processes
 ;; ---------------------------------------------------------------------------
 
-(defn- env-for
-  [{:keys [url user password]} port]
-  {"CLOFIN_DB_URL" url
-   "CLOFIN_DB_USER" user
-   "CLOFIN_DB_PASSWORD" password
-   "CLOFIN_HTTP_HOST" "127.0.0.1"
-   "CLOFIN_HTTP_PORT" (str port)
-   "CLOFIN_MIGRATE_ON_START" "false"
-   "CLOFIN_ENV" "dev"})
+(defn env-for
+  "The environment the child is started with.
+
+  A child inherits its parent's environment, so every variable that decides
+  what the child *says about itself* is set here rather than left to whatever
+  the harness happened to be started with. `CLOFIN_SOURCE_COMMIT` is the case
+  that bit: `make capture-trace` exports the harness's own `HEAD`, and an
+  unset key here meant the captured commit's service inherited it and reported
+  `main`'s SHA."
+  [{:keys [url user password]} port {:keys [instance-id source-commit]}]
+  (cond-> {"CLOFIN_DB_URL" url
+           "CLOFIN_DB_USER" user
+           "CLOFIN_DB_PASSWORD" password
+           "CLOFIN_HTTP_HOST" "127.0.0.1"
+           "CLOFIN_HTTP_PORT" (str port)
+           "CLOFIN_MIGRATE_ON_START" "false"
+           "CLOFIN_ENV" "dev"}
+    instance-id   (assoc "CLOFIN_INSTANCE_ID" (str instance-id))
+    source-commit (assoc "CLOFIN_SOURCE_COMMIT" (str source-commit))))
 
 (defn- process
   ^Process [{:keys [dir command env log-file]}]
@@ -152,7 +192,7 @@
   [{:keys [worktree db clojure-bin log-file]}]
   (let [p (process {:dir worktree
                     :command [clojure-bin "-M" "-m" "clofin.db.migrate"]
-                    :env (env-for db 0)
+                    :env (env-for db 0 nil)
                     :log-file log-file})
         exit (.waitFor p)]
     (when-not (zero? exit)
@@ -174,30 +214,142 @@
       {:status (.statusCode res) :body (.body res)})
     (catch Exception _ nil)))
 
+(defn assert-port-free!
+  "Refuse to spawn onto a port something is already answering on.
+
+  The first half of binding a capture to its own process, and the cheapest: a
+  stranger that never gets the chance to answer cannot be captured. Both
+  `/readyz` and `/` are asked, because a process that answers either one is a
+  process this harness would go on to interrogate.
+
+  Refusing rather than reserving. Reserving the port and handing it to the
+  child is a window between the two, and the identity check below is what
+  actually closes the hole — this makes the ordinary case fail immediately and
+  legibly instead of ten minutes later (finding **2C-006**, lesson **L-19**)."
+  [port]
+  (doseq [path ["/readyz" "/"]]
+    (when-let [res (http-get (str "http://127.0.0.1:" port path))]
+      (throw (ex-info (format (str "capture refuses: something is already answering GET %s on "
+                                   "port %s (status %s). A capture binds to the process it "
+                                   "starts, so nothing may be listening before it does — a "
+                                   "process reporting the same schema version would otherwise "
+                                   "have its behaviour stamped with the commit under capture. "
+                                   "Stop it, or run the capture on a free port (--port).")
+                              path port (:status res))
+                      {:port port :path path :status (:status res)}))))
+  :free)
+
+(defn- reported-identity
+  "What the stack answering on `base-url` says it is.
+
+  `nil` when `GET /` does not answer `200` at all; otherwise a map whose values
+  may themselves be `nil`, because a service that reports neither field is a
+  service that fails the comparison rather than one that skips it."
+  [base-url]
+  (when-let [res (http-get (str base-url "/"))]
+    (when (= 200 (:status res))
+      (let [body (try (json/read-str (str (:body res))) (catch Exception _ nil))]
+        {:instance-id   (get body "instanceId")
+         :source-commit (get body "sourceCommit")}))))
+
+(defn assert-same-process!
+  "The stack being captured must still be the process this run started.
+
+  Three checks, none of which is the port and none of which is the schema
+  version:
+
+  1. the child is alive — asked of the `Process` handle, not of the network;
+  2. `GET /` echoes **this run's** instance id, which was minted after any
+     process already listening had started, so no such process can produce it;
+  3. `GET /` reports the commit under capture, which is passed to the child
+     explicitly rather than left to an inherited environment variable.
+
+  Both echoed values are **self-reported**, and this function does not pretend
+  otherwise: it establishes that the process answering is the one spawned from
+  the worktree verified clean at that commit, which is what every downstream
+  consumer of a stamp actually needs. It is called before each artifact is
+  written as well as at start-up, because a child that dies halfway through a
+  capture leaves a port a stranger can take."
+  [{:keys [^Process process base-url instance-id source-commit]}]
+  (when (and process (not (.isAlive process)))
+    (throw (ex-info (str "capture refuses: the stack it started is no longer running, so nothing "
+                         "answering on " base-url " can be attributed to it.")
+                    {:base-url base-url :instance-id instance-id})))
+  (let [reported (reported-identity base-url)]
+    (when-not reported
+      (throw (ex-info (str "capture refuses: GET / on " base-url " did not answer 200, so the "
+                           "harness cannot establish which process is there.")
+                      {:base-url base-url})))
+    (when-not (= instance-id (:instance-id reported))
+      (throw (ex-info (format (str "capture refuses: the stack answering on %s reports instance id "
+                                   "%s, and this run started one with %s. A schema version is a "
+                                   "check, not an identity: the process answering is not the "
+                                   "process this capture started.")
+                              base-url (pr-str (:instance-id reported)) (pr-str instance-id))
+                      {:base-url base-url :reported (:instance-id reported)
+                       :expected instance-id})))
+    (when-not (= source-commit (:source-commit reported))
+      (throw (ex-info (format (str "capture refuses: the stack answering on %s reports source "
+                                   "commit %s, and the commit under capture is %s.")
+                              base-url (pr-str (:source-commit reported)) (pr-str source-commit))
+                      {:base-url base-url :reported (:source-commit reported)
+                       :expected source-commit})))
+    reported))
+
 (defn start!
   "Start the service from the worktree and wait until it is ready.
 
-  Returns `{:process :base-url :readyz}`. A stack that never becomes ready is
-  a stopped run with the log named, not a capture against a half-started
-  service."
-  [{:keys [worktree db port clojure-bin log-file timeout-seconds]
+  Returns `{:process :base-url :readyz :instance-id :source-commit}`. A stack
+  that never becomes ready is a stopped run with the log named, not a capture
+  against a half-started service.
+
+  **Liveness is asked before any `200` is looked at.** That order is the
+  finding: the previous version accepted a success on `/readyz` and only asked
+  about the child if none arrived, so a `/bin/false` that had already exited 1
+  was captured as a running stack because something else was on the port
+  (**2C-006**). Once a `200` does arrive it is not enough on its own either —
+  `assert-same-process!` has to agree that the answer came from this run's
+  child."
+  [{:keys [worktree db port clojure-bin log-file timeout-seconds
+           instance-id source-commit]
     :or   {timeout-seconds 120}}]
+  (when (str/blank? (str instance-id))
+    (throw (ex-info "capture refuses: a capture run must carry an instance id."
+                    {:worktree worktree})))
   (let [base-url (str "http://127.0.0.1:" port)
         p (process {:dir worktree
                     :command [clojure-bin "-M:run"]
-                    :env (env-for db port)
+                    :env (env-for db port {:instance-id instance-id
+                                           :source-commit source-commit})
                     :log-file log-file})
         deadline (+ (System/currentTimeMillis) (* 1000 timeout-seconds))]
     (loop []
-      (let [res (http-get (str base-url "/readyz"))]
+      (let [alive? (.isAlive p)
+            res (http-get (str base-url "/readyz"))]
         (cond
-          (and res (= 200 (:status res)))
-          {:process p :base-url base-url :readyz (:body res)}
+          ;; Sampled *before* the request, so an answer that arrived while the
+          ;; child was already gone can never be the one that is accepted.
+          (not alive?)
+          (throw (ex-info (format (str "capture refuses: the stack from %s exited before becoming "
+                                       "ready%s. See %s")
+                                  worktree
+                                  (if (and res (= 200 (:status res)))
+                                    (str ", and something else is answering on port " port
+                                         " — that answer is not this capture's to record")
+                                    "")
+                                  log-file)
+                          {:worktree worktree :log log-file :port port
+                           :foreign-response (when res (:status res))}))
 
-          (not (.isAlive p))
-          (throw (ex-info (format "capture refuses: the stack from %s exited before becoming ready. See %s"
-                                  worktree log-file)
-                          {:worktree worktree :log log-file}))
+          (and res (= 200 (:status res)))
+          (let [running {:process p :base-url base-url :readyz (:body res)
+                         :instance-id instance-id :source-commit source-commit}]
+            (try
+              (assert-same-process! running)
+              (catch Exception e
+                (.destroy p)
+                (throw e)))
+            running)
 
           (> (System/currentTimeMillis) deadline)
           (do (.destroy p)
@@ -250,12 +402,18 @@
 (defn assert-schema-matches!
   "The running stack's applied schema version must be the captured commit's.
 
-  The independent check described in this namespace's docstring. `readyz` is
-  the service's own answer about the database it is connected to; the index is
-  the commit's own list of migrations. They are produced by different things,
-  which is the only reason comparing them is worth anything (standing lesson
-  **L-16**: when two copies of a claim can only agree, agreement proves
-  nothing)."
+  **A schema version is a check, not an identity**, and saying otherwise is the
+  correction this docstring carries: any process that has applied the same
+  migrations reports the same string, so agreement here narrows what could be
+  answering and never names it. What names it is `assert-same-process!`. This
+  check keeps its own value beside that one — it is the thing that fails when
+  the right process is connected to the wrong database.
+
+  `readyz` is the service's own answer about the database it is connected to;
+  the index is the commit's own list of migrations. They are produced by
+  different things, which is the only reason comparing them is worth anything
+  (standing lesson **L-16**: when two copies of a claim can only agree,
+  agreement proves nothing)."
   [readyz-body worktree]
   (let [reported (second (re-find #"\"schemaVersion\"\s*:\s*\"([^\"]+)\"" (str readyz-body)))
         expected (migration-head worktree)]

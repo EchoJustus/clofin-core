@@ -4453,6 +4453,19 @@ components:
             particular never a branch name — a value that is not a commit id is
             ignored rather than reported, because a branch name displayed under
             the label "commit" is stable, plausible and wrong.
+        instanceId:
+          type: string
+          examples: ["6f0a9c1e-6a4e-4a1a-9a1d-0d3a2b5c7e91"]
+          description: |
+            An opaque identifier the operator passed at start-up, echoed
+            verbatim. **Self-reported like `sourceCommit`**, and absent when
+            none was passed — there is no placeholder, because a caller that
+            passed nothing must not receive a string that looks like an answer.
+
+            It carries no meaning to CloFin: the service does not parse it,
+            generate one, or refuse a value. Its use is a caller that started
+            this process and wants to establish that the process answering is
+            the one it started, which a port and a schema version cannot show.
         documentation: { type: string, format: uri }
 
     Health:

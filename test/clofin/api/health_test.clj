@@ -73,3 +73,28 @@
                (assoc config :source-commit "f10974c7762eb9e095694fcfb3aaa72c0bee4bdf")]]
       (let [reported (get-in ((health/info c) {}) [:body "sourceCommit"])]
         (is (or (build-info/commit-id? reported) (= build-info/unknown reported)))))))
+
+(deftest service-info-echoes-an-instance-id-and-omits-it-when-there-is-none
+  (testing "echoed verbatim: the service does not parse it, shorten it, or
+            decide what a good one looks like"
+    (doseq [given ["6f0a9c1e-6a4e-4a1a-9a1d-0d3a2b5c7e91"
+                   "capture-run-1"
+                   "a value with spaces and Mixed Case"]]
+      (is (= given (get-in ((health/info (assoc config :instance-id given)) {})
+                           [:body "instanceId"])))))
+
+  (testing "absent when nothing was passed — and absent means absent, not null
+            and not a placeholder. A caller that passed no instance id must not
+            receive a string that looks like an answer (ADR-0027 amendment 3a)"
+    (doseq [c [config
+               (assoc config :instance-id nil)
+               ;; `clofin.config/load-config` turns a blank environment variable
+               ;; into nil; this is the same case arriving from a hand-built map.
+               (assoc config :instance-id "")]]
+      (is (not (contains? (:body ((health/info c) {})) "instanceId"))
+          (str "instanceId must not appear for " (pr-str (:instance-id c))))))
+
+  (testing "and it changes nothing else about the response"
+    (let [without (:body ((health/info config) {}))
+          with (:body ((health/info (assoc config :instance-id "run-7")) {}))]
+      (is (= without (dissoc with "instanceId"))))))

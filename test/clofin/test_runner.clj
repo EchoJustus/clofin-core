@@ -61,7 +61,11 @@
     ;; ADR-0020 RULE 2: the capture harness cannot emit an unstamped bundle.
     ;; Every field of the stamp removed in turn, with the walk itself asserted
     ;; exhaustive against the requirement list (AC-2, lesson L-13).
-    clofin.tools.capture-test])
+    clofin.tools.capture-test
+    ;; 2C-006, lesson L-19: a capture binds to the process it started, not to a
+    ;; port and not to a schema version. Needs no service — the stranger on the
+    ;; port is a local HttpServer.
+    clofin.tools.capture-stack-test])
 
 (def integration-namespaces
   "Tests that need a reachable PostgreSQL instance."
@@ -88,6 +92,9 @@
     clofin.api.settlement-api-test
     clofin.recon.repository-test
     clofin.api.reconciliation-api-test
+    ;; 2C-002 and 2B-004: reconciliation where the outcome depends on timing —
+    ;; the receipt-collision matrix and the two-connection lock proofs.
+    clofin.recon.concurrency-test
     clofin.system-test])
 
 (defn integration?
