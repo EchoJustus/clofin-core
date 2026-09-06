@@ -93,16 +93,34 @@ paragraph in the same block.
 
 ### Everything fails closed
 
-`clofin.tools.capture.bundle/write!` validates the complete stamp **before it
-opens a file**, and is the only path to a bundle on disk. There is no
+**Every writer** validates the complete stamp **before it opens a file** —
+`write!`, `write-fixture!`, `write-quotations!` and `write-manifest!`, through
+the one gate `clofin.tools.capture.bundle/assert-provenance!`. There is no
 `--no-verify`, no environment variable that skips it, and no `spit` anywhere
 else in the harness. A refusal therefore leaves nothing behind that looks like
 output — which matters, because the next step in the pipeline copies files.
 
-`clofin.tools.capture-test` removes each required field in turn and asserts
-both the refusal and the absence of the file, and a further test asserts that
-the removal list and the requirement list are equal, so a field added to the
-stamp without a test fails rather than passing unnoticed (**L-6**).
+*Corrected 2026-09-06 (TASK-015, release-audit finding **2C-005**).* This
+paragraph used to say `write!` "is the only path to a bundle on disk", which
+was true of a bundle and false of the sentence it was doing duty for: four
+functions in this harness open files, and two of them — `write-quotations!` and
+`write-manifest!` — validated nothing at all. The audit called all four with an
+absent stamp; two refused and created no file, and two wrote one. The wording
+was accurate about the artifact it named and wrong about the promise the rest
+of this section makes, which is standing lesson **L-17** in a sentence: a claim
+complete along one dimension of its set and absent along another. The gate is
+now one function that every writer calls first, and the tests below are a
+writer x required-field matrix rather than a field list over one writer.
+
+`clofin.tools.capture-test` removes each required field in turn **from each of
+the four writers** and asserts both the refusal and the absence of the file;
+a further test asserts that the removal list and the requirement list are equal,
+and another that the writers exercised are exactly the harness's public
+`write*!` vars, so neither a field nor a writer added later passes unnoticed
+(**L-6**, **L-17**). A third asserts that `(spit` appears four times in
+`bundle.clj` and nowhere else under `tools/clofin/tools/capture/`, which is what
+makes "no `spit` anywhere else in the harness" a checked claim rather than a
+remembered one.
 
 ### Bundles are committed in `clofin-trace`, not here
 
