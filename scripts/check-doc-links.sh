@@ -23,8 +23,13 @@ for file in $(find . -name '*.md' -not -path './node_modules/*' -not -path './.g
   checked=$((checked + 1))
 
   # Extract the target of every markdown link, then discard external links,
-  # bare anchors and mailto:.
-  targets=$(grep -o '](\([^)]*\))' "$file" 2>/dev/null \
+  # bare anchors and mailto:. Lines inside fenced code blocks are skipped
+  # first: a fence quotes text — an audit deliverable quoting a ROADMAP line
+  # verbatim, evidence that must not be edited to please a checker — and a
+  # link inside a quotation is part of the quoted bytes, not a link this
+  # document makes (added 2026-09-06 when FEEDBACK-REL-ref-2 was ingested).
+  targets=$(awk '/^```/ { fenced = !fenced; next } !fenced' "$file" 2>/dev/null \
+            | grep -o '](\([^)]*\))' \
             | sed 's/^](//; s/)$//' \
             | grep -v '^https\?://' \
             | grep -v '^#' \

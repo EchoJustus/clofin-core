@@ -31,6 +31,7 @@ and this table is stale.
 | 8.2 | Cockpit — CORS allowlist, instance connect, seed bootstrap | [TASK-012](briefs/012-TASK-cockpit-connect-and-bootstrap.md) | ✅ `CLOSED` — PR #23 (`f174116`) + `clofin-cockpit` PR #2 (`90abb1d`) | green, both repositories |
 | 8.3 | Cockpit — operation flows, scheme play, evidence view | [TASK-013](briefs/013-TASK-cockpit-operations-and-scheme-simulation.md) | ✅ `CLOSED` — cockpit PR #3 (`7ee7e28`) + REQ-only core PR #25 (`b962d7f`); frozen core held | green, cockpit CI ×2 |
 | 8.4 | Cockpit — Actions scenario runner, PAT-free | [TASK-014](briefs/014-TASK-cockpit-scenario-runner.md) | ✅ `CLOSED` — cockpit PR #4 (`9283dbf`) + REQ-only core PR #27 (`ea428a3`); hosted run #1 against `ref-1` green, 27/27 steps | green, incl. the hosted scenario run |
+| ref-2 | Release remediation — `FEEDBACK-REL-ref-2` (2 B / 20 S / 1 C), then the annotated tag | [TASK-015](briefs/015-TASK-ref-2-release-remediation.md) | 🔨 `IN PROGRESS` — dispatched 2026-09-06 against the ingested audit | — |
 | 7, 9 | Financial crime; programmable settlement | not yet briefed | 💭 later | — |
 
 **Controls now enforced on `main`.** As of 2026-08-04 the increment-3/4 stack is
@@ -69,6 +70,15 @@ lightweight (007-REQ O-1), and `docs/releases/ref-1.annotation.txt` on `main`
 mirrors the text byte for byte. All 19 findings were
 remediated before the tag. **Uncovered audit scope (items 5–7) carries forward
 as mandatory-first scope for `ref-2`.**
+
+**`ref-2` — audited in full, not yet tagged.** The RC `c97a4f2` received the
+first complete release audit: all eight charter items performed
+(`docs/audits/FEEDBACK-REL-ref-2.md` — 2 blocking / 20 should-fix / 1
+consider). Both blocking findings are confirmed in source. The tag lands on the
+remediation descendant once
+[TASK-015](briefs/015-TASK-ref-2-release-remediation.md) is merged and
+re-verified — pushed as an **annotated** tag verified by the peeled `^{}` line,
+with an annotation that carries the canonical disclaimer verbatim.
 
 **Visual layer — and what it displaces.** `ADR-0020`
 *(`docs/ADR/0020-two-repositories-and-the-generate-replay-rules.md`, merged to
@@ -155,9 +165,15 @@ to rediscover them:
 - **PR-044 partial-reversal accumulation** is not implemented; an instruction can
   be reversed more than once, unlike a journal entry (I4 has no instruction-level
   counterpart yet).
-- **No indexes on `payment_instruction`** — the measure-before-optimising posture,
-  but a real gap at volume.
-- `transactionally` exists in two namespaces; a two-line delegation closes it.
+- **Indexes on `payment_instruction`** — only the partial reverse-lookup index
+  `payment_instruction_retries_idx` exists (migration `0013`, TASK-010);
+  workload indexes still wait on measurement, the measure-before-optimising
+  posture. *(This bullet said "no indexes" until 2026-09-06 — corrected at the
+  `ref-2` audit's ingestion, finding 2B-006.)*
+- ~~`transactionally` exists in two namespaces~~ — **closed**: one definition
+  remains, in `clofin.db.core`; the duplicate was deleted rather than delegated,
+  and the ledger repository's comment records it. *(Recorded closed 2026-09-06,
+  2B-006.)*
 
 *Why next: the lifecycle is the spine every control attaches to.*
 
@@ -186,9 +202,14 @@ to rediscover them:
 
 **Carried forward, deliberately** (from [003-REQ](audits/003-REQ-authorisation-and-audit-trail.md) §6):
 
-- **Ledger and organisation writes emit no audit events** — C-05's scope
-  paragraph names the gap; **briefed as
-  [TASK-005](briefs/005-TASK-audit-coverage-completion.md)**, dispatched 2026-08-04.
+- ~~**Ledger and organisation writes emit no audit events**~~ — **closed by
+  [TASK-005](briefs/005-TASK-audit-coverage-completion.md)** (PR #6, `2ba977e`):
+  `organisation.created`, `account.created` and `journal-entry.posted` are
+  emitted in the writing transaction, and the public audit-coverage test
+  expects them. *(This bullet still read "briefed, dispatched 2026-08-04" until
+  2026-09-06 — corrected at the `ref-2` audit's ingestion, 2B-006. The same
+  audit found a different gap beside it: settlement's own journal postings
+  bypass the emitting service, 2C-009, remediated in TASK-015.)*
 - **The approver's limit at decision time is not retained** (O-4): two capture
   columns on `approval` belong in a future brief.
 - **Authentication does not resist an adversary** — `X-Actor-Id` names a seeded
@@ -251,8 +272,12 @@ to rediscover them:
 ## How to pick up the next task
 
 Take the lowest-numbered brief in [`briefs/`](briefs) that is `READY` with its
-dependencies met — currently **TASK-001**. Set its `Status` to `IN PROGRESS` in
-your first commit; that commit is the lock other sessions check.
+dependencies met — the backlog table in [`briefs/README.md`](briefs/README.md)
+is the authority, and this paragraph names no task, because a task named here
+is a status copy the consistency guard cannot see (it said "currently
+**TASK-001**" from 2026-08-02 until 2026-09-06, fourteen closed briefs later —
+`ref-2` audit finding 2C-008, lesson L-16). Set its `Status` to `IN PROGRESS`
+in your first commit; that commit is the lock other sessions check.
 
 Each brief is self-contained — scope, schemas, acceptance criteria, out-of-scope
 notes and the traps to avoid — so a session with no access to the conversation
