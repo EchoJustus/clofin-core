@@ -36,6 +36,20 @@ follow, and they are part of the charter, not advice.
    **full whole-repo** or **delta-scoped** to the changes since the previous
    tag plus the fixed core, per the assurance-chain decision of 2026-08-05.
 
+*Amended 2026-09-06, from the `ref-2` experience.* Three additions to the rules
+above. **(a)** Mandatory-first scope carried from a previous audit runs
+*before* anything the previous audit covered, whatever the default split says
+— `ref-2` ran items 5–7 in session B and items 3–4 in session C for that
+reason. **(b)** A session that runs out of context or allocation before item 8
+writes its coverage line and stops; a **session D** performs item 8 and the
+report from the workpapers, re-running nothing, under a prompt recorded
+verbatim beside the commission. **(c)** Rule 2 gains citation provenance: every
+`file:line` a session writes is pinned to source bytes and physical lines at
+the RC; item 8 prints each one and records `matches` / `corrected (finding
+stands)` / `discarded` beside the original, never by rewriting the workpaper
+(`ref-2`'s session D verified 230 citations this way, correcting 99 and
+discarding none).
+
 **If a session is interrupted anyway** — quota, context, or environment — the
 resource-interruption fallback applies: the partial findings are triaged and
 remediated, the release is cut, the uncovered items are named in the artifact's
@@ -154,3 +168,8 @@ decisions*).
 *Amended again 2026-08-05 (second decision of that date): the audit's
 subject is defined as the `clofin-core` release candidate with the capture
 harness explicitly in scope, and item 3 now names ROADMAP-vs-COMPLIANCE.*
+
+*Amended 2026-09-06, after the first complete release audit (`ref-2`):
+mandatory-first ordering, the session-D allowance, and citation provenance
+join the rules of 2026-08-05 — see the amendment under "How a release audit is
+run".*
