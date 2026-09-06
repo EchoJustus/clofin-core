@@ -118,11 +118,17 @@ See [ADR-0003](ADR/0003-money-as-integer-minor-units.md).
 and the response it produced.
 
 Modelled as a **record of its own** rather than as a field on the instruction,
-because the key protects *every* mutating operation — a submission, an
-amendment, a cancellation — and not only the creation of an instruction. A key
-that lived on `payment_instruction` could make creation idempotent and nothing
-else, which would leave submission unprotected: precisely the operation whose
-timeout the control exists for. See
+because the key protects every mutating **payment and approval** operation — a
+submission, an amendment, a cancellation, a decision — and not only the creation
+of an instruction. A key that lived on `payment_instruction` could make creation
+idempotent and nothing else, which would leave submission unprotected: precisely
+the operation whose timeout the control exists for.
+
+The six it protects are `clofin.idempotency/protected-operations`; the route
+table's other eleven mutations do not take a caller key and are guarded
+otherwise, which [C-06](COMPLIANCE.md) sets out. This paragraph said "*every*
+mutating operation" until the `ref-2` release audit (**2B-009**, standing
+lesson **L-14**). See
 [C-06](COMPLIANCE.md) and
 [ADR-0013](ADR/0013-canonical-request-digest-for-idempotency.md).
 

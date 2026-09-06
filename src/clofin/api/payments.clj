@@ -12,7 +12,13 @@
   - `409` — the lifecycle refuses the operation, or an `Idempotency-Key` has
     already been used for a different request.
 
-  **Every mutating operation is idempotent** (PR-040). The key is read from the
+  **Every mutating operation in this namespace is idempotent** (PR-040), which
+  is six of the route table's seventeen mutations — these and approvals'; the
+  set is `clofin.idempotency/protected-operations` and the other eleven are
+  guarded by something else, each named in `docs/COMPLIANCE.md` C-06. The
+  qualifier was absent until the `ref-2` release audit read this sentence as
+  covering every mutation CloFin has (**2B-009**, standing lesson **L-14**).
+  The key is read from the
   `Idempotency-Key` header, the request is digested — method, path and body —
   and the effect runs inside the transaction that stores both, so a retry either
   replays the stored response or does nothing at all. Digesting the path as well

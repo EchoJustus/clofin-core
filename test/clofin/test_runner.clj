@@ -92,6 +92,11 @@
     clofin.api.settlement-api-test
     clofin.recon.repository-test
     clofin.api.reconciliation-api-test
+    ;; 2C-010: every operation in the route table driven through the public
+    ;; handler and its response checked against the contract on three
+    ;; dimensions — status declared, required members present, enum values
+    ;; declared. Narrows A-011; does not close it.
+    clofin.api.conformance-test
     ;; 2C-002 and 2B-004: reconciliation where the outcome depends on timing —
     ;; the receipt-collision matrix and the two-connection lock proofs.
     clofin.recon.concurrency-test

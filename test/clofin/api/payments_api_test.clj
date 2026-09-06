@@ -397,7 +397,7 @@
 (deftest amending-something-that-is-not-amendable-is-rejected-not-ignored
   (let [f (setup)
         pi (new-instruction! f)]
-    (doseq [member ["status" "createdBy" "id" "reversesId"]]
+    (doseq [member ["status" "createdBy" "id" "reversesId" "createdAt" "retriesId"]]
       (let [{:keys [status json]}
             (call :patch (str "/payment-instructions/" (get pi "id"))
                   {:idempotency-key (key!)
@@ -405,6 +405,27 @@
         (is (= 422 status) (str member " must be refused"))
         (is (= "cannot be amended" (get-in json ["errors" member]))
             "silently dropping it would leave the caller believing it changed something")))))
+
+(deftest ac-12-a-matching-organisation-id-asserts-the-tenant-and-amends-nothing
+  (testing "residual C-R10a. `organisationId` is not substance: sending it
+            scopes the request, exactly as it does on every other body in this
+            contract, and it is verified rather than trusted. The contract
+            listed it among the members a PATCH refuses `422`, and the release
+            audit's single authorised probe supplied a matching one with a
+            changed creditorName and was answered 200"
+    (let [f (setup)
+          pi (new-instruction! f)
+          {:keys [status json]}
+          (call :patch (str "/payment-instructions/" (get pi "id"))
+                {:idempotency-key (key!)
+                 :body {"organisationId" (get-in f [:org "id"])
+                        "creditorName" "Pacific Rim Logistics Ltd"}})]
+      (is (= 200 status) (str "a matching organisationId must not be refused — " json))
+      (is (= "Pacific Rim Logistics Ltd" (get json "creditorName")))
+      (is (= (get-in f [:org "id"]) (get json "organisationId"))
+          "and the tenant is the one it always was: the field asserted scope,
+           it did not amend identity")
+      (is (= "draft" (get json "status"))))))
 
 (deftest ac-4-submitting-a-draft-reaches-pending-approval
   (let [f (setup)
@@ -554,7 +575,9 @@
   (let [f (setup)
         pi (new-instruction! f)
         org-id (get-in f [:org "id"])]
-    (testing "PR-040 — every mutating operation requires an Idempotency-Key"
+    (testing "PR-040, as far as it is built — every mutating operation *in this
+              namespace* requires an Idempotency-Key. The whole seventeen-route
+              sweep is `clofin.api.conformance-test`'s (2B-009)"
       (doseq [[method uri body]
               [[:post "/payment-instructions" (instruction-body f)]
                [:patch (str "/payment-instructions/" (get pi "id"))

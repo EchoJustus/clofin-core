@@ -30,12 +30,40 @@
   unbounded index term is a caller's decision about CloFin's storage."
   255)
 
+(def protected-operations
+  "The operations that require an `Idempotency-Key`, by `:operation-id`.
+
+  **Six of the route table's seventeen mutations**, not all of them, and saying
+  otherwise is release-audit finding **2B-009**. This function's docstring and
+  its own `400` said the header was mandatory on *every* mutating endpoint,
+  which a maintainer could read as fail-closed retry protection for writes that
+  offer no caller-key contract at all — the universal-quantifier class standing
+  lesson **L-14** is about, inside the mechanism rather than in a document.
+
+  The eleven that do not take one are not unguarded; they are guarded by
+  something else, and by something better suited to them. Organisation, account
+  and journal writes carry their own natural keys; settlement is guarded by
+  batch lifecycle and by `settlement_item_instruction_key`; reconciliation's
+  replay protection is the statement's own reference plus a canonical digest of
+  every effect-bearing field, which is *stronger* than a caller-chosen header
+  because two callers delivering the same document under different keys are
+  still one delivery. `docs/COMPLIANCE.md` C-06 says all of this at length.
+
+  A set rather than a sentence, so `clofin.idempotency-test` can compare it with
+  the route table and with the contract's `IdempotencyKey` references in both
+  directions. Extending the mechanism to the remaining eleven is a design
+  decision, not a docstring edit."
+  #{"createPaymentInstruction" "amendPaymentInstruction" "submitPaymentInstruction"
+    "cancelPaymentInstruction" "approvePaymentInstruction" "withdrawApproval"})
+
 (defn read-key
   "Validate and normalise a caller-supplied idempotency key.
 
-  The header is **mandatory** on every mutating endpoint (PR-040): a request
-  that omits it is `400` rather than being quietly executed, because a caller
-  that has not thought about retries is exactly the caller a retry will hurt.
+  The header is **mandatory on the six operations in `protected-operations`** —
+  the payment and approval mutations (PR-040): a request that omits it is `400`
+  rather than being quietly executed, because a caller that has not thought
+  about retries is exactly the caller a retry will hurt. The route table's
+  other eleven mutations do not read it and do not refuse a request without it.
 
   Control characters are rejected rather than stripped. Stripping would make
   two different keys compare equal, which is a collision in the one field whose
@@ -43,8 +71,12 @@
   [value]
   (when-not (and (string? value) (not (str/blank? value)))
     (err/invalid!
-     "Header 'Idempotency-Key' is required on every mutating request"
-     {:header "Idempotency-Key"}))
+     (str "Header 'Idempotency-Key' is required on this request. It is required "
+          "on the six payment and approval mutations — "
+          (str/join ", " (sort protected-operations))
+          " — and on no other operation")
+     {:header "Idempotency-Key"
+      :required-on (vec (sort protected-operations))}))
   (let [key (str/trim value)]
     (when (> (count key) max-key-length)
       (err/invalid! (str "Header 'Idempotency-Key' must be at most " max-key-length

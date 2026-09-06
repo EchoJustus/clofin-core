@@ -50,8 +50,12 @@ export BASE=http://localhost:8080
 
 Two conventions used throughout:
 
-- Every mutating request needs an `Idempotency-Key`. Use a fresh UUID each
-  time — `uuidgen` or any random string will do.
+- Every payment and approval mutation needs an `Idempotency-Key` — the six
+  operations `clofin.idempotency/protected-operations` names, which are the
+  ones this script uses. Use a fresh UUID each time — `uuidgen` or any random
+  string will do. The route table's other eleven mutations do not take one and
+  ignore it if you send one; `docs/COMPLIANCE.md` C-06 says what guards them
+  instead.
 - Every request except organisation creation needs an `X-Actor-Id`. **This is
   not authentication that resists an adversary**, and the API contract says so:
   there is no token and no signature. It names which seeded actor you are
