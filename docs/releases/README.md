@@ -62,6 +62,42 @@ that paragraph is what the harness quotes, whole, and the word between the
 heading and the first full stop is the short label the provenance block shows
 beside the tag and the SHA.
 
+## The canonical scope sentence
+
+**From `ref-2` onward, every annotation carries this sentence verbatim:**
+
+> CloFin operates on synthetic data only. It is not connected to any bank,
+> payment scheme or central bank, holds no regulatory authorisation, and never
+> processes real funds.
+
+It lives in [`resources/disclaimer.txt`](../../resources/disclaimer.txt), which
+is also what `GET /` serves and what `make help` prints, and
+`scripts/check-disclaimer.sh` compares all three — run by `make verify`, so a
+surface cannot quietly restate the boundary more weakly than the service does.
+
+The rule exists because three surfaces said three things. `GET /` states four
+negations; `make help` stated three and omitted the never-processes-real-funds
+clause (release-audit finding **2B-007**); and the `ref-1` release body states
+four negations and omits the regulatory-authorisation one (**2B-008**). None
+was untrue. Together they meant the boundary a reader learned depended on which
+surface they happened to read, which is exactly what standing lesson **L-14**
+is about.
+
+### Historical exemptions
+
+Annotations published before the rule existed. **These files are not edited** —
+a mirror is a byte-for-byte copy of a published artifact, `make
+check-release-annotation` proves it, and rewriting one to please a checker
+would make the mirror a fiction. The omission is recorded here instead.
+
+| Tag | Reason |
+|---|---|
+| `ref-1` | Published 2026-08-05, before the rule. Its scope paragraph denies production deployment, attestation, institutional connectivity and real-funds handling, and does not state that CloFin holds no regulatory authorisation (finding **2B-008**, dispositioned *deferred with a target* — this section and the check are that target). Stronger language on four axes does not supply the fifth, and the gap is named here rather than left to be discovered. |
+
+A tag listed here must carry a reason: an exemption nobody has to justify is
+not an exemption. `check-disclaimer.sh` fails on a row whose reason cell is
+empty.
+
 ## Keeping them honest
 
 ```sh

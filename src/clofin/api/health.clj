@@ -9,9 +9,33 @@
   (:require [clofin.build-info :as build-info]
             [clofin.db.core :as db]
             [clofin.db.migrate :as migrate]
-            [clofin.http.response :as resp]))
+            [clofin.http.response :as resp]
+            [clojure.java.io :as io]
+            [clojure.string :as str]))
 
 (def ^:private started-at (System/currentTimeMillis))
+
+(def disclaimer
+  "The canonical scope statement, read from `resources/disclaimer.txt`.
+
+  **One place, and every restatement is a copy of it.** `GET /` serves this,
+  `make help` prints this file, and `scripts/check-disclaimer.sh` compares
+  every release annotation against it — so the operator-facing and
+  reader-facing surfaces cannot say three different things, which is what they
+  did. `make help` stated synthetic data, no institutional connection and no
+  regulatory approval and omitted the explicit never-processes-real-funds
+  clause (release-audit finding **2B-007**), and the `ref-1` release body
+  states four negations and omits the regulatory one (**2B-008**). Each was
+  individually reasonable and collectively a set of surfaces that disagreed
+  about the boundary.
+
+  Read at load and trimmed of its trailing newline, because a file wants one
+  and a JSON string must not have one — the value this serves is byte for byte
+  the value it served before this file existed, which `clofin.api.health-test`
+  asserts."
+  (-> (io/resource "disclaimer.txt")
+      slurp
+      str/trim))
 
 (defn healthz
   "Liveness. Answers as long as the process can serve a request; it must not
@@ -66,9 +90,7 @@
     (resp/ok (cond-> {"service" "clofin-core"
                       "description" "Open-source enterprise payments and reconciliation core"
                       "environment" (name (:environment config))
-                      "disclaimer" (str "CloFin operates on synthetic data only. It is not connected "
-                                        "to any bank, payment scheme or central bank, holds no "
-                                        "regulatory authorisation, and never processes real funds.")
+                      "disclaimer" disclaimer
                       "sourceCommit" (or (:source-commit config) build-info/unknown)
                       "documentation" "https://github.com/EchoJustus/clofin-core"}
                ;; `not-empty`, not truthiness: an empty string is a value in

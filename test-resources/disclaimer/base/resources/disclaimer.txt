@@ -1,0 +1,1 @@
+CloFin operates on synthetic data only. It is not connected to any bank, payment scheme or central bank, holds no regulatory authorisation, and never processes real funds.

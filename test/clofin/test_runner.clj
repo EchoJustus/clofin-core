@@ -65,7 +65,10 @@
     ;; 2C-006, lesson L-19: a capture binds to the process it started, not to a
     ;; port and not to a schema version. Needs no service — the stranger on the
     ;; port is a local HttpServer.
-    clofin.tools.capture-stack-test])
+    clofin.tools.capture-stack-test
+    ;; 2B-007 and 2B-008: the canonical scope sentence has one home, and every
+    ;; surface restating it is compared with that home rather than trusted.
+    clofin.tools.disclaimer-test])
 
 (def integration-namespaces
   "Tests that need a reachable PostgreSQL instance."

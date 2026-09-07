@@ -1,0 +1,8 @@
+Date:        2026-09-06
+
+WHAT THIS IS. A fixture release body published under the rule, so it carries
+the canonical sentence verbatim:
+
+CloFin operates on synthetic data only. It is not connected to any bank, payment scheme or central bank, holds no regulatory authorisation, and never processes real funds.
+
+RELEASE AUDIT: FULL. A fixture.
