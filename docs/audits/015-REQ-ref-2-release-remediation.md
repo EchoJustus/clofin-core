@@ -13,7 +13,7 @@
 | **Migrations** | **None.** Every item was code, tests, contract or prose against the schema at `0013`. The brief's migration pre-flight says *No migration* and nothing here needed one. Migrations replayed `0001`→`0013` from an empty schema after the last commit: 13 applied, 0 pending |
 | **Controls touched** | **C-05** and **C-13** in `docs/COMPLIANCE.md`, plus one new row in §4 — **statements narrowed or made true, no control weakened**. C-05 **strengthened**: its service list is now compared with `service-namespaces` in both directions. C-13 **strengthened** twice: its evidence sentence states the bound it always had, and its posting-path sentence became true and is now enforced by a producer census rather than described. C-06's prose copies outside COMPLIANCE are narrowed (§6b); its own section already narrowed and is unchanged. The capture harness (ADR-0022) is strengthened on both of its findings |
 | **Status** | Implemented. Both blockers closed; all 20 should-fix, the consider, and C-R10a actioned. **Four objections in §9**, none resolved unilaterally |
-| **Verification** | `make verify` **525 tests / 3,244 assertions**, 0 failures, 0 errors. `make test-it` **951 tests / 7,272 assertions**, 0 failures, 0 errors. **No verification is in flight** (**L-9**) — see §8 |
+| **Verification** | `make verify` **525 tests / 3,244 assertions**, 0 failures, 0 errors. `make test-it` **951 tests / 7,272 assertions**, 0 failures, 0 errors. **A verification is in flight** (**L-9**) — an adversarial review of the diff; see §8, which is a hold on merging |
 
 ---
 
@@ -343,14 +343,39 @@ excluded from action by the brief and are listed for completeness.
 
 ## 8. Verification status at completion (L-9)
 
-**Nothing is in flight.** `make verify` and `make test-it` were both run to
-completion on the final tree, green, with the counts in the header. The
-migration replay from empty was run after the last commit. The live-stack run in
-§5 was completed and its stack torn down. Every RC comparison quoted above was
-run before the corresponding fix.
+**One verification is in flight, and this section is the hold.** `make verify`
+and `make test-it` were both run to completion on the final tree, green, with
+the counts in the header. The migration replay from empty was run after the last
+commit. The live-stack run in §5 was completed and its stack torn down. Every RC
+comparison quoted above was run before the corresponding fix.
 
-No review, test run or adversarial pass of mine is still executing, and I have
-no pending fix I expect to push after this report.
+**Still running: an adversarial review of the whole diff**, across five
+dimensions — correctness of each fix, whether the new guards are non-vacuous,
+brief compliance, the accuracy of this file's own claims, and regressions. Each
+finding it produces is verified by an independent pass before I act on it.
+
+**This PR must not be merged until I report that review complete and clean**, or
+push what it finds and then report. That is standing lesson **L-9** in the form
+it was learned: PR #6 was merged ten minutes before its author's declared review
+surfaced a real false-contract defect, whose fix then could not land. A
+completion report that is silent on a running review is what made that possible,
+so this one is not silent.
+
+Two questions the review was launched to answer have already been settled
+directly, because they were the two most dangerous:
+
+- **The digest passed by the applied-path collision recovery.** It is computed
+  on the original statement while the receipt it may find was written from
+  `with-line-numbers`'d one. If those differed, an identical re-delivery losing
+  the race would be refused as a conflict. They do not differ —
+  `semantic-content` excludes `:line-no` — verified by probe, and covered
+  end-to-end by `ac-1-identical-documents-racing-…`.
+- **`clofin.api.health/disclaimer` reads a resource at namespace load.** The
+  container image copies `resources/` and puts it on the classpath
+  (`infra/Dockerfile`), and the resource resolves on a classpath shaped like the
+  image's, checked directly.
+
+Beyond that review I have no pending fix I expect to push.
 
 **One qualification on how the suites were run, stated because the numbers are
 the claim.** This environment has no Docker daemon, so `make test-it`'s
