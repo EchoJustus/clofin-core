@@ -12,6 +12,46 @@
 Append-only. A later change appends a new dated block; an existing block is
 never edited — the record of what was decided, and when, is the point.
 
+**2026-09-07 — TASK-015 delivered; both blockers re-verified; `ref-2`
+released from its gate; a merge rule set.** PR #31 (17 commits, 54 files,
+no migration, control-plane files untouched) merged at `32dfcc9`. **Master
+Control's reproduction**, on a local PostgreSQL 16 with the project's own
+toolchain: `make verify` 532 / 3,292 and `make test-it` 960 / 7,325 (the
+Worker's run 7,331; the property tests generate a varying number of cases),
+0 failures; and at the RC `c97a4f2`, with the branch's two blocker test files
+copied in, `clofin.recon.concurrency-test` fails both "different documents"
+cells with `replayed: true` on the losing delivery and the capture-stack
+namespace does not compile — the defects reproduced by the tests that now
+guard them. CI ran on `main` at `32dfcc9` (run 34091727538) and passed all
+three jobs, including the new disclaimer check. **Six objections ruled** in
+[TASK-015's changelog](../briefs/015-TASK-ref-2-release-remediation.md):
+O-1 and O-2 are brief defects of Master Control's (a premise stated without
+running it; a seed row the engine refuses under the brief's own "No
+migration"); O-3 and O-6 ratified; O-4 confirmed; O-5 accepted with ADR-0027
+§3a as the record and one condition carried to the trace-refresh brief.
+**L-3 widened** to every row of SQL a brief specifies; the template's
+pre-flight section is now *SQL pre-flight*, and a brief's claims about current
+behaviour carry the command that checked them. **The order was wrong once and
+is now a rule.** The operator merged PR #31 at 06:38Z before CI had run on the
+branch (every run from 01:04Z to 02:20Z failed in seconds with no runner
+allocated — a platform condition, cleared by the time the merge pushed) and
+before Master Control's rulings and reproduction; CI then ran on `main` and
+passed, and the reproduction followed. The gate held, because the tag waited
+for both. *Rule:* a Worker's PR is merged by Master Control after its
+objections are ruled and CI is green on the branch; when CI cannot run, the
+merge waits, and an operator who overrides that in writing accepts that
+verification moves onto `main`. **The tag.** `ref-2` lands on `32dfcc9` as an
+annotated tag whose message is the text at `docs/releases/ref-2.annotation.txt`
+(PR #32), carrying the canonical disclaimer verbatim and the coverage
+paragraph `RELEASE AUDIT: COMPLETE`. The proxy this session runs behind
+refuses tag pushes, tag-object creation and release creation, so — as at
+`ref-1` — the operator creates the tag from that file and publishes the
+pre-release; unlike `ref-1`, the tag is created with `git tag -a` and pushed
+as a tag object, and this register records the peeled `^{}` line once it is
+seen. **Commended, not ruled:** the Worker's declared adversarial review of
+its own delivered work found thirty-eight defects, three serious, held the PR
+on them, and reported every one — L-9 as designed.
+
 **2026-09-06 — The `ref-2` release audit is delivered and ingested; it gates
 the tag; remediation dispatched as TASK-015.** Delivered as
 [`FEEDBACK-REL-ref-2.md`](FEEDBACK-REL-ref-2.md) with **all eight charter
@@ -594,7 +634,7 @@ names the brief section that now guards against it, so the guard can be checked.
 |---|---|---|
 | L-1 | A brief pre-assigns a sequence number owned by another artifact series without checking the live sequence (TASK-002's DoD named UAT-003, which TASK-001 had already consumed; TASK-003 renumbered its migration and *still* hard-coded UAT-004; TASK-005's DoD said the REQ takes the "next available" number, 004, which belongs to the in-flight TASK-004 — 005-REQ O-2). | Brief authoring: never hard-code a number from any sequentially-numbered series, and **name the series' numbering discipline explicitly, because it differs** — the **audits `REQ` series is task-keyed** (`NNN-REQ` reports on `TASK-NNN`), while migrations, UAT scripts and ADRs are **next-available** against the live tree (including unmerged branches in the stack). Saying "next available" for the task-keyed REQ series is itself the bug. |
 | L-2 | Specifying replay protection as a digest of "the request body" alone scopes the guarantee too narrowly: identical bodies on different endpoints or resources collide, and a replayed response silently substitutes for work never done. Canonical digests include method and path. | Brief 002's idempotency section, as amended by ruling O-3. Any future brief specifying idempotency copies that wording. |
-| L-3 | A brief ships DDL that its target engine cannot honour as written: TASK-003 declared a nullable column inside a primary key, which PostgreSQL silently forces `NOT NULL`, making the brief's own documented null-currency row uninsertable (003-REQ O-1; corrected by ruling — `unique nulls not distinct`, migration `0006`). | Brief authoring: **execute every specified migration against a live PostgreSQL of the target version before dispatch**, and insert one row of every documented shape — a comment describing data the schema cannot hold is a defect the Worker inherits. |
+| L-3 | A brief ships DDL that its target engine cannot honour as written: TASK-003 declared a nullable column inside a primary key, which PostgreSQL silently forces `NOT NULL`, making the brief's own documented null-currency row uninsertable (003-REQ O-1; corrected by ruling — `unique nulls not distinct`, migration `0006`). | Brief authoring: **execute every specified migration against a live PostgreSQL of the target version before dispatch**, and insert one row of every documented shape — a comment describing data the schema cannot hold is a defect the Worker inherits. *Widened 2026-09-07 (015-REQ O-2):* **every row of SQL a brief specifies** — migration DDL, seed data, a UAT script's inserts — is executed against a live PostgreSQL before dispatch; TASK-015 said "No migration" and then specified an approval band `(0, 0)` that a check constraint from migration `0005` refuses. The template's section is *SQL pre-flight*. |
 | L-4 | A brief's acceptance criterion demands behaviour unreachable under an interface — or forbidden by a constraint — the same author specified elsewhere in the brief: TASK-003's AC-7 required amending an `approved` instruction the lifecycle table did not allow (003-REQ O-2); TASK-005's AC-1 required an OpenAPI description change its own DoD's "no OpenAPI changes" line forbade (005-REQ O-1); TASK-004's scope and vocabulary required a `failed` item outcome and `payment.failed` its own validated DDL had no column and no driver for (004-REQ O-1). | Brief authoring: cross-check every AC, scope item and vocabulary term against the state tables, diagrams, interfaces, **the migration DDL, and the brief's own Definition-of-Done checklist** — each is an interface a requirement can contradict. Do this before dispatch. A Worker who finds such a contradiction files it as an objection for arbitration; it is never resolved silently in either direction. **Partially mechanised 2026-08-05:** TASK-006's generated diagrams close the **diagram-vs-table** half — a drawing produced from `clofin.payments.state/transitions` and checked in CI cannot contradict the table. The **prose-vs-table** half, which is what actually caused this lesson's incident (AC-7 against the lifecycle table), remains a human check. The lesson is narrowed, **not closed**; a lesson marked closed stops being checked. |
 | L-5 | Append-only enforcement was specified and tested against `UPDATE` and `DELETE` only; `TRUNCATE` — a distinct verb with its own trigger event and privilege — physically emptied the audit table past every guard (FEEDBACK-M1 F-002, reproduced empirically by Master Control). | Any brief claiming a table is append-only enumerates the engine's **full** destructive verb set — `UPDATE`, `DELETE`, `TRUNCATE` — with a trigger per verb and a raw-SQL test per verb; and states plainly that triggers do not bind a schema-owner adversary, so the runtime role split (app role ≠ owner, `TRUNCATE`/DDL revoked — foreshadowed in migration 0002's own comment) is named debt until built. |
 | L-6 | A control rested on an invariant enforced nowhere, **or enforced only in part**. Two instances: C-01's `evaluate` compared only `created-by`, justified by a docstring claim with nothing behind it (FEEDBACK-M1 F-001); and TASK-005's enum-drift guard — the one Master Control *praised* as the remedy for exactly this — asserted `AuditEvent.subjectType` while a second copy in `EvidencePack.subjectType` silently went stale, so the guard passed green while the contract was false (005 tail; fixed in PR #7 `b21d4c1`, verified by Master Control). | Every premise a control relies on is traced to its own enforcement point — code, constraint, or test — and **a partial enforcement point is a false one**: a guard over "the copy the author was looking at" is the defect it exists to catch. Enforce over *all* instances discovered, not a named one (the fixed guard now finds every `subjectType` enum in the spec rather than naming one). |
