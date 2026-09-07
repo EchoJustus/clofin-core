@@ -11,9 +11,9 @@
 | **Reasoning effort** | High — extended thinking throughout. The harness exposes no numeric setting to the session, so this is the mode, not a measured value |
 | **Date** | 2026-09-07 |
 | **Migrations** | **None.** Every item was code, tests, contract or prose against the schema at `0013`. The brief's migration pre-flight says *No migration* and nothing here needed one. Migrations replayed `0001`→`0013` from an empty schema after the last commit: 13 applied, 0 pending |
-| **Controls touched** | **C-05** and **C-13** in `docs/COMPLIANCE.md`, plus one new row in §4 — **statements narrowed or made true, no control weakened**. C-05 **strengthened**: its service list is now compared with `service-namespaces` in both directions. C-13 **strengthened** twice: its evidence sentence states the bound it always had, and its posting-path sentence became true and is now enforced by a producer census rather than described. C-06's prose copies outside COMPLIANCE are narrowed (§6b); its own section already narrowed and is unchanged. The capture harness (ADR-0022) is strengthened on both of its findings |
+| **Controls touched** | **C-05** and **C-13** in `docs/COMPLIANCE.md`, plus one new §4 row and one §4 row rewritten (A-011: this batch made its "does not invoke a handler" sentence false) — **statements narrowed or made true, no control weakened**. C-05 **strengthened**: its service list is now compared with `service-namespaces` in both directions, and it carries the `events-for-payment` → `events-for-subject-and-its-approvals` rename from 2C-012. C-13 **strengthened** twice: its evidence sentence states the bound it always had, and its posting-path sentence became true and is now enforced by a producer census rather than described. C-06's prose copies outside COMPLIANCE are narrowed (§6b); its own section already narrowed and is unchanged. The capture harness (ADR-0022) is strengthened on both of its findings |
 | **Status** | Implemented, for the set this branch owns. Both blockers closed. Of the 20 should-fix, the register dispositions **14 as actioned in the subject** — those, the consider, and C-R10a are closed here; **5 were actioned on `meta`** (2B-001, 2B-002, 2B-006, 2B-011, 2C-008) and are not this branch's; **1 is deferred with a target** (2B-008 — the published `ref-1` release body is not rewritten, §7). "All 20 actioned" is what an earlier draft said, and it was a universal quantifier over a set the reader would take to be this branch when it was neither this branch's set nor all actioned (**L-14**, and the register's own vocabulary distinguishes *actioned* from *deferred*). **Four objections in §9**, none resolved unilaterally |
-| **Verification** | `make verify` **525 tests / 3,244 assertions**, 0 failures, 0 errors. `make test-it` **951 tests / 7,272 assertions**, 0 failures, 0 errors. **A verification is in flight** (**L-9**) — an adversarial review of the diff; see §8, which is a hold on merging |
+| **Verification** | `make verify` **530 tests / 3,273 assertions**, 0 failures, 0 errors. `make test-it` **958 tests / 7,309 assertions**, 0 failures, 0 errors. The adversarial review §8 held this PR for has **run, reported, and been acted on** — thirty defects in this branch's own work, twenty-seven fixed in `c918ca1` and `2e67dc5` and three recorded (§8, **O-6**). Nothing is in flight (**L-9**) |
 
 ---
 
@@ -370,39 +370,106 @@ omitted four others (`authz/model.clj`, `api/reconciliation.clj`, `ADR-0023`,
 
 ## 8. Verification status at completion (L-9)
 
-**One verification is in flight, and this section is the hold.** `make verify`
-and `make test-it` were both run to completion on the final tree, green, with
-the counts in the header. The migration replay from empty was run after the last
-commit. The live-stack run in §5 was completed and its stack torn down. Every RC
-comparison quoted above was run before the corresponding fix.
+**The review this section held the PR for has run. It found thirty defects in
+this branch's own work: twenty-seven are fixed, three are recorded and left with
+a reason.** `make verify` and `make test-it`
+were run to completion on the final tree, green, with the counts in the header.
+The migration replay from empty was run after the last commit. The live-stack
+run in §5 was completed and its stack torn down. Every RC comparison quoted
+above was run before the corresponding fix.
 
-**Still running: an adversarial review of the whole diff**, across five
-dimensions — correctness of each fix, whether the new guards are non-vacuous,
-brief compliance, the accuracy of this file's own claims, and regressions. Each
-finding it produces is verified by an independent pass before I act on it.
+### What the review was, and what it found
 
-**This PR must not be merged until I report that review complete and clean**, or
-push what it finds and then report. That is standing lesson **L-9** in the form
-it was learned: PR #6 was merged ten minutes before its author's declared review
-surfaced a real false-contract defect, whose fix then could not land. A
-completion report that is silent on a running review is what made that possible,
-so this one is not silent.
+An adversarial review of the whole diff across five dimensions — correctness of
+each fix, whether the new guards are non-vacuous, brief compliance, the accuracy
+of this file's own claims, and regressions — with every finding put through an
+independent verification pass before I acted on it. Three of the five dimensions
+reported; the verification pass then refuted three findings as already fixed by
+the commits they had prompted, which is the pass working rather than a
+disagreement.
 
-Two questions the review was launched to answer have already been settled
-directly, because they were the two most dangerous:
+The three headline defects were all in work this batch added, and all three were
+the shape the batch exists to remediate — **a guard whose stated set is larger
+than the set it walks**:
 
-- **The digest passed by the applied-path collision recovery.** It is computed
-  on the original statement while the receipt it may find was written from
-  `with-line-numbers`'d one. If those differed, an identical re-delivery losing
-  the race would be refused as a conflict. They do not differ —
-  `semantic-content` excludes `:line-no` — verified by probe, and covered
-  end-to-end by `ac-1-identical-documents-racing-…`.
-- **`clofin.api.health/disclaimer` reads a resource at namespace load.** The
-  container image copies `resources/` and puts it on the classpath
-  (`infra/Dockerfile`), and the resource resolves on a classpath shaped like the
-  image's, checked directly.
+- **The capture harness could no longer capture `ref-1`.** `assert-same-process!`
+  demanded an echo of `instanceId` and `sourceCommit`; those fields reached
+  `GET /` in `ref-2`, and `ref-1` — the documented default of
+  `make capture-trace` and the only tag that exists — has no way to produce
+  either. Every capture anyone could run would have refused. Fixed, and the
+  deviation from the brief's literal wording is now objection **O-5**.
+- **`withdrawApproval` never reached its handler.** The conformance walk read
+  the approval id from the top level of a body that nests it, and built
+  `/approvals/<nil>` — a path no route matches. The router's generic `404` was
+  recorded and the operation counted as exercised while its `200` schema was
+  checked by nothing. `getAccountStatement` was likewise driven only to a `400`,
+  leaving `Statement` — the contract's only `$ref` to it — unvalidated. A new
+  assertion now requires every operation the contract gives a `2xx` to reach
+  one; on the previous walk it fails with exactly
+  `{"getAccountStatement" [400], "withdrawApproval" [404]}`.
+- **Rule 5's quotation exemption silenced whole lines.** It stripped every
+  quoted span before looking for claim words, so `TASK-001 is "IN PROGRESS" this
+  week` recorded nothing, and one stray `"` swallowed the claim after it. Now
+  gated on the line recording a repair and on the quotes pairing, both failing
+  closed.
 
-Beyond that review I have no pending fix I expect to push.
+The rest were narrower and are listed in the commits that close them
+(`c918ca1`, `2e67dc5`): the producer census saw one call spelling of three; the
+CORS header scan knew three of four shapes; the capture sink census walked the
+harness minus its own entrypoint; the CORS "negative controls" were set-algebra
+tautologies; the schema checker dropped `allOf` siblings and passed `oneOf`
+silently; `COMPLIANCE` §4's A-011 row had been made false by this very batch and
+the guard over it only checked that a heading existed; and rule 5's `next`
+required a trailing space.
+
+### What it found in this file
+
+The review's fourth dimension read this report against the tree and found it
+wrong in eleven places. Every one is corrected above, and they are named here
+rather than silently repaired, because a report that quietly fixes its own
+citations is a report whose citations nobody can trust:
+
+- **§6a's line numbers were fiction.** The column is headed *Site at the RC*;
+  seven cited lines are past the end of a 333-line file, `map?` was cited at a
+  line asserting refusal reasons, and `every?` and `vector?` — which have rows —
+  appear nowhere in the namespace. The table is now generated from the RC blob.
+- **§6b omitted four non-control-plane hits** of the grep it states
+  (`authz/model.clj`, `api/reconciliation.clj`, ADR-0023, UAT-004) while listing
+  other benign hits with reasons — D-6 half-met, which is not met.
+- **The header claimed all 20 should-fix actioned.** The register dispositions
+  14 in the subject, 5 on `meta`, and **1 deferred** (2B-008) — and this file's
+  own §7 says so. A universal quantifier over a set that was neither this
+  branch's nor all actioned.
+- **§2 and §3 quoted a run of a five-test draft** of the concurrency namespace
+  (8 failures / 76 assertions) while §4 reasoned from the seven-test run that
+  shipped, so two sections described different runs of one named command.
+- **The 2C-009 row counted 25 failures**, one of which the 2B-005 row separately
+  and correctly counts as its own.
+- **The base-diff claim said "one line"** of `check-doc-links.sh`; it is 2
+  insertions and 7 deletions.
+- **§5 and §6b mixed two trees' line numbers** in one table each.
+- **§10 omitted `.github/workflows/ci.yml` and `test/clofin/test_runner.clj`**,
+  and credited two files to one finding when they carry edits from two.
+
+Two further gaps it found are recorded as objections rather than repaired:
+**O-5** (A-2(iii) implemented conditionally) and **O-6** (AC-9's quotation
+requirement partly met). Two more are noted and left: AC-5's ingestion-response
+assertion is exercised below the cap but not at 504, where the test pads breaks
+by direct insert and re-reads through `GET` — the ingestion path is correct, the
+criterion's first half simply is not driven at that size; and six pre-existing
+test fixtures draw an organisation short name from `rand-int` against a unique
+index, which answers `500` on a collision (`api/settlement_api_test.clj`,
+`api/reconciliation_api_test.clj`, `api/approvals_api_test.clj`,
+`recon/repository_test.clj`, `payments/repository_test.clj`,
+`audit/unit_of_work_test.clj`). The three such fixtures in files this branch
+authored were changed to `random-uuid`; the other six predate it and widening
+the PR to them is not mine to decide.
+
+**The hold is discharged.** I have no verification in flight and no pending fix
+I expect to push. **L-9** is why this section exists at all: PR #6 was merged ten
+minutes before its author's declared review surfaced a real false-contract
+defect, whose fix then could not land. That review would have found what this one
+found; the difference is only that this one finished first.
 
 **One qualification on how the suites were run, stated because the numbers are
 the claim.** This environment has no Docker daemon, so `make test-it`'s
@@ -417,8 +484,11 @@ whole.
 
 ## 9. Objections
 
-Four. None resolved unilaterally; each is implemented in the way described and
-flagged here for Master Control's ruling.
+Six. None resolved unilaterally; each is implemented in the way described and
+flagged here for Master Control's ruling. **O-5 and O-6 were added after the
+adversarial review of §8**, which found both — the first a deviation from the
+brief I had made and not declared, the second an acceptance criterion I had
+partly met and reported as met.
 
 ### O-1 — the brief's account of what the captured service reports is wrong, and the truth is worse
 
@@ -502,6 +572,53 @@ and the conformance test asserts coverage against `clofin.routes/routes` rather
 than against a number — which is what keeps it right when the next operation
 lands. Noted because a reader checking the AC against the output would find 38
 and wonder which is wrong.
+
+### O-5 — A-2(iii) is implemented conditionally, and the brief says unconditionally
+
+The brief requires that after a `200` on `/readyz`, `start!` *"reads `GET /` and
+refuses unless `instanceId` equals the run's UUID and `sourceCommit` equals the
+commit under capture"*. Read literally that gate cannot be met by any commit
+before `ref-2`, because `GET /` learned to report either field **in `ref-2`, in
+this batch, under ADR-0027**. `ref-1`'s `GET /` renders service, description,
+environment, disclaimer and documentation and nothing else — checked against the
+tag: `git show 5c7b4ba:src/clofin/api/health.clj`.
+
+`ref-1` is also `CAPTURE_REF ?= ref-1` in the Makefile, the default of
+`clojure -M:capture`, and the only tag that exists. So the unconditional gate
+would refuse every capture anyone could actually run, with a refusal reading
+*the process answering is not the process this capture started* when it is
+exactly that process — and it would contradict ADR-0022, which established that
+`ref-1` predates any build stamp and that *changing the source state to make it
+capturable captures a different source state*.
+
+**What is implemented**: the gate is unconditional for every commit whose own
+source renders `instanceId`, which is `ref-2` and after. For a commit whose
+source does not, `assert-same-process!` establishes the binding by exclusion —
+the port was proved free before the child was spawned, and that child is alive —
+and the run prints which of the two it used. Which gate applies is read from the
+**worktree**, never from the answer: a stranger on the port can withhold a
+field, it cannot stop the worktree's handler rendering one. A worktree the
+harness cannot read is neither case and refuses.
+
+I did this without declaring it, and the review found it. That omission is the
+error — the weakening is defensible and was documented only in a docstring and a
+test, which is where a deviation goes to not be read. Master Control may prefer
+the literal reading, in which case `make capture-trace`'s default must change at
+the same time and `ref-1` becomes uncapturable, which ADR-0022 argues against.
+
+### O-6 — AC-9 is partly met, and §5 previously read as though it were met
+
+AC-9 asks that *"the REQ quotes the responses of every UAT-007 step"*. UAT-007
+has fifteen steps. §5 quotes the band table, step 9's boundary, step 10's
+de-minimis posting, and four one-line confirmations bearing on specific
+findings — not every step. The live-stack run did execute UAT-006 steps 1–7 and
+UAT-007 end to end; what is short is the *quotation*, not the run.
+
+Recorded rather than quietly padded, because the alternative was to paste eleven
+more response bodies into an audit report to satisfy the letter of a criterion
+whose purpose — showing the sequel's prerequisites reproduce against a fresh
+stack — the quoted subset already serves. Master Control may rule the full
+transcript required; it is reproducible from the scripts as they stand.
 
 ---
 
