@@ -353,10 +353,16 @@ front:
   the whole set commits or none of it does.
 
 Because an approval's events carry the *approval* as their subject,
-`clofin.audit.repository/events-for-payment` relates them back through
-`approval.instruction_id`, and the evidence pack for a payment shows its
+`clofin.audit.repository/events-for-subject-and-its-approvals` relates them
+back through `approval.instruction_id` **and `approval.adjustment_id`**, and the
+evidence pack for a payment — or for a reconciliation adjustment — shows its
 approvals' history without the subject column having to lie about what an event
-is about.
+is about. It followed only the payment link until 2026-09-06, so an
+investigator starting from an adjustment could not reach the decision that
+decided it, while one starting from a payment could (release-audit finding
+**2C-012**, standing lesson **L-21**); the function was named
+`events-for-payment` and had not been only about payments since migration
+`0012` gave `approval` a second subject.
 
 **Enforcement points.**
 

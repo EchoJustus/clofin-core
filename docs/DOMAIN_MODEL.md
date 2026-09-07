@@ -396,9 +396,12 @@ one. Two naming rules hold, both of them corrections from Milestone 1's audit:
 | `organisation.created`, `account.created`, `journal-entry.posted` | The three writes that emitted nothing until TASK-005. Each is a creation, so each is written once, in the transaction where the row it names first exists, with a null before-digest. None has a decision or a partial step to distinguish it from, so none needs a second term the way `approval.recorded` needed one beside `payment.approved`. `posted` rather than `created` for a journal entry: an entry is never drafted and never amended (C-03), so posting is the only transition it has. |
 
 An approval's events name the approval, not the payment, because that is what
-they are about. `clofin.audit.repository/events-for-payment` relates them back
-through `approval.instruction_id`, so a payment's evidence pack still shows
-them without the subject column having to misdescribe them.
+they are about. `clofin.audit.repository/events-for-subject-and-its-approvals`
+relates them back through `approval.instruction_id` **and
+`approval.adjustment_id`**, so a payment's evidence pack — and a reconciliation
+adjustment's — still shows them without the subject column having to
+misdescribe them. Both links are followed from 2026-09-06; the adjustment one
+was missing (**2C-012**).
 
 ### 2.7 Authorisation context ✅
 
