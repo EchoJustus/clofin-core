@@ -31,7 +31,7 @@ and this table is stale.
 | 8.2 | Cockpit — CORS allowlist, instance connect, seed bootstrap | [TASK-012](briefs/012-TASK-cockpit-connect-and-bootstrap.md) | ✅ `CLOSED` — PR #23 (`f174116`) + `clofin-cockpit` PR #2 (`90abb1d`) | green, both repositories |
 | 8.3 | Cockpit — operation flows, scheme play, evidence view | [TASK-013](briefs/013-TASK-cockpit-operations-and-scheme-simulation.md) | ✅ `CLOSED` — cockpit PR #3 (`7ee7e28`) + REQ-only core PR #25 (`b962d7f`); frozen core held | green, cockpit CI ×2 |
 | 8.4 | Cockpit — Actions scenario runner, PAT-free | [TASK-014](briefs/014-TASK-cockpit-scenario-runner.md) | ✅ `CLOSED` — cockpit PR #4 (`9283dbf`) + REQ-only core PR #27 (`ea428a3`); hosted run #1 against `ref-1` green, 27/27 steps | green, incl. the hosted scenario run |
-| ref-2 | Release remediation — `FEEDBACK-REL-ref-2` (2 B / 20 S / 1 C), then the annotated tag | [TASK-015](briefs/015-TASK-ref-2-release-remediation.md) | 🔨 `IN PROGRESS` — dispatched 2026-09-06 against the ingested audit | — |
+| ref-2 | Release remediation — `FEEDBACK-REL-ref-2` (2 B / 20 S / 1 C), then the annotated tag | [TASK-015](briefs/015-TASK-ref-2-release-remediation.md) | ✅ `CLOSED` — merged in PR #31 (`32dfcc9`); both blockers re-verified; `ref-2` is tagged on that commit (annotation mirror in `docs/releases/`) | green on `32dfcc9` (run 34091727538) |
 | 7, 9 | Financial crime; programmable settlement | not yet briefed | 💭 later | — |
 
 **Controls now enforced on `main`.** As of 2026-08-04 the increment-3/4 stack is
@@ -71,14 +71,21 @@ mirrors the text byte for byte. All 19 findings were
 remediated before the tag. **Uncovered audit scope (items 5–7) carries forward
 as mandatory-first scope for `ref-2`.**
 
-**`ref-2` — audited in full, not yet tagged.** The RC `c97a4f2` received the
+**`ref-2` — the first fully audited release.** The RC `c97a4f2` received the
 first complete release audit: all eight charter items performed
 (`docs/audits/FEEDBACK-REL-ref-2.md` — 2 blocking / 20 should-fix / 1
-consider). Both blocking findings are confirmed in source. The tag lands on the
-remediation descendant once
-[TASK-015](briefs/015-TASK-ref-2-release-remediation.md) is merged and
-re-verified — pushed as an **annotated** tag verified by the peeled `^{}` line,
-with an annotation that carries the canonical disclaimer verbatim.
+consider). Both blocking findings were remediated in
+[TASK-015](briefs/015-TASK-ref-2-release-remediation.md) (PR #31) and
+re-verified by CI on `32dfcc9` and by Master Control's own reproduction,
+including the regression tests failing at the candidate. **`ref-2` is tagged
+on `32dfcc9`** — the remediation descendant, as the release rules permit — as
+an **annotated** tag whose message is mirrored byte for byte at
+`docs/releases/ref-2.annotation.txt` and carries the canonical disclaimer
+verbatim; published as a GitHub pre-release, like every `ref-<n>`. The tag
+object and the release were created by the operator from that text, because
+the proxy Master Control's session runs behind forbids tag pushes (the
+`ref-1` precedent); kind and target are verified by the peeled `^{}` line in
+`git ls-remote`, recorded in the audit register when done.
 
 **Visual layer — and what it displaces.** `ADR-0020`
 *(`docs/ADR/0020-two-repositories-and-the-generate-replay-rules.md`, merged to
