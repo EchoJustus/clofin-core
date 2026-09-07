@@ -60,6 +60,14 @@ jobs:
       - name: Check the status documents agree with each other
         run: make doc-consistency
 
+      # 2B-007 and 2B-008: the canonical scope sentence has one home, and every
+      # surface restating it — `make help`, every release annotation — is
+      # compared with that home rather than trusted. Offline; the networked
+      # `check-release-annotation` is deliberately not in CI for the reason it
+      # is not in `verify`.
+      - name: Check every scope-statement surface carries the canonical sentence
+        run: make disclaimer-check
+
       - name: Run unit and property tests
         run: make test
 
