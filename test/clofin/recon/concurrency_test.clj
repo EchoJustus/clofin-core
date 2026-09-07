@@ -129,7 +129,7 @@
   (let [pool tdb/*pool*
         {:keys [status json]} (call pool :post "/organisations"
                                     :body {"legalName" "Meridian Freight Holdings Pte Ltd"
-                                           "shortName" (str "meridian-" (rand-int 100000000))})
+                                           "shortName" (str "meridian-" (random-uuid))})
         _ (is (= 201 status))
         org (uuid (get json "id"))
         seed (fn [roles limits]
@@ -556,8 +556,22 @@
           ;; read `decide-adjustment!` opens with: both transactions address a
           ;; `proposed` adjustment before either takes the break's lock.
           original recon/find-adjustment
+          original-lock recon/lock-break!
           both (CountDownLatch. 2)
           seen (atom #{})
+          ;; How long each transaction spent inside the break's `for update`.
+          ;; AC-8 asks each latch test to show the blocked transaction *waited*,
+          ;; and every assertion below is about the outcome — which a loser
+          ;; refused on a read it merely took second would satisfy just as well.
+          ;;
+          ;; The winner holds the lock for `hold-ms` before returning, so the
+          ;; wait is observable rather than a matter of microseconds. That
+          ;; widens the window; it does not create it. Without the lock the
+          ;; second transaction would sail through in about the time the first
+          ;; one took.
+          hold-ms 1000
+          first-lock (atom nil)
+          waits (atom {})
           [a b] (with-redefs [recon/find-adjustment
                               (fn [source organisation-id id]
                                 (let [result (original source organisation-id id)
@@ -566,6 +580,19 @@
                                   (when-not (contains? before thread)
                                     (.countDown both)
                                     (.await both 60 TimeUnit/SECONDS))
+                                  result))
+                              recon/lock-break!
+                              (fn [tx organisation-id id]
+                                (let [entered (System/nanoTime)
+                                      result (original-lock tx organisation-id id)
+                                      waited (quot (- (System/nanoTime) entered) 1000000)
+                                      thread (Thread/currentThread)]
+                                  (swap! waits assoc thread waited)
+                                  ;; Whoever got here first keeps the lock for a
+                                  ;; moment. The other is now blocked in the
+                                  ;; database, not merely later in a queue.
+                                  (when (compare-and-set! first-lock nil thread)
+                                    (Thread/sleep hold-ms))
                                   result))]
                   (both-at-once (decide (:checker f)) (decide (:checker-2 f))))
           answers (map outcome [a b])]
@@ -591,4 +618,20 @@
           "and one live decision, because the loser's never happened")
 
       (is (= "resolved" (break-state pool (get brk "id")))
-          "the break the adjustment addressed is resolved exactly once"))))
+          "the break the adjustment addressed is resolved exactly once")
+
+      (testing "and the loser *blocked* — AC-8 asks each latch test to show
+                that, and every assertion above is about the outcome, which a
+                loser refused on a read it happened to take second would
+                satisfy just as well"
+        (let [measured (sort (vals @waits))]
+          (is (= 2 (count measured))
+              (str "both transactions must reach the break's `for update` — "
+                   (pr-str @waits)))
+          (is (< (first measured) (quot hold-ms 2))
+              (str "the winner took the lock without waiting — " (pr-str measured)))
+          (is (>= (second measured) (quot hold-ms 2))
+              (str "the second transaction sat inside `for update` while the "
+                   "first held it, which is the serialisation; a loser that "
+                   "read around the lock would have come back as fast as the "
+                   "winner — waits in ms: " (pr-str measured))))))))

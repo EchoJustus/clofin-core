@@ -191,6 +191,21 @@ with the commit under capture. The harness now mints a fresh identifier per run
 — *after* anything already listening has started, so no such process can produce
 it — passes it to the child, and refuses any answer that does not echo it back.
 
+**Amended 2026-09-07.** That last clause holds for every commit whose `GET /`
+renders `instanceId`, which means `ref-2` and after — this ADR is what put it
+there. It cannot hold for `ref-1`, whose `GET /` reports service, description,
+environment, disclaimer and documentation and nothing else, and which is the
+documented default of `make capture-trace`. Demanding an echo such a service has
+no way to produce would not make a capture safer; it would refuse every capture
+of the only tag that exists, with a message asserting the process answering is
+not the one the run started when it is exactly that process — and it would
+contradict ADR-0022, which established that `ref-1` predates any build stamp and
+that changing the source to make it capturable captures a different source
+state. So the harness reads the **worktree** to decide which gate applies, never
+the answer: a commit whose source renders the field must echo it, and one whose
+source does not binds by port exclusion instead, which the run states rather
+than implies. A worktree the harness cannot read is neither, and refuses.
+
 **What an echoed value establishes, exactly.** `instanceId` and `sourceCommit`
 are both **self-reported**, and this amendment does not soften that. Neither
 proves that the bytes serving the response are the bytes at a commit; a process

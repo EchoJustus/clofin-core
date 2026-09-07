@@ -100,8 +100,26 @@
     (cond
       (nil? schema) []
 
+      ;; `allOf` **and** whatever the schema says beside it. This branch used to
+      ;; end the `cond`, so a schema carrying `allOf` next to its own `required`
+      ;; or `properties` had those siblings silently ignored — the composed
+      ;; schema was checked and the sibling constraints were not. Today's
+      ;; contract has no such site; a checker whose subject is a contract that
+      ;; will grow should not depend on that staying true.
       (seq (get schema "allOf"))
-      (mapcat #(problems % value path) (get schema "allOf"))
+      (concat (mapcat #(problems % value path) (get schema "allOf"))
+              (problems (dissoc schema "allOf") value path))
+
+      ;; `oneOf` / `anyOf` reduced to "no problems", which is the vacuous answer
+      ;; rather than the absent one: a response validated against a combinator
+      ;; this does not implement passed dimensions 2 and 3 by default. There is
+      ;; none in the contract, and the day one appears the guard says so rather
+      ;; than going quiet (L-6).
+      (or (seq (get schema "oneOf")) (seq (get schema "anyOf")))
+      [(format (str "%s is declared with a combinator this checker does not "
+                    "implement (%s). Implement it or the response is validated "
+                    "by nothing on dimensions 2 and 3.")
+               (at) (pr-str (vec (sort (filter #{"oneOf" "anyOf"} (keys schema))))))]
 
       ;; A declared enum, and a value outside it. Skipped for nil: a nullable
       ;; member that is absent is dimension 2's business, not this one.
@@ -193,7 +211,7 @@
   ;; --- organisation and actors -------------------------------------------
   (let [org (uuid (get-in (call "createOrganisation" :post "/organisations"
                                 :body {"legalName" "Meridian Freight Holdings Pte Ltd"
-                                       "shortName" (str "meridian-" (rand-int 100000000))})
+                                       "shortName" (str "meridian-" (random-uuid))})
                           [:json "id"]))
         seed (fn [roles limits]
                (tdb/insert-actor! tdb/*pool* {:organisation-id org
@@ -503,14 +521,70 @@
                ". An operation seen only refusing is an operation whose success "
                "schema this namespace does not check.")))))
 
+(deftest the-schema-checker-has-no-silent-gaps
+  (testing "the three dimensions are only as wide as `problems` and
+            `response-schema` reach, and both used to widen a green build
+            rather than narrow it. Asserted directly, because a hole that no
+            schema in today's contract exercises is a hole the contract's next
+            author walks into"
+    (testing "`allOf` beside its own `required` — the siblings used to be
+              dropped with the composed schema checked and nothing else"
+      (is (seq (#'problems {"allOf" [{"type" "object"}]
+                            "required" ["thisWasIgnored"]}
+                           {"currency" "SGD"} ["m"]))
+          "a sibling `required` next to `allOf` must still be checked"))
+
+    (testing "a combinator this checker does not implement is named, not
+              silently passed"
+      (doseq [combinator ["oneOf" "anyOf"]]
+        (let [found (#'problems {combinator [{"required" ["k"]}]} {} ["o"])]
+          (is (seq found) (str combinator " must not reduce to no problems"))
+          (is (str/includes? (str (first found)) "does not implement") (str found)))))
+
+    (testing "and every response body the contract declares is in a media type
+              `response-schema` reads — otherwise it returns nil and dimensions
+              2 and 3 are skipped for that response while dimension 1 passes"
+      (let [known #{"application/json" "application/problem+json"}
+            unread (into (sorted-set)
+                         (for [[_ methods] (get @spec "paths")
+                               [_ operation] methods
+                               :when (map? operation)
+                               [status response] (get operation "responses")
+                               :let [content (get (deref-schema response) "content")]
+                               :when (seq content)
+                               :when (empty? (filter known (keys content)))]
+                           (str (get operation "operationId") " " status
+                                " " (pr-str (vec (keys content))))))]
+        (is (empty? unread)
+            (str "these responses declare a body this checker cannot read: "
+                 (pr-str (vec unread))))))))
+
 (deftest the-check-is-bounded-and-says-so
   (testing "this narrows the A-011 debt; it does not close it, and COMPLIANCE
-            §4 still records the rest"
-    (let [compliance (slurp "docs/COMPLIANCE.md")]
-      (is (str/includes? compliance "Deep OpenAPI/handler contract validation")
-          "the remaining debt must still be recorded: a narrowed claim that
-           stopped naming its remainder would be the L-14 failure this whole
-           exercise is about"))))
+            §4 must record what is still open.
+
+            What stood here asserted that the heading string appeared somewhere
+            in the file — which it did before this namespace existed and would
+            go on doing however stale the row beneath it became. That is the
+            same false-protection shape as **2C-003**, in a guard this batch
+            added: a check whose subject is a row, testing only that a heading
+            exists. It did not notice that the row still said `clofin.contract-
+            test` *does not invoke a handler, so required members and response
+            schemas are maintained by review*, which this namespace had just
+            made false — COMPLIANCE understating what exists is the same L-15
+            failure as overstating it"
+    (let [row (->> (str/split-lines (slurp "docs/COMPLIANCE.md"))
+                   (filter #(str/includes? % "Deep OpenAPI/handler contract validation"))
+                   first)]
+      (is (some? row) "the debt row must still be in COMPLIANCE §4")
+      (testing "and it must name what now exists"
+        (is (str/includes? row "clofin.api.conformance-test")
+            (str "the row must name the namespace that narrowed the debt — " row)))
+      (testing "and what is still open, or a reader learns a closed debt from a
+                row that stopped mentioning its remainder (L-14)"
+        (doseq [remainder ["request bodies" "oneOf"]]
+          (is (str/includes? row remainder)
+              (str "the row must still record " (pr-str remainder) " — " row)))))))
 
 ;; ---------------------------------------------------------------------------
 ;; AC-15 (2B-009) — the six that require a key, and the eleven that do not
@@ -578,7 +652,7 @@
             what \"does not take one\" means (2B-009)"
     (let [org (uuid (get-in (request! :post "/organisations"
                                       :body {"legalName" "Meridian Freight Holdings Pte Ltd"
-                                             "shortName" (str "meridian-" (rand-int 100000000))})
+                                             "shortName" (str "meridian-" (random-uuid))})
                             [:json "id"]))
           actor (tdb/insert-actor! tdb/*pool* {:organisation-id org
                                                :display-name "controller"

@@ -28,9 +28,12 @@
      path. The running process is a child of this one, started from a
      directory whose `HEAD` was just verified.
   4. The port is refused if anything already answers on it, a fresh **instance
-     id** is minted for the run and passed to the child, and the child's
-     liveness and echoed identity are checked before any `200` is accepted and
-     again before every file is written.
+     id** is minted for the run and passed to the child; the child's liveness
+     is checked before any `200` is accepted and again before every file is
+     written, and so is its echoed identity **on every commit whose own source
+     can report one**. `ref-1` and earlier cannot — `GET /` learned to in
+     `ref-2` — and there the binding is the port having been proved free before
+     the child was spawned, which the run says out loud.
   5. The live service's `GET /readyz` reports its applied schema version, and
      that is compared with the last entry in the worktree's
      `resources/migrations/index.txt`.
@@ -51,7 +54,8 @@
 
   So a capture binds to **the process it started**. The instance id is minted
   here, after the stranger would already have been listening, so no process the
-  harness did not spawn can echo it. Both `instanceId` and `sourceCommit` are
+  harness did not spawn can echo it — for every commit from `ref-2` on, which
+  is where `GET /` learned to report it. Both `instanceId` and `sourceCommit` are
   the service's own answers — self-reported, and `GET /` says so. The harness
   does not claim they attest anything about the bytes running; it claims
   something narrower and sufficient: *the process that answered is the one this
@@ -64,7 +68,7 @@
   SHA under `sourceCommit`, which is the confidently-wrong value the paragraph
   above says the harness must never produce. It is now set explicitly from the
   commit under capture, and the check refuses if what comes back is anything
-  else.
+  else — again, on any commit whose source renders the field.
 
   ## What it deliberately will not do
 
@@ -244,9 +248,16 @@
 
   Asked of the **source**, not of the answer, and that is the whole point: a
   stranger on the port can withhold a field, but it cannot make the worktree's
-  `GET /` handler stop rendering one. So this decides which of the two gates
-  below applies, and the decision cannot be influenced by the thing being
-  gated.
+  handler stop rendering one. So this decides which of the two gates below
+  applies, and the decision cannot be influenced by the thing being gated.
+
+  The whole of `src/` is searched rather than one file path, so moving or
+  renaming the handler does not silently answer *no*. An **absent or unreadable
+  `src/`** is not an answer at all and throws: a worktree the harness cannot
+  read is not evidence that the commit predates self-identification, and
+  treating it as such would downgrade the gate exactly where the harness
+  understands least (**L-6** — fail closed, or the weaker check is what a
+  surprise selects).
 
   `instanceId` reached `GET /` in `ref-2` (ADR-0027). Every earlier commit —
   `ref-1` among them, and it is the documented default of `make capture-trace`
@@ -254,14 +265,21 @@
   nothing else. ADR-0022 already settled the general form of this problem in so
   many words: `ref-1` predates any build stamp, so provenance is established
   from git rather than by asking the service, and *changing the source state to
-  make it capturable captures a different source state*. Demanding an echo such
-  a commit has no way to produce would not make the capture safer; it would end
-  the capture, with a refusal that says the process answering is not the one
-  this run started when it is exactly that process."
+  make it capturable captures a different source state*."
   [worktree]
-  (let [handler (io/file worktree "src" "clofin" "api" "health.clj")]
-    (and (.exists handler)
-         (str/includes? (slurp handler) "\"instanceId\""))))
+  (let [src (io/file worktree "src")]
+    (when-not (.isDirectory src)
+      (throw (ex-info (str "capture refuses: " (.getPath src) " is not readable, so the harness "
+                           "cannot tell whether the commit under capture can identify itself. "
+                           "That is not the same as a commit that cannot, and it must not be "
+                           "treated as one.")
+                      {:worktree (str worktree) :src (.getPath src)})))
+    (boolean
+     (some (fn [^java.io.File f]
+             (and (.isFile f)
+                  (str/ends-with? (.getName f) ".clj")
+                  (str/includes? (slurp f) "\"instanceId\"")))
+           (file-seq src)))))
 
 (defn- reported-identity
   "What the stack answering on `base-url` says it is.

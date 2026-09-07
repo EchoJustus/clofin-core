@@ -508,20 +508,62 @@
           (str "clofin.tools.capture.bundle exposes " (pr-str (vec (sort discovered)))
                " and this namespace exercises " (pr-str (vec (sort (keys writers)))))))))
 
-(deftest the-harness-writes-through-those-writers-and-nowhere-else
-  (testing "ADR-0022: there is no `spit` anywhere else in the capture harness,
-            so the gate above is the only door to a file"
-    (let [sources (->> (file-seq (io/file root "tools/clofin/tools/capture"))
-                       (filter #(.isFile ^java.io.File %))
-                       (filter #(str/ends-with? (.getName ^java.io.File %) ".clj")))
-          spits (into {} (for [f sources
-                               :let [n (count (re-seq #"\(spit " (slurp f)))]
-                               :when (pos? n)]
-                           [(.getName ^java.io.File f) n]))]
-      (is (= {"bundle.clj" 4} spits)
-          (str "every file the harness opens must go through a stamped writer; found "
-               (pr-str spits))))))
+(def ^:private sink-primitives
+  "Every way a JVM Clojure namespace can put bytes on disk, as the literal text
+  that would appear in the source.
 
+  A list rather than `(spit `, because the claim this backstop makes is *the
+  four stamped writers are the only door to a file* — and a claim about every
+  sink that walks one primitive is a claim about one primitive. `io/writer`
+  opens a file as surely as `spit` does, and neither the writer matrix nor the
+  `^write.*!$` discovery below would notice a sink named `emit-index!` that
+  used it (**L-17**, and **2C-005**'s failure mode with a different spelling)."
+  [#"\(spit " #"io/writer" #"io/output-stream" #"io/copy"
+   #"FileOutputStream" #"FileWriter" #"PrintWriter"
+   #"Files/write" #"Files/newBufferedWriter" #"Files/newOutputStream" #"Files/copy"])
+
+(defn- harness-sources
+  "Every source file of the capture harness.
+
+  Both the package directory **and** `capture.clj` beside it. The entrypoint —
+  which is what `make capture-trace` runs, and which orchestrates the writers —
+  sits outside the directory, so a `file-seq` of the directory alone walks the
+  harness minus its front door."
+  []
+  (conj (->> (file-seq (io/file root "tools/clofin/tools/capture"))
+             (filter #(.isFile ^java.io.File %))
+             (filter #(str/ends-with? (.getName ^java.io.File %) ".clj"))
+             vec)
+        (io/file root "tools/clofin/tools/capture.clj")))
+
+(deftest the-harness-writes-through-those-writers-and-nowhere-else
+  (testing "ADR-0022: there is no file sink anywhere else in the capture
+            harness, so the gate above is the only door to a file"
+    (let [sinks (into {}
+                      (for [f (harness-sources)
+                            :let [text (slurp f)
+                                  n (reduce + (map #(count (re-seq % text)) sink-primitives))]
+                            :when (pos? n)]
+                        [(.getName ^java.io.File f) n]))]
+      (is (= {"bundle.clj" 4} sinks)
+          (str "every file the harness opens must go through a stamped writer; found "
+               (pr-str sinks)))))
+
+  (testing "and the scan is looking at the whole harness, entrypoint included —
+            a set this asserts about must be a set it walks (L-14)"
+    (let [names (set (map #(.getName ^java.io.File %) (harness-sources)))]
+      (is (contains? names "capture.clj")
+          (str "the entrypoint must be scanned; walked " (pr-str (sort names))))
+      (is (contains? names "bundle.clj"))
+      (is (< 5 (count names))
+          (str "the harness is more than a file or two; walked " (pr-str (sort names))))))
+
+  (testing "and the primitive list is not vacuous: a sink written any of these
+            ways is seen"
+    (doseq [line ["(spit f x)" "(io/writer f)" "(io/copy a f)"
+                  "(FileOutputStream. f)" "(java.nio.file.Files/write p b)"]]
+      (is (some #(re-find % line) sink-primitives)
+          (str "a sink spelled " (pr-str line) " would pass the backstop unseen")))))
 ;; ---------------------------------------------------------------------------
 ;; AC-4 (2C-007) — the statement is the whole labelled block
 ;;

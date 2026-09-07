@@ -258,9 +258,13 @@
             the worktree's handler from rendering one"
     (is (false? (boolean (stack/self-identifies? (worktree! false)))))
     (is (true? (boolean (stack/self-identifies? (worktree! true)))))
-    (testing "a worktree with no handler at all is not evidence of capability"
-      (is (false? (boolean (stack/self-identifies?
-                            (System/getProperty "java.io.tmpdir")))))))
+    (testing "and a worktree the harness cannot read is refused rather than
+              answered. `false` there would be a silent downgrade to the weaker
+              gate in the one case where the harness understands least — a
+              guard that fails **open** on a surprise (L-6)"
+      (is (thrown-with-msg?
+           clojure.lang.ExceptionInfo #"is not readable"
+           (stack/self-identifies? (System/getProperty "java.io.tmpdir"))))))
 
   (testing "and against the two real commits: `ref-1`, and this working tree"
     (let [ref-1 (java.io.File/createTempFile "ref1" "")
@@ -271,6 +275,13 @@
                            "git" "show" (str commit ":src/clofin/api/health.clj"))))
       (is (false? (boolean (stack/self-identifies? dir)))
           "ref-1's GET / renders service/description/environment/disclaimer/documentation")
+      (testing "and the whole of src/ is searched, so moving the handler does
+                not silently answer *no*"
+        (let [moved (io/file (str ref-1 ".moved"))]
+          (io/make-parents (io/file moved "src" "clofin" "elsewhere.clj"))
+          (spit (io/file moved "src" "clofin" "elsewhere.clj")
+                "(resp/ok {\"instanceId\" id})")
+          (is (true? (boolean (stack/self-identifies? moved))))))
       (is (true? (boolean (stack/self-identifies? ".")))
           "this tree renders instanceId (ADR-0027)"))))
 

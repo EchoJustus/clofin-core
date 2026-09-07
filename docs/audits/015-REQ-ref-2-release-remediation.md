@@ -6,13 +6,13 @@
 | **Brief** | [`015-TASK-ref-2-release-remediation.md`](../briefs/015-TASK-ref-2-release-remediation.md) on `origin/meta`, dispatched 2026-09-06 |
 | **Series number** | **015.** Task-keyed, reporting on `TASK-015` (**L-1**). The release-remediation form `REL-<tag>-REQ` is for a remediation with no brief; this one has a brief, and the register's decision block of 2026-09-06 says so explicitly |
 | **Branch** | `claude/task-015-ref-2-remediation-mlgzj8` — designated by the execution environment, substituted for a `feat/` name. No other divergence |
-| **PR base** | `main` at `d78cb39` (the merge of PR #30, the sync carrying this brief). The RC `c97a4f2` differs from that tip by documents and one line of `scripts/check-doc-links.sh` only |
+| **PR base** | `main` at `d78cb39` (the merge of PR #30, the sync carrying this brief). The RC `c97a4f2` differs from that tip by documents and one change to `scripts/check-doc-links.sh` — 2 insertions, 7 deletions, the fenced-code-block skip — and nothing else. (An earlier draft said "one line", which is one logical change and two wrong numbers) |
 | **Model** | An Anthropic Claude model. **The identifier is deliberately not written into this file**: this session operates under a rule that keeps the model identifier out of repository artifacts. Recorded as an absence rather than omitted silently, because the provenance column exists to say what is known, and this is a thing that is known and withheld. The same form `014-REQ` used |
 | **Reasoning effort** | High — extended thinking throughout. The harness exposes no numeric setting to the session, so this is the mode, not a measured value |
 | **Date** | 2026-09-07 |
 | **Migrations** | **None.** Every item was code, tests, contract or prose against the schema at `0013`. The brief's migration pre-flight says *No migration* and nothing here needed one. Migrations replayed `0001`→`0013` from an empty schema after the last commit: 13 applied, 0 pending |
 | **Controls touched** | **C-05** and **C-13** in `docs/COMPLIANCE.md`, plus one new row in §4 — **statements narrowed or made true, no control weakened**. C-05 **strengthened**: its service list is now compared with `service-namespaces` in both directions. C-13 **strengthened** twice: its evidence sentence states the bound it always had, and its posting-path sentence became true and is now enforced by a producer census rather than described. C-06's prose copies outside COMPLIANCE are narrowed (§6b); its own section already narrowed and is unchanged. The capture harness (ADR-0022) is strengthened on both of its findings |
-| **Status** | Implemented. Both blockers closed; all 20 should-fix, the consider, and C-R10a actioned. **Four objections in §9**, none resolved unilaterally |
+| **Status** | Implemented, for the set this branch owns. Both blockers closed. Of the 20 should-fix, the register dispositions **14 as actioned in the subject** — those, the consider, and C-R10a are closed here; **5 were actioned on `meta`** (2B-001, 2B-002, 2B-006, 2B-011, 2C-008) and are not this branch's; **1 is deferred with a target** (2B-008 — the published `ref-1` release body is not rewritten, §7). "All 20 actioned" is what an earlier draft said, and it was a universal quantifier over a set the reader would take to be this branch when it was neither this branch's set nor all actioned (**L-14**, and the register's own vocabulary distinguishes *actioned* from *deferred*). **Four objections in §9**, none resolved unilaterally |
 | **Verification** | `make verify` **525 tests / 3,244 assertions**, 0 failures, 0 errors. `make test-it` **951 tests / 7,272 assertions**, 0 failures, 0 errors. **A verification is in flight** (**L-9**) — an adversarial review of the diff; see §8, which is a hold on merging |
 
 ---
@@ -56,8 +56,13 @@ savepoint rollback, the commit and the rendering. Four cells, {identical,
 different} × {applied, refused}, plus a fifth test asserting the raced answer
 and the serial answer are the same answer.
 
-**At the RC** (`clojure -M:test:it clofin.recon.concurrency-test`, 8 failures /
-76 assertions):
+**At the RC** (`clojure -M:test:it clofin.recon.concurrency-test`, the namespace
+as shipped: **7 tests, 133 assertions, 7 failures** — `rc-evidence/C4-rc.txt`).
+An earlier draft of this section quoted *8 failures / 76 assertions*, which is
+`rc-evidence/A1-rc.txt`: a run of a five-test draft of the file, and 76 is that
+run's *passing* count against 84 total. §4 already reasoned from the seven-test
+run, so the two sections were describing different runs of one named command.
+The failures below are from the seven-test run:
 
 ```
 FAIL in (ac-1-different-documents-racing-refuse-the-loser-rather-than-replaying-it)
@@ -138,7 +143,7 @@ branch's test files copied in.
 
 | Finding | What changed | Test | At the RC |
 |---|---|---|---|
-| **2C-002** *(blocking)* | `decide-against-existing` — one decision for the pre-check and both collision recoveries | `clofin.recon.concurrency-test` `ac-1-*` (5 tests) | 8 failures; the loser answers `200 replayed:true` and `422 replayed:true` |
+| **2C-002** *(blocking)* | `decide-against-existing` — one decision for the pre-check and both collision recoveries | `clofin.recon.concurrency-test` `ac-1-*` (7 tests) | 7 failures; the loser answers `200 replayed:true` and `422 replayed:true` |
 | **2C-006** *(blocking)* | Port pre-flight, per-run instance id, liveness before acceptance, identity before every write; `CLOFIN_SOURCE_COMMIT` passed explicitly | `clofin.tools.capture-stack-test` (8 tests) | `start!` returns a stranger's `200` with its child dead; probe quoted in §2 |
 | **2B-003** | `idempotent-replayed` exposed; the test discovers what `src/` sets and what the contract declares, both directions | `clofin.http.cors-test` `exposed-headers-…`, `a-browser-page-can-read-the-replay-header` | 2 failures: the discovered set has `idempotent-replayed`, the exposed list does not |
 | **2B-004** | Two latch-based two-connection proofs: assignment against resolution, two decisions on one adjustment | `clofin.recon.concurrency-test` `ac-8-*` | **Passes.** A missing proof, not a broken lock — see §4 |
@@ -153,7 +158,7 @@ branch's test files copied in.
 | **2C-004** | UAT-007 replaces the tenant's SGD bands; the prerequisite row lists everything inherited | Run live, §5 | `posted:false, approvalsRequired:1, status:proposed` where the script states 0/true/resolved |
 | **2C-005** | One gate, `assert-provenance!`, on all four writers; one definition of a complete stamp | `clofin.tools.capture-test` `ac-3-*`, `every-writer-is-exercised`, `the-harness-writes-…-nowhere-else` | 56 failures: 28 for `write-quotations!`, 28 for `write-manifest!` |
 | **2C-007** | A statement runs to the next bold label, heading or rule; a label is a bold run that *starts a paragraph* | `clofin.tools.capture-test` `ac-4-*` (3 tests) | C-13 is 74 characters; all seven guarantees missing |
-| **2C-009** | Both settlement postings go through `clofin.ledger.service/post-entry!`; producer census | `clofin.ledger.purity-test` `ac-16-…`, `clofin.api.settlement-api-test` `ac-16-*` | 25 failures: two producers; entries with no event; packs answering `404` |
+| **2C-009** | Both settlement postings go through `clofin.ledger.service/post-entry!`; producer census | `clofin.ledger.purity-test` `ac-16-…`, `clofin.api.settlement-api-test` `ac-16-*` | 24 failures: two producers (1); entries with no event (16); actor (4); packs answering `404` (2 + 1). The archived run totals 25 across both namespaces; the twenty-fifth is `ac-17-c-05-names-every-audit-composing-service`, which the 2B-005 row below reports as its own — counting it in both rows would count one failure twice |
 | **2C-010** | `simulated` in `batch->wire`; five `400`s and one `422` declared; readiness enum narrowed; bounded conformance test | `clofin.api.conformance-test` (7 tests / 161 assertions), `clofin.contract-test` `the-readiness-check-enum-…` | 7 failures — the five `400`s, the `422`, and `simulated` missing from every list item |
 | **2C-011** | `GET /reconciliation-adjustments/{id}`, copying `getReconciliationBreak`'s boundary behaviour | `clofin.api.reconciliation-api-test` `ac-6-following-a-location-…` | The decision's `Location` answers `404` |
 | **2C-012** *(consider)* | The evidence join traverses `adjustment_id` as well as `instruction_id` | `clofin.api.reconciliation-api-test` `ac-7-…` | The adjustment's pack carries `proposed` and `rejected` and no `approval.recorded` |
@@ -261,12 +266,15 @@ entries included, which had none.
 | UAT-005 | 542 | `$PRIYA` | `operator` | **no** | `403` — **deliberate**; the step exists to show an operator cannot read the trail |
 | UAT-006 | 499 | `$AUDITOR` *(was `$CTRL`)* | `auditor` | yes | `200` |
 | UAT-006 | 513 | `$AUDITOR` *(was `$CTRL`)* | `auditor` | yes | `200` |
-| UAT-007 | 699 | `$AUDITOR` | `auditor` | yes | `200` |
-| UAT-007 | 748 | `$AUDITOR` | `auditor` | yes | `200` |
-| UAT-007 | 769 | `$AUDITOR` | `auditor` | yes | `200` |
+| UAT-007 | 744 | `$AUDITOR` | `auditor` | yes | `200` |
+| UAT-007 | 793 | `$AUDITOR` | `auditor` | yes | `200` |
+| UAT-007 | 814 | `$AUDITOR` | `auditor` | yes | `200` |
 
-Seven calls. UAT-006's two were the only defects; UAT-005's `403` is the point
-of its step.
+Seven calls, and line numbers are **this branch's** throughout. An earlier
+draft gave UAT-007's three at the RC and the other four on the branch, so one
+table pointed at two trees.
+
+UAT-006's two were the only defects; UAT-005's `403` is the point of its step.
 
 ---
 
@@ -280,13 +288,21 @@ it was vacuous. Everything else reaches the parsed data through `get`, `get-in`,
 
 | Predicate | Site at the RC | Applied to | Vacuous at the RC? |
 |---|---|---|---|
-| `map?` | `contract_test.clj:238` — `:when (map? currency)` | 8 schemas' `properties.currency`, each a `java.util.LinkedHashMap` | **Yes.** Population 0 of 8 |
-| `contains?` | `:35`, `:112`, `:115`, `:116`, `:341`, `:344`, `:346`, `:353`, `:354`, `:363`, `:365` | Clojure sets built by `set`/`keys` from parsed data | No |
-| `set` / `keys` / `vals` | `:52`, `:90`, `:91`, `:95`, `:196`, `:202`, `:217`, `:225`, `:263`, `:265`, `:341` | `java.util.Map` and `java.util.List` — both `seq`-able | No |
-| `seq` | `:201` (`(is (seq by-schema))`) | a Clojure map built by `into {}` | No |
-| `when-let` on `get-in` | `:186` (subject-type discovery) | parsed data; truthiness, not shape | No |
-| `every?` / `count` / `remove` | `:102`, `:333` | Clojure collections | No |
-| `for` / `doseq` over parsed maps | `:33`, `:184`, `:237`, `:327` | `java.util.Map`, `seq`-able | No |
+| `map?` | `:205` — `:when (map? currency)` | 8 schemas' `properties.currency`, each a `java.util.LinkedHashMap` | **Yes.** Population 0 of 8 |
+| `contains?` | `:35`, `:96`, `:266`, `:295`, `:311`, `:313`, `:320`, `:321`, `:330`, `:332` | Clojure sets built by `set`/`keys` from parsed data | No |
+| `set` / `keys` / `vals` | `:52`, `:53`, `:90`, `:91`, `:96`, `:162`, `:163`, `:169`, `:174`, `:184`, `:192`, `:195`, `:197`, `:215`, `:216`, `:230`, `:232`, `:234`, `:238`, `:308`, `:320`, `:321`, `:330`, `:332` | `java.util.Map` and `java.util.List` — both `seq`-able | No |
+| `seq` | `:168` (`(is (seq by-schema))`), `:222` | Clojure collections built by `into`/`set` | No |
+| `when-let` on `get-in` | `:153` (subject-type discovery) | parsed data; truthiness, not shape | No |
+| `count` / `remove` | `:300`, `:266` | Clojure collections | No |
+| `for` / `doseq` over parsed maps | `:33`, `:293`; `:65`, `:71`, `:120`, `:173`, `:203`, `:305`, `:327` | `java.util.Map`, `seq`-able | No |
+
+Line numbers are `test/clofin/contract_test.clj` **at the RC `c97a4f2`**, where
+the file is 333 lines; they are not the branch's. The table above is generated
+from that blob rather than transcribed — an earlier draft of this section cited
+sites that do not exist in a 333-line file and put `map?` at `:238`, which is
+an assertion about refusal reasons. `every?` and `vector?` appear nowhere in
+the namespace at the RC, so the rows that named them are gone rather than
+renumbered.
 
 Verified by running the RC's own loader and printing the classes
 (`rc/vacuity_probe.clj`): root `java.util.LinkedHashMap`, `(map? spec)` false, a
@@ -303,20 +319,31 @@ excluded from action by the brief and are listed for completeness.
 
 | Copy | Disposition |
 |---|---|
-| `src/clofin/idempotency.clj:36` — read-key's docstring | **Narrowed.** Names the six, states that the other eleven do not read the header |
+| `src/clofin/idempotency.clj` RC `:36` / branch `:62` — read-key's docstring | **Narrowed.** Names the six, states that the other eleven do not read the header |
 | `src/clofin/idempotency.clj` — the `400` message | **Narrowed.** Names the six operations and says "and on no other operation" |
 | `src/clofin/api/payments.clj:15` | **Narrowed** to "every mutating operation **in this namespace**", with the count and the pointer to C-06 |
 | `src/clofin/payments/repository.clj:19` | **Narrowed** to "every mutating call **in this namespace**" |
 | `docs/uat/UAT-005-segregation-of-duties.md:53` | **Narrowed** to "every payment and approval mutation", naming what guards the rest |
 | `docs/DOMAIN_MODEL.md:121` | **Narrowed.** *Not named by the brief* — found by this sweep. Said "the key protects *every* mutating operation"; now says every payment and approval one, with the six named and the eleven pointed at C-06 |
-| `test/clofin/api/payments_api_test.clj:578` — a `testing` label | **Narrowed.** *Not named by the brief.* A test label restating the false claim, now scoped to its namespace and pointing at the seventeen-route sweep |
+| `test/clofin/api/payments_api_test.clj` RC `:557` / branch `:578` — a `testing` label | **Narrowed.** *Not named by the brief.* A test label restating the false claim, now scoped to its namespace and pointing at the seventeen-route sweep |
 | `ARCHITECTURE.md:25` | **Checked, left.** Says "every mutating **payment** operation", which is true: the six are exactly the payment and approval mutations |
-| `api/openapi.yaml:2492` | **Checked, left.** Already says PR-040 "asks for it on every mutating operation and that is not yet true" |
+| `api/openapi.yaml` RC `:2412` / branch `:2492` | **Checked, left.** Already says PR-040 "asks for it on every mutating operation and that is not yet true" |
 | `src/clofin/api/approvals.clj:27` | **Checked, left.** "Both mutating operations", already narrow |
 | `docs/ADR/0013:207` | **Checked, left.** "Any new mutating endpoint should be checked against that" — guidance, not a claim |
 | `docs/PRD.md:56`, `:122` | **Left, deliberately.** PR-040 is a *requirement*, not a claim about what is built. Editing it to match the implementation is the L-14 failure with the sign reversed; the shortfall is recorded in COMPLIANCE §4 |
-| `docs/COMPLIANCE.md:524` | **Left.** Already narrows, at length |
+| `docs/COMPLIANCE.md` RC `:524` / branch `:541` | **Left.** Already narrows, at length |
+| `src/clofin/authz/model.clj:65` | **Checked, left.** "One permission for every mutating **settlement** operation" — a claim about the permission table, not about idempotency, and true of it |
+| `src/clofin/api/reconciliation.clj:48` | **Checked, left.** Quotes PR-040's claim in order to say L-14 is the record of it being false. Narrowing a quotation of a false claim would delete the record |
+| `docs/ADR/0023:72` | **Checked, left.** The same quotation, for the same reason |
+| `docs/uat/UAT-004-idempotent-submission.md:81` | **Checked, left.** "A mutating request with no `Idempotency-Key` is refused" is a step heading over `POST /payment-instructions/:id/submission`, which is one of the six |
+| `test/clofin/api/conformance_test.clj` (branch only, `:456`, `:461`, `:581`, `:587`, `:589`) | **Left, and they are the fix.** The sweep this batch added; the phrase appears in its prose describing the seventeen-route census that proves the claim false |
 | `docs/briefs/**`, `docs/audits/**` | **Not mine.** Control plane and historical records |
+
+Line numbers are the RC's where a row cites one tree and are given as `RC / branch`
+where the two differ. Every non-control-plane hit of the stated grep is in this
+table — an earlier draft listed some benign hits as "Checked, left" and silently
+omitted four others (`authz/model.clj`, `api/reconciliation.clj`, `ADR-0023`,
+`UAT-004`), which is the D-6 requirement half-met and therefore not met (**L-14**).
 
 ---
 
@@ -497,18 +524,25 @@ descriptions.
 **Scripts and build.** `scripts/check-disclaimer.sh` (new),
 `scripts/check-doc-consistency.sh` and `.awk` (rule 5), `Makefile`
 (`disclaimer-check` in `verify`, `help` from the resource),
-`resources/disclaimer.txt` (new).
+`resources/disclaimer.txt` (new), `.github/workflows/ci.yml` (CI runs the
+individual targets rather than `verify`, so a guard added to `verify` alone
+would not have run in CI).
 
 **Tests.** New: `clofin.recon.concurrency-test`,
 `clofin.tools.capture-stack-test`, `clofin.api.conformance-test`,
 `clofin.tools.disclaimer-test`. Extended: `contract-test`, `cors-test`,
 `capture-test`, `doc-consistency-test`, `purity-test`, `health-test`,
 `config-test`, `recon/repository-test`, `api/reconciliation-api-test`,
-`api/settlement-api-test`, `api/payments-api-test`. New fixtures:
+`api/settlement-api-test`, `api/payments-api-test`.
+`test/clofin/test_runner.clj` — the four new namespaces are registered
+explicitly, which is how this project's runner discovers them. New fixtures:
 `test-resources/disclaimer/base`.
 
-**Documentation.** `COMPLIANCE.md` (C-05, C-13 twice, one §4 row),
-`DOMAIN_MODEL.md` (2B-009),
+**Documentation.** `COMPLIANCE.md` (C-05 — the service list *and* the
+`events-for-subject-and-its-approvals` rename; C-13 twice; the §4 pagination
+row, and the §4 A-011 row rewritten because this batch made its "does not
+invoke a handler" sentence false), `DOMAIN_MODEL.md` (2B-009, and the same
+2C-012 rename in §2.6),
 `ADR-0022` and `ADR-0027` (dated amendments), `docs/releases/README.md`,
 `docs/uat/UAT-005`, `UAT-006`, `UAT-007`.
 

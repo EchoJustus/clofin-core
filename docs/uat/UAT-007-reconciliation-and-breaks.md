@@ -105,7 +105,7 @@ unreachable as written (release-audit finding **2C-004**, standing lesson
 **L-20**: a sequel replays its prerequisite's seeded configuration and asserts
 the boundary it promises).
 
-So delete the tenant's SGD bands and insert the two this script needs. **The
+So delete the tenant's SGD bands and insert the one this script needs. **The
 floor becomes SGD 1,000.00** — at or above it an adjustment needs one
 approval, below it the proposer alone may post:
 

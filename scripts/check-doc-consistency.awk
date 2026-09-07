@@ -333,7 +333,7 @@ kind == "roadmap" && !/^\|/ {
   if (index(unquoted, "IN PROGRESS") > 0)   claim = "IN PROGRESS"
   else if (index(unquoted, "READY") > 0)    claim = "READY"
   else if (index(unquoted, "in flight") > 0 || index(unquoted, "currently") > 0 \
-           || index(unquoted, " next ") > 0)
+           || match(unquoted, /(^|[^A-Za-z])next([^A-Za-z]|$)/))
     claim = "LIVE"
 
   if (claim != "") {

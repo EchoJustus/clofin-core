@@ -21,9 +21,12 @@
      already answering on it, mints an instance id for the run, migrates a
      scratch database with the commit's own migration runner, and starts the
      commit's own service — which must echo that instance id and the commit
-     under capture before the run continues. See `clofin.tools.capture.stack`
-     for why the SHA is established rather than discovered, and for what the
-     echoed identity does and does not prove.
+     under capture before the run continues, **on every commit whose `GET /`
+     can report them**. `ref-1` and earlier cannot; there the binding is the
+     port having been proved free before the child was spawned, and the run
+     says which of the two it used. See `clofin.tools.capture.stack` for why
+     the SHA is established rather than discovered, and for what the echoed
+     identity does and does not prove.
   4. Captures `GET /` as a fixture — the scope statement, byte for byte,
      never transcribed.
   5. Runs each scenario, recording every request and response, then reads the

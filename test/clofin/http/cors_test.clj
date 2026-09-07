@@ -359,12 +359,24 @@
 (defn- header-names-set-by
   "Every response header name one source file sets.
 
-  Three shapes, which are the three this codebase uses:
+  Four shapes, which are the four this codebase uses:
 
     (assoc-in resp [:headers \"h\"] v)   a write into a response map
     {:headers <anything>}               a response map literal, however the
                                         header map inside it is built
     (with-header resp \"h\" v)           the helper, threaded or not
+    (update resp :headers f)            a rebuild of the header map, where the
+                                        name is inside `f` — the shape
+                                        `middleware.clj` uses for
+                                        `content-type`
+
+  The fourth was found by an adversarial review of this test, which is worth
+  recording: the docstring said *three, which are the three this codebase
+  uses*, and the counter-example was already in the tree. The header it missed
+  is CORS-safelisted and set in `response.clj` too, so the answer this guard
+  gave was right — but the producer dimension was short by one shape, and the
+  next non-safelisted header set through `update` would have left the exposed
+  list short with the guard green, which is **2B-003** again.
 
   A header named by a var — `(assoc-in response [:headers correlation-header]
   …)` — is resolved through `header-vars`, and **only where it is written**.
@@ -409,6 +421,27 @@
                      ;; Threaded or not: the first string argument is the name.
                      (= "with-header" head-name)
                      (when-let [n (first (filter string? args))] (swap! found conj n))
+
+                     ;; `(update resp :headers f)` / `(update-in resp [:headers]
+                     ;; f)`. The name is not in this form at all — it is inside
+                     ;; `f`, as `(assoc headers "content-type" …)` — so the
+                     ;; whole form is swept for `assoc` keys once it is known
+                     ;; to be rebuilding a header map.
+                     (and (contains? #{"update" "update-in"} head-name)
+                          (some (fn [a] (or (= :headers a)
+                                            (and (vector? a) (= [:headers] a))))
+                                args))
+                     (let [assoc-keys
+                           (fn collect [form]
+                             (concat
+                              (when (and (seq? form) (symbol? (first form))
+                                         (= "assoc" (name (first form))))
+                                (keep (fn [k] (cond (string? k) k
+                                                    (symbol? k) (get header-vars (name k))))
+                                      ;; `(assoc m k v k v …)` — the keys.
+                                      (take-nth 2 (drop 2 form))))
+                              (when (coll? form) (mapcat collect form))))]
+                       (swap! found into (assoc-keys form)))
 
                      :else nil)
                    (run! walk form))
@@ -471,15 +504,41 @@
                (pr-str (vec set-by-service)) "; declared in api/openapi.yaml: "
                (pr-str (vec declared)) "; exposed: " (pr-str (vec exposed))))
 
-      (testing "the negative controls (L-17): one name removed must fail, and
-                one name nothing produces must fail"
-        (doseq [name* exposed]
-          (is (not= should-expose (disj exposed name*))
-              (str "removing " (pr-str name*) " from the exposed list must fail this "
-                   "comparison — if it does not, neither source discovers it and "
-                   "the guard is not guarding it")))
-        (is (not= should-expose (conj exposed "x-invented-by-nobody"))
-            "a name nothing sets and nothing declares must fail")))
+      (testing "the negative control (L-17), and it has to mutate what a
+                *source* discovers rather than the answer.
+
+                What stood here compared `should-expose` with `exposed` minus a
+                name, and with `exposed` plus one — but the line above has just
+                asserted those two sets equal, so an n-1 set is never equal to
+                an n set and neither comparison could fail for any reason
+                except cardinality. They restated the equality assertion and
+                added nothing. The mutation that means something is to the
+                scan's input: delete the line that sets the header and the scan
+                must stop reporting it"
+        (let [setter "src/clofin/api/payments.clj"
+              text (slurp setter)
+              without (str/replace text "\"idempotent-replayed\"" "\"x-not-set-here\"")
+              scan (fn [content]
+                     (let [f (java.io.File/createTempFile "cors-probe" ".clj")]
+                       (.deleteOnExit f)
+                       (spit f content)
+                       (header-names-set-by header-vars f)))]
+          (is (not= text without) "the mutation must actually change the source")
+          (is (contains? (scan text) "idempotent-replayed")
+              (str setter " sets the header the 2B-003 finding was about, and the "
+                   "scan must be what finds it"))
+          (is (not (contains? (scan without) "idempotent-replayed"))
+              "with the write removed the scan must stop reporting the header")))
+
+      (testing "and the discovery, not this list, is what puts a name in
+                `should-expose`"
+        (is (contains? should-expose "idempotent-replayed")
+            "the header 2B-003 was about must be discovered, not assumed")
+        (is (not (contains? should-expose "x-invented-by-nobody"))
+            "a name nothing sets and nothing declares must not appear")
+        (is (not (contains? should-expose "content-type"))
+            "a CORS-safelisted header must be excluded even though the scan
+             finds it — that exclusion is the guard's other half")))
 
     (is (= middleware/correlation-header "x-correlation-id")
         "the correlation header's name is the one exposed")
