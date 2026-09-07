@@ -17,9 +17,12 @@
   Every function takes a `source` — a pool, or a connection already inside a
   caller's transaction — so the same function composes into a larger unit of
   work without knowing which it was given. In practice every mutating call
-  arrives on a connection owned by `clofin.idempotency.repository`, because the
-  state change and the idempotency key protecting it commit together or not at
-  all.
+  **in this namespace** arrives on a connection owned by
+  `clofin.idempotency.repository`, because the state change and the idempotency
+  key protecting it commit together or not at all. Payments and approvals are
+  the six operations that take a caller key; the sentence said *every mutating
+  call* and was read as covering all seventeen of the route table's mutations
+  (**2B-009**, standing lesson **L-14**).
 
   ## Lock order
 

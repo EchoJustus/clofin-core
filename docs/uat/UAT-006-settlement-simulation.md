@@ -85,11 +85,13 @@ make db-shell
 insert into actor (id, organisation_id, display_name)
 values ('11111111-0000-0000-0000-000000000001', '<ORG>', 'Maker'),
        ('11111111-0000-0000-0000-000000000002', '<ORG>', 'Checker'),
-       ('11111111-0000-0000-0000-000000000003', '<ORG>', 'Controller');
+       ('11111111-0000-0000-0000-000000000003', '<ORG>', 'Controller'),
+       ('11111111-0000-0000-0000-000000000004', '<ORG>', 'Auditor');
 insert into actor_role (actor_id, role) values
   ('11111111-0000-0000-0000-000000000001','operator'),
   ('11111111-0000-0000-0000-000000000002','approver'),
-  ('11111111-0000-0000-0000-000000000003','controller');
+  ('11111111-0000-0000-0000-000000000003','controller'),
+  ('11111111-0000-0000-0000-000000000004','auditor');
 insert into approver_limit (actor_id, currency, limit_minor)
 values ('11111111-0000-0000-0000-000000000002','SGD',100000000);
 insert into approval_threshold (organisation_id, currency, from_minor, approvals_required)
@@ -101,6 +103,7 @@ values ('<ORG>','SGD',0,1);
 export MAKER=11111111-0000-0000-0000-000000000001
 export CHECKER=11111111-0000-0000-0000-000000000002
 export CTRL=11111111-0000-0000-0000-000000000003
+export AUDITOR=11111111-0000-0000-0000-000000000004
 
 for a in '1100-CLIENT-FUNDS asset' '1300-IN-TRANSIT asset' '2100-CLIENT-PAYABLE liability'; do
   set -- $a
@@ -485,8 +488,15 @@ nothing is in flight.
 
 ## Step 11 — The trail an auditor reads
 
+**Read as `$AUDITOR`, not as `$CTRL`.** The controller executes settlement; it
+does not hold `audit/read`, which only `compliance` and `auditor` do, so the
+same two calls sent as `$CTRL` answer `403`. That is the control working — the
+actor who pushed the money out is not the actor who reads the trail of it — and
+these two steps used `$CTRL` and would have failed here (release-audit finding
+**2B-010**, standing lesson **L-20**).
+
 ```sh
-curl -sS "$BASE/audit/evidence/$SETTLES?organisationId=$ORG" -H "x-actor-id: $CTRL" \
+curl -sS "$BASE/audit/evidence/$SETTLES?organisationId=$ORG" -H "x-actor-id: $AUDITOR" \
   | jq '[.events[].action]'
 ```
 
@@ -500,7 +510,7 @@ curl -sS "$BASE/audit/evidence/$SETTLES?organisationId=$ORG" -H "x-actor-id: $CT
 And for the batch:
 
 ```sh
-curl -sS "$BASE/audit/evidence/$BATCH?organisationId=$ORG" -H "x-actor-id: $CTRL" \
+curl -sS "$BASE/audit/evidence/$BATCH?organisationId=$ORG" -H "x-actor-id: $AUDITOR" \
   | jq '{subjectType, actions: [.events[].action]}'
 ```
 

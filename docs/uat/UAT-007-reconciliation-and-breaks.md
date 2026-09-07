@@ -49,7 +49,7 @@ decoration:**
 
 | | |
 |---|---|
-| Prerequisite | [UAT-006](UAT-006-settlement-simulation.md) completed, or its steps 1–7 repeated |
+| Prerequisite | [UAT-006](UAT-006-settlement-simulation.md) completed, or its steps 1–7 repeated. **Everything this script inherits from it is listed below** — the variables, the actors and their roles, and the one piece of seeded configuration this script replaces rather than reuses. An acceptance script is an executable contract, and a sequel that inherits state silently is one whose promised boundary may already be unreachable (finding **2C-004**, lesson **L-20**) |
 | Tools | `curl`, `jq`, `psql` (via `make db-shell`) |
 | Time | About 40 minutes |
 | Data | Synthetic only |
@@ -58,15 +58,27 @@ decoration:**
 export BASE=http://localhost:8080
 ```
 
-You need, from UAT-006 or from a fresh run of its setup:
+### What this script inherits from UAT-006
 
-- `$ORG` — the organisation id
-- `$CONTROLLER` — an actor holding `controller` (it holds
-  `reconciliation/execute`)
-- `$CHECKER` — an actor holding `approver`, with an SGD limit above SGD 100.00
-- `$AUDITOR` — an actor holding `auditor`
-- a settled batch, a returned payment, and — importantly — **one payment nobody
-  answered about**
+Every variable and actor alias, with the role each holds. UAT-006 exports
+`$MAKER`, `$CHECKER`, `$CTRL` and `$AUDITOR`; this script calls the controller
+`$CONTROLLER`, so set it from `$CTRL` if you are continuing in the same shell:
+
+```sh
+export CONTROLLER=$CTRL      # UAT-006 exports it as $CTRL
+```
+
+| Inherited | What it is | Role it holds | Used here for |
+|---|---|---|---|
+| `$ORG` | the organisation id | — | every request |
+| `$CONTROLLER` (UAT-006's `$CTRL`) | an actor holding `controller` | `reconciliation/execute`, `reconciliation/read` | ingesting, assigning, proposing |
+| `$CHECKER` | an actor holding `approver`, SGD limit above SGD 100.00 | `payment/approve`, `payment/reject` | deciding an adjustment |
+| `$AUDITOR` | an actor holding `auditor` | `audit/read`, `reconciliation/read` | every `/audit/` read below. The controller does **not** hold `audit/read` and answers `403` there — UAT-006's Step 11 used it and was corrected at the same time (finding **2B-010**) |
+| a settled batch, a returned payment, and **one payment nobody answered about** | the ledger movements this script reconciles against | — | steps 1–8 |
+
+**And one thing this script does not inherit:** UAT-006's SGD approval band.
+It seeds a floor of zero; this script replaces the tenant's SGD bands
+outright, for the reason given below.
 
 You also need two accounts beyond settlement's three:
 
@@ -82,18 +94,51 @@ about.
 
 **Approval bands matter here and are worth setting deliberately.** The lowest
 band an organisation configures for a currency is the point at which an
-adjustment starts needing approval; below it one actor may post. Set the floor
-at SGD 1,000.00 so both cases are reachable:
+adjustment starts needing approval; below it one actor may post.
+
+**Replace the tenant's SGD bands — do not add to them.** UAT-006 seeds a band
+from `0`, which is a floor of zero: with it in place *every* adjustment needs
+approval and the de-minimis case in step 10 cannot happen. Adding a band at
+SGD 1,000.00 beside it leaves the zero band as the lowest, so the floor is
+still zero — which is why step 10's stated `approvalsRequired: 0` was
+unreachable as written (release-audit finding **2C-004**, standing lesson
+**L-20**: a sequel replays its prerequisite's seeded configuration and asserts
+the boundary it promises).
+
+So delete the tenant's SGD bands and insert the one this script needs. **The
+floor becomes SGD 1,000.00** — at or above it an adjustment needs one
+approval, below it the proposer alone may post:
 
 ```sh
 make db-shell
 ```
 ```sql
+-- inside psql; substitute your ORG
+delete from approval_threshold where organisation_id = '<ORG>' and currency = 'SGD';
 insert into approval_threshold (organisation_id, currency, from_minor, approvals_required)
-values ('<ORG>', 'SGD', 100000, 1)
-on conflict (organisation_id, currency, from_minor)
-  do update set approvals_required = excluded.approvals_required;
+values ('<ORG>', 'SGD', 100000, 1);
+\q
 ```
+
+**One band, and the de-minimis case is what lies below it.** There is no
+`(0, 0)` row and there cannot be: `threshold_approvals_positive` in migration
+`0005` requires `approvals_required >= 1`, so a band demanding zero approvals
+is uninsertable. Zero is not a band — it is what
+`clofin.recon.adjustment/approvals-required` answers for an amount *below* the
+lowest band the organisation configured. The distinction that matters is a
+different one: an organisation with **no** band in a currency cannot adjust at
+all, deliberately, because "unconfigured" must not read as "needs nobody". One
+band at SGD 1,000.00 gives you both — a configured currency, and a de-minimis
+region under it.
+
+Check what you now have:
+
+```sql
+select from_minor, approvals_required from approval_threshold
+ where organisation_id = '<ORG>' and currency = 'SGD' order by from_minor;
+```
+
+**Expected:** exactly one row — `100000 | 1`.
 
 ---
 

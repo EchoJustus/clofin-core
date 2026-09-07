@@ -9,9 +9,33 @@
   (:require [clofin.build-info :as build-info]
             [clofin.db.core :as db]
             [clofin.db.migrate :as migrate]
-            [clofin.http.response :as resp]))
+            [clofin.http.response :as resp]
+            [clojure.java.io :as io]
+            [clojure.string :as str]))
 
 (def ^:private started-at (System/currentTimeMillis))
+
+(def disclaimer
+  "The canonical scope statement, read from `resources/disclaimer.txt`.
+
+  **One place, and every restatement is a copy of it.** `GET /` serves this,
+  `make help` prints this file, and `scripts/check-disclaimer.sh` compares
+  every release annotation against it — so the operator-facing and
+  reader-facing surfaces cannot say three different things, which is what they
+  did. `make help` stated synthetic data, no institutional connection and no
+  regulatory approval and omitted the explicit never-processes-real-funds
+  clause (release-audit finding **2B-007**), and the `ref-1` release body
+  states four negations and omits the regulatory one (**2B-008**). Each was
+  individually reasonable and collectively a set of surfaces that disagreed
+  about the boundary.
+
+  Read at load and trimmed of its trailing newline, because a file wants one
+  and a JSON string must not have one — the value this serves is byte for byte
+  the value it served before this file existed, which `clofin.api.health-test`
+  asserts."
+  (-> (io/resource "disclaimer.txt")
+      slurp
+      str/trim))
 
 (defn healthz
   "Liveness. Answers as long as the process can serve a request; it must not
@@ -50,14 +74,28 @@
   description rather than leaving the stronger reading available. The `or` is
   not defensive tidying — a null or absent field would render on a client as a
   blank where a commit should be, which is the one thing this field must never
-  do."
+  do.
+
+  `instanceId` is the same kind of value with the opposite default: an opaque
+  identifier the operator passed at start-up, echoed verbatim, and **absent
+  when none was passed**. Absence is meaningful here, which is why there is no
+  `\"unknown\"` — a caller that passed nothing gets no field rather than a
+  string that looks like an answer. Its use is the capture harness, which mints
+  one per run and refuses a stack that does not echo it back; what that
+  establishes is not that these bytes are that commit, but that the process
+  answering is the one the harness started (release-audit finding **2C-006**,
+  standing lesson **L-19**)."
   [config]
   (fn [_request]
-    (resp/ok {"service" "clofin-core"
-              "description" "Open-source enterprise payments and reconciliation core"
-              "environment" (name (:environment config))
-              "disclaimer" (str "CloFin operates on synthetic data only. It is not connected "
-                                "to any bank, payment scheme or central bank, holds no "
-                                "regulatory authorisation, and never processes real funds.")
-              "sourceCommit" (or (:source-commit config) build-info/unknown)
-              "documentation" "https://github.com/EchoJustus/clofin-core"})))
+    (resp/ok (cond-> {"service" "clofin-core"
+                      "description" "Open-source enterprise payments and reconciliation core"
+                      "environment" (name (:environment config))
+                      "disclaimer" disclaimer
+                      "sourceCommit" (or (:source-commit config) build-info/unknown)
+                      "documentation" "https://github.com/EchoJustus/clofin-core"}
+               ;; `not-empty`, not truthiness: an empty string is a value in
+               ;; Clojure and would publish a field whose whole meaning is that
+               ;; it was passed. `load-config` already blanks it to nil; this is
+               ;; the same rule where the map is built by hand.
+               (not-empty (:instance-id config)) (assoc "instanceId"
+                                                        (:instance-id config))))))

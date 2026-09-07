@@ -19,8 +19,10 @@
   the stamp without a test here fails rather than passing unnoticed
   (**L-6** — a guard over the copy the author was looking at is the defect it
   exists to catch)."
-  (:require [clofin.tools.capture.bundle :as bundle]
+  (:require [clofin.tools.capture :as capture]
+            [clofin.tools.capture.bundle :as bundle]
             [clofin.tools.capture.provenance :as prov]
+            [clofin.tools.capture.quotations :as quotations]
             [clojure.data.json :as json]
             [clojure.java.io :as io]
             [clojure.string :as str]
@@ -166,10 +168,11 @@
    :body-sha256 (prov/sha256 "{\"disclaimer\":\"CloFin operates on synthetic data only.\"}")
    :disclaimer "CloFin operates on synthetic data only."})
 
-(defn- complete-bundle
-  []
-  (let [p (assoc (stamp (fake-git (answers))) :schema-version-applied "0011")]
-    (bundle/assemble
+(defn- bundle-with
+  "A complete bundle carrying `p` as its stamp — including a `p` that is
+  deliberately incomplete, which is what the writer matrix needs."
+  [p]
+  (bundle/assemble
      {:scenario     {:id "example" :title "Example" :summary "…" :source "docs/uat/UAT-005…"}
       :provenance   p
       :steps        [{:n 1 :id "s1" :kind "http" :title "A call"
@@ -180,8 +183,12 @@
       :accounts     []
       :journal      []
       :audit-events []
-      :sand-table   nil
-      :service-info service-info})))
+    :sand-table   nil
+    :service-info service-info}))
+
+(defn- complete-bundle
+  []
+  (bundle-with (assoc (stamp (fake-git (answers))) :schema-version-applied "0011")))
 
 (defn- temp-path [name]
   (io/file (System/getProperty "java.io.tmpdir")
@@ -418,3 +425,342 @@
       (is (thrown-with-msg?
            clojure.lang.ExceptionInfo #"not in the captured chart of accounts"
            (bundle/verify-against-journal! (table-with 375000 ["e1"]) journal []))))))
+
+;; ---------------------------------------------------------------------------
+;; AC-3 (2C-005) — the gate is on every writer, not on the one that had it
+;;
+;; ADR-0022 promised that a refusal leaves nothing behind that looks like
+;; output, because the next step in the pipeline copies files. `write!` and
+;; `write-fixture!` kept that promise; `write-quotations!` and `write-manifest!`
+;; opened their files with no provenance check at all. The exhaustive
+;; required-field test above covered one writer of four while the precondition
+;; applied to every artifact sink — standing lesson **L-17**, a guard complete
+;; along one dimension of its set and absent along another.
+;; ---------------------------------------------------------------------------
+
+(defn- without
+  "The stamp with one required field removed, at any depth."
+  [stamp path]
+  (if (= 1 (count path))
+    (dissoc stamp (first path))
+    (update-in stamp (vec (butlast path)) dissoc (last path))))
+
+(def ^:private writers
+  "Every function in the harness that opens a file, and how to call it.
+
+  Discovered from `clofin.tools.capture.bundle` rather than remembered: the
+  `every-writer-is-exercised` test below compares this list with the namespace's
+  public `write*!` vars, so a fifth writer added without a row here fails."
+  {"write!" (fn [stamp path]
+              (bundle/write! {:path path
+                              :bundle (bundle-with stamp)
+                              :service-info service-info}))
+   "write-fixture!" (fn [stamp path]
+                      (bundle/write-fixture! {:path path :provenance stamp
+                                              :service-info service-info}))
+   "write-quotations!" (fn [stamp path]
+                         (bundle/write-quotations!
+                          {:path path :provenance stamp
+                           :quotations {"controls" [{"id" "C-01" "statement" "…"}]
+                                        "invariants" [{"id" "I1" "statement" "…"}]}}))
+   "write-manifest!" (fn [stamp path]
+                       (bundle/write-manifest!
+                        {:path path :provenance stamp
+                         :fixture {:name "service-info.json" :sha256 "a"}
+                         :quotations {:name "quotations.json" :sha256 "b"}
+                         :bundles [{:id "example" :title "Example"
+                                    :name "bundles/example.json" :sha256 "c"}]}))})
+
+(deftest ac-3-every-writer-refuses-an-incomplete-stamp-and-leaves-nothing-behind
+  (let [complete (assoc (stamp (fake-git (answers))) :schema-version-applied "0011")]
+    (testing "the positive case first, so the matrix below cannot pass by
+              refusing everything"
+      (doseq [[name* write!] writers]
+        (let [path (temp-path "artifact.json")]
+          (is (map? (write! complete path)) (str name* " must write a complete stamp"))
+          (is (.exists (io/file path)) name*)
+          (.delete (io/file path)))))
+
+    (doseq [[name* write!] writers
+            path* @#'prov/required
+            :let [field (first path*)]]
+      (testing (str name* " with provenance." (str/join "." (map clojure.core/name field)) " absent")
+        (let [path (temp-path "artifact.json")]
+          (is (thrown-with-msg?
+               clojure.lang.ExceptionInfo #"not fully stamped"
+               (write! (without complete field) path))
+              (str name* " wrote an artifact whose stamp was missing "
+                   (str/join "." (map clojure.core/name field))))
+          (is (not (.exists (io/file path)))
+              (str name* " refused and left a file behind: a written-then-rejected "
+                   "artifact is indistinguishable from output to whatever copies it next")))))))
+
+(deftest every-writer-is-exercised
+  (testing "a fifth writer added to the harness without a row above is a writer
+            nothing checks (L-17: enumerate the output sinks, not just the
+            fields)"
+    (let [discovered (set (keep (fn [[sym var*]]
+                                  (let [n (clojure.core/name sym)]
+                                    (when (and (re-find #"^write.*!$" n)
+                                               (fn? @var*))
+                                      n)))
+                                (ns-publics 'clofin.tools.capture.bundle)))]
+      (is (= discovered (set (keys writers)))
+          (str "clofin.tools.capture.bundle exposes " (pr-str (vec (sort discovered)))
+               " and this namespace exercises " (pr-str (vec (sort (keys writers)))))))))
+
+(deftest a-control-s-statement-carries-the-paragraph-that-scopes-it
+  (testing "2C-007 was C-13's seven numbered guarantees being cut off after the
+            first paragraph. Widening to the whole labelled block fixes that and
+            also changes four other controls, which is the *point* rather than a
+            side effect: C-09, C-10 and C-12 each state a claim and then, in the
+            next paragraph, say what it is narrowed to and why. Published
+            without that paragraph, C-09 reads as *no logging emits a sensitive
+            value* full stop — which is the sentence the `ref-1` audit found
+            false (A-007) and which C-11 contradicts on the same page. A
+            walkthrough that renders the first paragraph alone renders the
+            un-narrowed claim, so the block is the unit, not the paragraph
+            (**L-14**)"
+    (let [by-id (into {} (map (juxt #(get % "id") #(get % "statement")))
+                      (quotations/controls "." "HEAD"))]
+      (doseq [[id scoping] {"C-09" "scoped to the two enforcement points"
+                            "C-10" "narrower than"
+                            "C-12" "load-bearing"}]
+        (let [statement (get by-id id)]
+          (is (some? statement) id)
+          (is (str/includes? statement scoping)
+              (str id "'s statement must carry the paragraph that scopes it, or "
+                   "the walkthrough publishes a claim the document itself "
+                   "narrows — got " (pr-str statement)))))
+
+      (testing "and a control whose claim needs no narrowing is not padded"
+        (is (= 1 (count (str/split-lines (get by-id "C-03"))))
+            (str "C-03 is one sentence and must stay one — " (pr-str (get by-id "C-03"))))))))
+
+(deftest the-run-s-instance-id-does-not-reach-the-fixture
+  (testing "the harness mints a fresh instance id per run so that no process
+            already listening can echo it (2C-006). It therefore appears in
+            `GET /` from `ref-2` on — and `service-info.json` records `bodyRaw`
+            verbatim while every bundle carries `scopeStatement.bodySha256`, so
+            left in it would make two captures of the *same commit* differ in
+            fixture bytes, in every per-bundle digest and in the manifest, and
+            would render a meaningless UUID under *what this service says it
+            is*. ADR-0022's premise is that a value read from the artifact does
+            not drift"
+    (let [id "11111111-2222-3333-4444-555555555555"
+          raw (str "{\"service\":\"clofin-core\",\"instanceId\":\"" id
+                   "\",\"disclaimer\":\"synthetic only\"}")
+          res {:status 200
+               :body {"service" "clofin-core" "instanceId" id
+                      "disclaimer" "synthetic only"}
+               :body-raw raw
+               :body-sha256 (prov/sha256 raw)}
+          out (capture/redact-instance-id res id)]
+      (is (not (str/includes? (:body-raw out) id))
+          (str "the run's id must not survive into the fixture — " (:body-raw out)))
+      (is (str/includes? (:body-raw out) capture/redacted-instance-id))
+      (is (= capture/redacted-instance-id (get (:body out) "instanceId")))
+      (is (= (prov/sha256 (:body-raw out)) (:body-sha256 out))
+          "the digest must be of what the artifact holds, or nobody can recompute it")
+      (is (not= (:body-sha256 res) (:body-sha256 out))
+          "and it must actually differ from the digest of the unredacted body")
+
+      (testing "two runs of the same commit produce the same fixture bytes,
+                which is the property the redaction exists for"
+        (let [other "99999999-8888-7777-6666-555555555555"
+              raw-2 (str/replace raw id other)
+              out-2 (capture/redact-instance-id
+                     {:status 200
+                      :body {"service" "clofin-core" "instanceId" other
+                             "disclaimer" "synthetic only"}
+                      :body-raw raw-2
+                      :body-sha256 (prov/sha256 raw-2)}
+                     other)]
+          (is (= (:body-raw out) (:body-raw out-2)))
+          (is (= (:body-sha256 out) (:body-sha256 out-2)))))
+
+      (testing "and everything else in the response is untouched — a redaction
+                that re-encoded the body would defeat `clofin-trace`'s
+                byte-comparison of the disclaimer"
+        (is (= "synthetic only" (get (:body out) "disclaimer")))
+        (is (str/includes? (:body-raw out) "\"disclaimer\":\"synthetic only\""))
+        (is (str/includes? (:body-raw out) "\"service\":\"clofin-core\"")))
+
+      (testing "a commit that reports no instance id at all is left alone"
+        (let [plain {:status 200 :body {"service" "clofin-core"}
+                     :body-raw "{\"service\":\"clofin-core\"}"
+                     :body-sha256 "x"}]
+          (is (= plain (capture/redact-instance-id plain nil)))
+          (is (= plain (capture/redact-instance-id plain ""))))))))
+
+(def ^:private sink-primitives
+  "Every way a JVM Clojure namespace can put bytes on disk, as the literal text
+  that would appear in the source.
+
+  A list rather than `(spit `, because the claim this backstop makes is *the
+  four stamped writers are the only door to a file* — and a claim about every
+  sink that walks one primitive is a claim about one primitive. `io/writer`
+  opens a file as surely as `spit` does, and neither the writer matrix nor the
+  `^write.*!$` discovery below would notice a sink named `emit-index!` that
+  used it (**L-17**, and **2C-005**'s failure mode with a different spelling)."
+  [#"\(spit " #"io/writer" #"io/output-stream" #"io/copy"
+   #"FileOutputStream" #"FileWriter" #"PrintWriter"
+   #"Files/write" #"Files/newBufferedWriter" #"Files/newOutputStream" #"Files/copy"])
+
+(defn- harness-sources
+  "Every source file of the capture harness.
+
+  Both the package directory **and** `capture.clj` beside it. The entrypoint —
+  which is what `make capture-trace` runs, and which orchestrates the writers —
+  sits outside the directory, so a `file-seq` of the directory alone walks the
+  harness minus its front door."
+  []
+  (conj (->> (file-seq (io/file root "tools/clofin/tools/capture"))
+             (filter #(.isFile ^java.io.File %))
+             (filter #(str/ends-with? (.getName ^java.io.File %) ".clj"))
+             vec)
+        (io/file root "tools/clofin/tools/capture.clj")))
+
+(deftest the-harness-writes-through-those-writers-and-nowhere-else
+  (testing "ADR-0022: there is no file sink anywhere else in the capture
+            harness, so the gate above is the only door to a file"
+    (let [sinks (into {}
+                      (for [f (harness-sources)
+                            :let [text (slurp f)
+                                  n (reduce + (map #(count (re-seq % text)) sink-primitives))]
+                            :when (pos? n)]
+                        [(.getName ^java.io.File f) n]))]
+      (is (= {"bundle.clj" 4} sinks)
+          (str "every file the harness opens must go through a stamped writer; found "
+               (pr-str sinks)))))
+
+  (testing "and the scan is looking at the whole harness, entrypoint included —
+            a set this asserts about must be a set it walks (L-14)"
+    (let [names (set (map #(.getName ^java.io.File %) (harness-sources)))]
+      (is (contains? names "capture.clj")
+          (str "the entrypoint must be scanned; walked " (pr-str (sort names))))
+      (is (contains? names "bundle.clj"))
+      (is (< 5 (count names))
+          (str "the harness is more than a file or two; walked " (pr-str (sort names))))))
+
+  (testing "and the primitive list is not vacuous: a sink written any of these
+            ways is seen"
+    (doseq [line ["(spit f x)" "(io/writer f)" "(io/copy a f)"
+                  "(FileOutputStream. f)" "(java.nio.file.Files/write p b)"]]
+      (is (some #(re-find % line) sink-primitives)
+          (str "a sink spelled " (pr-str line) " would pass the backstop unseen")))))
+;; ---------------------------------------------------------------------------
+;; AC-4 (2C-007) — the statement is the whole labelled block
+;;
+;; Thirteen controls were found and thirteen were reported, and C-13's
+;; statement arrived as its introductory sentence with all seven of the
+;; guarantees it introduces missing. Complete ID coverage masked empty content
+;; coverage (standing lesson **L-17**).
+;;
+;; The expectation below is sliced out of the raw file by a **different method**
+;; — a regex over the file's text, rather than the extractor's line-index scan —
+;; because two implementations of one rule that can only agree prove nothing
+;; (standing lesson **L-16**).
+;; ---------------------------------------------------------------------------
+
+(defn- statement-by-regex
+  "Every control's statement, sliced from the raw file text.
+
+  Independent of `clofin.tools.capture.quotations`: this splits the file on
+  `### C-nn` headings, then takes from `**Statement.**` to the next
+  paragraph-leading `**`, heading or rule, by pattern rather than by index."
+  [text]
+  (into {}
+        (for [section (rest (str/split text #"(?m)^### (?=C-\d+)"))
+              :let [id (second (re-find #"^(C-\d+)" section))
+                    body (second (re-find #"(?s)\*\*Statement\.\*\*(.*?)(?:\n\n\*\*|\n#{1,6} |\n-{3,}\n|\z)"
+                                          section))]
+              :when (and id body)]
+          [id (-> body (str/replace #"\s+" " ") str/trim)])))
+
+(defn- normalise [s] (-> (str s) (str/replace #"\s+" " ") str/trim))
+
+(deftest ac-4-every-control-statement-is-quoted-whole
+  (let [text (slurp (io/file root "docs/COMPLIANCE.md"))
+        extracted (into {} (for [c (quotations/controls root commit)]
+                             [(get c "id") (get c "statement")]))
+        expected (statement-by-regex text)]
+    (testing "the discovered population is not empty, and the two methods found
+              the same controls (L-17: assert non-vacuity after discovery)"
+      (is (seq extracted))
+      (is (= (set (keys extracted)) (set (keys expected)))
+          (str "the extractor found " (pr-str (vec (sort (keys extracted))))
+               " and the raw-text slice found " (pr-str (vec (sort (keys expected)))))))
+
+    (doseq [[id statement] (sort extracted)]
+      (testing (str id "'s statement is the text between its markers")
+        (is (= (normalise (get expected id)) (normalise statement))
+            (str id " differs between the extractor and an independent slice of "
+                 "docs/COMPLIANCE.md"))))))
+
+(deftest ac-4-c-13-carries-its-seven-numbered-guarantees
+  (testing "the finding itself: at the RC this statement was 74 characters —
+            its introductory sentence — and a consumer restricted to the
+            fixture could not display the guarantees it exists to quote"
+    (let [c13 (->> (quotations/controls root commit)
+                   (filter #(= "C-13" (get % "id")))
+                   first
+                   (#(get % "statement")))]
+      (is (some? c13))
+      (is (= 7 (count (re-seq #"(?m)^\d+\. " c13)))
+          (str "C-13 states seven numbered guarantees and the fixture must carry "
+               "all seven; it carries " (pr-str (vec (re-seq #"(?m)^\d+\. " c13)))))
+      (doseq [phrase ["is either matched to exactly one"
+                      "that no line matched is a break"
+                      "has an owner and a derived age"
+                      "No reconciliation writes to the journal"
+                      "posts only after that band's number of approvals"
+                      "is refused says so, and says who and why"
+                      "is recorded as having arrived"]]
+        (is (str/includes? c13 phrase)
+            (str "C-13's fixture is missing: " (pr-str phrase))))
+      (testing "and the two things it explicitly does not claim, which L-14
+                requires to travel with the claims"
+        (is (str/includes? c13 "does **not** claim"))))))
+
+(deftest ac-4-a-bold-run-is-a-label-only-when-it-starts-a-paragraph
+  (testing "the negative control for the block rule. `docs/COMPLIANCE.md` holds
+            both shapes: labels whose bold run wraps onto the next line before
+            closing, and mid-paragraph lines that open with `**`. A rule keyed
+            on the closing `**` truncates at the second; a rule keyed on the
+            blank line before does not"
+    (let [fixture (str "### C-99 A fixture control ✅\n"
+                       "\n"
+                       "**Statement.** The first sentence, hard wrapped across\n"
+                       "**this** line, which opens with a bold run and is not a label.\n"
+                       "\n"
+                       "1. **A numbered guarantee.** With its own qualifying sentence.\n"
+                       "\n"
+                       "A closing paragraph that is still the statement.\n"
+                       "\n"
+                       "**Design.** This is where the statement stops.\n"
+                       "\n"
+                       "**Evidence.** And this is well past it.\n")
+          dir (io/file (System/getProperty "java.io.tmpdir") (str "clofin-quot-" (random-uuid)))
+          file (io/file dir "docs/COMPLIANCE.md")]
+      (io/make-parents file)
+      (spit file fixture)
+      (try
+        (let [statement (get (first (quotations/controls (str dir) commit)) "statement")]
+          (is (str/includes? statement "**this** line")
+              (str "a line opening with a bold run mid-paragraph is not a label, so "
+                   "the statement must not stop there — got " (pr-str statement)))
+          (is (str/includes? statement "A numbered guarantee")
+              "a numbered item is part of the statement, not the end of it")
+          (is (str/includes? statement "A closing paragraph that is still the statement")
+              "a second paragraph is part of the statement")
+          (is (not (str/includes? statement "This is where the statement stops"))
+              "and the next label ends it")
+          (is (not (str/includes? statement "well past it"))
+              "as does everything after that label")
+          (testing "each block is one line, so seven guarantees render as seven"
+            (is (= 3 (count (str/split-lines statement))) (pr-str statement))))
+        (finally
+          (.delete file)
+          (.delete (io/file dir "docs"))
+          (.delete dir))))))

@@ -180,12 +180,24 @@
   The breaks are surfaced as their own list rather than left for a caller to
   assemble: a break is the thing an operator has to act on, and an exception
   queue that has to be built client-side is one each client builds
-  differently."
+  differently.
+
+  **Bounded, and it says so.** `breaks` carries `breaksLimit` and
+  `breaksTruncated` beside it, exactly as `GET /reconciliation-breaks` carries
+  `limit` and `truncated` (ADR-0011). It did not: a statement with 504 breaks
+  answered with 501 of them and no indication that any were missing, while
+  `GET /reconciliation-status` counted all 504 — an evidence projection
+  claiming completeness it did not have (release-audit finding **2C-001**).
+  Pagination for these nested collections is still deferred debt; what the
+  finding is about is the bound being *invisible*, and it no longer is."
   [source stmt]
-  (assoc (statement->wire stmt)
-         "lines"      (mapv line->wire (recon/lines-for source (:id stmt)))
-         "matches"    (mapv match->wire (recon/matches-for source (:id stmt)))
-         "breaks"     (mapv break->wire (recon/breaks-for-statement source (:id stmt)))))
+  (let [{:keys [breaks truncated?]} (recon/breaks-for-statement source (:id stmt))]
+    (assoc (statement->wire stmt)
+           "lines"           (mapv line->wire (recon/lines-for source (:id stmt)))
+           "matches"         (mapv match->wire (recon/matches-for source (:id stmt)))
+           "breaks"          (mapv break->wire breaks)
+           "breaksLimit"     recon/row-cap
+           "breaksTruncated" (boolean truncated?))))
 
 ;; ---------------------------------------------------------------------------
 ;; Reading a request
@@ -326,10 +338,39 @@
     (let [[_ organisation-id] (principal/for-request pool request :reconciliation/read)
           id (wire/read-uuid (get-in request [:path-params :id]) "id")]
       (if-let [found (recon/find-break pool organisation-id id)]
-        (resp/ok (assoc (break->wire found)
-                        "adjustments" (mapv adjustment->wire
-                                            (recon/adjustments-for-break pool id))))
+        (let [{:keys [adjustments truncated?]} (recon/adjustments-for-break pool id)]
+          (resp/ok (assoc (break->wire found)
+                          "adjustments"          (mapv adjustment->wire adjustments)
+                          "adjustmentsLimit"     recon/row-cap
+                          "adjustmentsTruncated" (boolean truncated?))))
         (err/not-found! "No such reconciliation break in this organisation" {:id (str id)})))))
+
+(defn show-adjustment
+  "`GET /reconciliation-adjustments/:id` — one adjustment.
+
+  The representation is **the one the break embeds**, not a second view of the
+  same row: a caller that follows a `Location` and a caller that reads the
+  break must be told the same thing, and two renderings of one adjustment are
+  two things to keep in step.
+
+  It exists because the `Location` did not resolve. `POST
+  /reconciliation-breaks/{id}/adjustments` and `POST
+  /reconciliation-adjustments/{id}/approvals` both answer `201` with a
+  `Location` of `/reconciliation-adjustments/{id}`, and following it answered
+  `404` — the adjustment was reachable only inside its break (release-audit
+  finding **2C-011**). The decision was always durable; the ordinary
+  post-creation follow-up simply had nowhere to go.
+
+  Tenant boundary and malformed id behave exactly as `show-break` does, because
+  they are copied from it rather than decided again."
+  [pool]
+  (fn [request]
+    (let [[_ organisation-id] (principal/for-request pool request :reconciliation/read)
+          id (wire/read-uuid (get-in request [:path-params :id]) "id")]
+      (if-let [found (recon/find-adjustment pool organisation-id id)]
+        (resp/ok (adjustment->wire found))
+        (err/not-found! "No such reconciliation adjustment in this organisation"
+                        {:id (str id)})))))
 
 (defn assign-break
   "`POST /reconciliation-breaks/:id/assignment` — give a break an owner.

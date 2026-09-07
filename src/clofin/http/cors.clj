@@ -85,13 +85,24 @@
   which `content-type` is the only one CloFin sets. `location` carries the
   identity of a resource that was just created and is otherwise invisible to a
   page that just created it; `x-correlation-id` is the identifier CloFin's own
-  error responses tell a caller to quote; `allow` is what a `405` says. A
-  client built to display raw responses can then display them.
+  error responses tell a caller to quote; `allow` is what a `405` says;
+  `idempotent-replayed` is how a page tells a replay from work CloFin actually
+  did. A client built to display raw responses can then display them.
+
+  `idempotent-replayed` was missing until 2026-09-06, and the list's own test
+  is why: it restated the same three names it was asserting, so the two copies
+  could only agree (release-audit finding **2B-003**, standing lesson **L-16**).
+  The contract declared the header on six mutating responses and payment and
+  approval code emitted it, and a browser page could not read it — the one
+  distinction between a replay and new synthetic work, invisible in the one
+  client that needs it most, behind a green test. The test now discovers both
+  sets — what the contract declares and what the service sets — and compares
+  them with this list in both directions.
 
   Never `*`: a wildcard here would expose response headers this service does
   not set today and might set later, which is a decision nobody would have
   made."
-  ["location" "x-correlation-id" "allow"])
+  ["location" "x-correlation-id" "allow" "idempotent-replayed"])
 
 (def max-age-seconds
   "How long a browser may cache a preflight answer. Ten minutes: long enough

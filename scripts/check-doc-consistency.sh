@@ -23,6 +23,16 @@
 #   4. The set of briefs the ROADMAP's global-state table references is the set
 #      the briefs backlog lists — in both directions, so neither a brief the
 #      ROADMAP forgot nor one it invented passes.
+#   5. A `TASK-NNN` named in the ROADMAP's **prose or headings** as work in
+#      hand has a brief that agrees. Rules 1-4 read tables and `**Brief:**`
+#      lines; the `ref-2` release audit walked through what they do not read,
+#      twice in one document — a heading saying "phase 8.1 in flight as
+#      TASK-011" while the table below it marked 8.1-8.4 CLOSED (2B-011), and
+#      a pickup paragraph sending the next worker to "currently TASK-001" when
+#      all fourteen briefs were CLOSED (2C-008). A quotation is not a claim:
+#      double-quoted spans are silenced before a line is read for a claim, so
+#      the repaired heading that records what it used to say does not fail the
+#      repair it enforces.
 #
 # Which copies it reads: the ones in the tree it is run from. `docs/briefs/` and
 # `docs/audits/` on `main` are Master-Control-synced snapshots of `meta`; this

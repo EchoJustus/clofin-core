@@ -8,8 +8,11 @@
   (:require [clofin.api.health :as health]
             [clofin.audit :as audit]
             [clofin.build-info :as build-info]
+            [clofin.db.core :as db]
+            [clofin.db.migrate :as migrate]
             [clofin.money :as money]
             [clofin.payments.instruction :as instruction]
+            [clofin.payments.state :as state]
             [clofin.routes :as routes]
             [clofin.settlement.response :as response]
             [clojure.java.io :as io]
@@ -20,11 +23,74 @@
 
 (def ^:private http-methods #{"get" "post" "put" "patch" "delete" "head" "options"})
 
-(defn- load-spec []
+(defn clojurise
+  "SnakeYAML's `java.util.Map` / `java.util.List` as Clojure maps and vectors.
+
+  Converted **once at load**, and it is not tidying. SnakeYAML returns
+  `java.util.LinkedHashMap`, on which `get`, `get-in`, `keys` and `contains?`
+  all work — so a guard reads correctly right up to the point where it asks
+  `map?`, which is `false`, and then quietly checks nothing. That is exactly
+  what happened to the A-019 currency guard: eight schemas declare a `currency`
+  property, its `:when (map? currency)` admitted none of them, and the test
+  passed with one assertion while the defect it exists to catch could return
+  (release-audit finding **2C-003**).
+
+  So the data is made to be what it looks like, once, here — rather than every
+  predicate in this namespace having to remember."
+  [x]
+  (cond
+    (instance? java.util.Map x)  (into {} (map (fn [[k v]] [k (clojurise v)])) x)
+    (instance? java.util.List x) (mapv clojurise x)
+    :else x))
+
+(defn load-spec
+  "The contract, parsed and made into Clojure data.
+
+  Public because `clofin.api.conformance-test` validates live responses against
+  the same parse: two loaders would be two answers to \"what does the contract
+  say\", which is the shape of every finding in this file (**L-16**)."
+  []
   (let [file (io/file "api/openapi.yaml")]
     (assert (.exists file) "api/openapi.yaml must exist — it is the interface specification")
-    (with-open [r (io/reader file)]
-      (.load (Yaml.) r))))
+    (clojurise (with-open [r (io/reader file)]
+                 (.load (Yaml.) r)))))
+
+(def ^:private spec-text
+  "The raw file, for discoveries that must not go through the parser.
+
+  A guard over parsed data and a guard over the bytes are two methods; two
+  implementations of one method agreeing proves nothing (standing lesson
+  **L-16**)."
+  (delay (slurp (io/file "api/openapi.yaml"))))
+
+(defn- schemas-with-a-currency-property
+  "Every `components.schemas.*` that declares a `currency` property, read from
+  the raw YAML by indentation.
+
+  Deliberately not a second call to the parser: the point of comparing two
+  discoveries is that they are reached by different means, and two runs of the
+  same parse can only agree (standing lesson **L-16**). Indentation is the
+  file's own structure — a top-level key at column 0, a component group at 2,
+  a schema at 4, a schema section at 6, a property at 8."
+  [text]
+  (let [result (reduce
+                (fn [{:keys [top group schema section] :as st} line]
+                  (condp (fn [re l] (re-find re l)) line
+                    #"^(\w[\w-]*):" :>> (fn [[_ k]] (assoc st :top k :group nil
+                                                              :schema nil :section nil))
+                    #"^  (\w[\w-]*):" :>> (fn [[_ k]] (assoc st :group k :schema nil :section nil))
+                    #"^    (\w[\w-]*):" :>> (fn [[_ k]] (assoc st :schema k :section nil))
+                    #"^      (\w[\w-]*):" :>> (fn [[_ k]] (assoc st :section k))
+                    #"^        currency:" (if (and (= "components" top)
+                                                   (= "schemas" group)
+                                                   (= "properties" section)
+                                                   schema)
+                                            (update st :found conj schema)
+                                            st)
+                    st))
+                {:found #{}}
+                (str/split-lines text))]
+    (:found result)))
 
 (defn- spec-operations
   "`{[:get \"/healthz\"] {:operation-id \"getHealth\" :summary \"...\"}}`"
@@ -88,12 +154,141 @@
 (deftest service-info-declares-exactly-the-fields-it-returns
   (let [schema (get-in (load-spec) ["components" "schemas" "ServiceInfo"])
         declared (set (keys (get schema "properties")))
-        returned (set (keys (:body ((health/info {:environment :test}) {}))))]
-    (is (= declared returned)
+        required (set (get schema "required"))
+        ;; Both configurations, because one of the fields is optional and a
+        ;; comparison against a single response would check only the half of
+        ;; the declaration that happened to be exercised (L-17).
+        without (set (keys (:body ((health/info {:environment :test}) {}))))
+        with (set (keys (:body ((health/info {:environment :test
+                                              :instance-id "run-7"}) {}))))]
+    (is (= declared with)
         (str "ServiceInfo declares " (pr-str (vec (sort declared)))
-             " and GET / returns " (pr-str (vec (sort returned)))))
+             " and GET / returns " (pr-str (vec (sort with)))
+             " when every optional field has a value"))
+    (is (every? without required)
+        (str "ServiceInfo requires " (pr-str (vec (sort required)))
+             " and GET / returns only " (pr-str (vec (sort without)))
+             " when no optional field has a value — a required field must be"
+             " answered whatever the configuration"))
+    (is (= without (disj with "instanceId"))
+        (str "the only field whose presence depends on the configuration is"
+             " instanceId; GET / returned " (pr-str (vec (sort without)))
+             " without one and " (pr-str (vec (sort with))) " with one"))
     (testing "sourceCommit is required, because it is always answered"
-      (is (contains? (set (get schema "required")) "sourceCommit")))))
+      (is (contains? required "sourceCommit")))
+    (testing "instanceId is not, because absence is its answer for a caller
+              that passed nothing (ADR-0027 amendment 3a)"
+      (is (contains? declared "instanceId"))
+      (is (not (contains? required "instanceId"))))))
+
+(def ^:private undriven-payment-events
+  "Lifecycle events with no operation driving them.
+
+  One entry, and it is a decision rather than a gap: nothing marks an
+  instruction failed, because a settlement item whose outcome CloFin does not
+  know is swept as timed out and the instruction stays `released`. See
+  `clofin.settlement.service/sweep-timeouts!`, which says so at length."
+  #{"fail"})
+
+(deftest the-payment-event-description-names-the-drivers-it-has
+  (testing "C-R10a: the description said only `submit` and `cancel` had an
+            operation, which stopped being true when approval and settlement
+            were built. Derived from the code rather than restated, so a tenth
+            event or a driver removed fails here (L-6)"
+    (let [spec (load-spec)
+          declared (set (get-in spec ["components" "schemas" "PaymentEvent" "enum"]))
+          description (get-in spec ["components" "schemas" "PaymentEvent" "description"])
+          ;; The events the lifecycle table recognises, from the table itself.
+          modelled (set (map name state/events))
+          driven (set/difference modelled undriven-payment-events)]
+      (is (= modelled declared)
+          (str "PaymentEvent declares " (pr-str (vec (sort declared)))
+               " and clofin.payments.state recognises " (pr-str (vec (sort modelled)))))
+
+      (testing "every driven event is named in the description beside an operation"
+        (doseq [event driven]
+          (is (str/includes? description (str "`" event "`"))
+              (str "`" event "` has a driver and the description does not name it"))))
+
+      (testing "and the undriven one is named as undriven, not quietly omitted —
+                naming what a contract does not do is L-14's whole discipline"
+        (doseq [event undriven-payment-events]
+          (is (str/includes? description (str "`" event "` has no driver"))
+              (str "`" event "` is driven by nothing and the description must "
+                   "say so in those words"))))
+
+      (testing "the sentence the residual was about is gone"
+        (is (not (str/includes? description "Only `submit` and `cancel` have an"))
+            "the superseded claim must not survive beside its correction")))))
+
+(deftest the-evidence-pack-description-names-every-subject-type
+  (testing "010-REQ N-3: the prose named six of the nine subjects and omitted
+            reconciliation's three"
+    (let [description (get-in (load-spec) ["paths" "/audit/evidence/{subjectId}"
+                                           "get" "description"])
+          ;; The prose spells subjects in words; the vocabulary spells them with
+          ;; hyphens. Compare on the words, which is what a reader reads.
+          in-words (fn [t] (str/replace t #"-" " "))]
+      (is (some? description))
+      (doseq [subject audit/subject-types]
+        (is (str/includes? (str/lower-case description) (in-words subject))
+            (str "the evidence-pack description does not name the subject type "
+                 (pr-str subject) ", which clofin.audit/subject-types has")))
+      (is (str/includes? description "nine")
+          "and it states how many there are, so a tenth cannot be added
+           without this sentence being read"))))
+
+(deftest the-patch-description-tells-a-tenant-assertion-from-an-amendment
+  (testing "C-R10a: the description listed `organisationId` among the members a
+            PATCH refuses `422`, and the audit's probe supplied a matching one
+            and was answered 200"
+    (let [description (get-in (load-spec) ["paths" "/payment-instructions/{id}"
+                                           "patch" "description"])]
+      (is (str/includes? description "asserts the tenant"))
+      (is (not (re-find #"`id`, `organisationId`, `status`" description))
+          "organisationId must not be listed among the members that are 422")
+      (testing "and the members that really are refused are all named"
+        (doseq [member ["id" "status" "createdBy" "createdAt" "reversesId" "retriesId"]]
+          (is (str/includes? description (str "`" member "`"))
+              (str "the description does not name " (pr-str member)
+                   " among the members a PATCH refuses")))))))
+
+(deftest the-readiness-check-enum-is-what-the-code-can-emit
+  (testing "a contract that admits a value the system cannot produce is L-14
+            with the sign reversed. `failed` was declared and unreachable: the
+            only path that would report a failing dependency answers 503 with a
+            problem document, not a Readiness with a failed check inside it
+            (release-audit finding 2C-010)"
+    (let [declared (set (get-in (load-spec)
+                                ["components" "schemas" "Readiness" "properties"
+                                 "checks" "additionalProperties" "enum"]))
+          ;; Derived by running the handler down both of its branches, rather
+          ;; than by writing out what it emits — the second copy of a claim is
+          ;; the one that goes stale (L-6).
+          emitted (set (mapcat (fn [reachable?]
+                                 (with-redefs [db/reachable? (constantly reachable?)
+                                               migrate/current-version (constantly "0013")]
+                                   (vals (get-in ((health/readyz {:environment :test} ::pool) {})
+                                                 [:body "checks"]))))
+                               [true false]))]
+      (is (seq emitted) "the readiness handler emitted no check at all")
+      (is (= emitted declared)
+          (str "Readiness.checks declares " (pr-str (vec (sort declared)))
+               " and clofin.api.health/readyz can emit " (pr-str (vec (sort emitted)))
+               " across both of its branches")))))
+
+(deftest the-contract-says-instance-id-is-self-reported-too
+  (testing "L-14 and L-19: what an echoed identifier establishes is that the
+            process answering is the one the caller started, and the sentence
+            beside the field may not claim more than that"
+    (let [description (str/lower-case
+                       (get-in (load-spec)
+                               ["components" "schemas" "ServiceInfo"
+                                "properties" "instanceId" "description"]))]
+      (is (str/includes? description "self-reported"))
+      (is (not (str/includes? description "proves")))
+      (is (not (str/includes? description "attest"))
+          "nothing here attests anything, so the word must not appear at all"))))
 
 (deftest the-contract-says-source-commit-is-self-reported-rather-than-attested
   (testing "L-14: the sentence beside the field may not claim more than the field is"
@@ -200,12 +395,51 @@
       ;; Discovered, not listed — the `subjectType` lesson (L-6) applied to a
       ;; second enum with several copies. A currency property added later that
       ;; reintroduces the pattern fails here without anyone extending a list.
-      (doseq [[schema-name schema] (get-in spec ["components" "schemas"])
-              :let [currency (get-in schema ["properties" "currency"])]
-              :when (map? currency)]
-        (is (= "#/components/schemas/CurrencyCode" (get currency "$ref"))
-            (str "components.schemas." schema-name ".properties.currency is "
-                 (pr-str currency) " rather than a CurrencyCode reference"))))))
+      (let [found (into (sorted-map)
+                        (for [[schema-name schema] (get-in spec ["components" "schemas"])
+                              :let [currency (get-in schema ["properties" "currency"])]
+                              :when (map? currency)]
+                          [schema-name currency]))
+            ;; The same population, discovered from the bytes rather than from
+            ;; the parse. If the two disagree, one of them is looking at
+            ;; nothing — which is the whole of 2C-003 (**L-16**, **L-17**).
+            by-text (schemas-with-a-currency-property @spec-text)]
+        (testing "the population is not empty, and both methods found the same one"
+          (is (seq found)
+              (str "no schema with a `currency` property was discovered, so every "
+                   "assertion below is vacuous. At the RC this was the state: "
+                   "SnakeYAML returned java.util.LinkedHashMap, `map?` was false "
+                   "for all eight of them, and the guard checked none (2C-003)."))
+          (is (= by-text (set (keys found)))
+              (str "the parse found " (pr-str (vec (keys found)))
+                   " and a scan of the raw YAML found " (pr-str (vec (sort by-text)))
+                   " — a guard that discovers a different population from the one "
+                   "in the file is guarding something else")))
+
+        (doseq [[schema-name currency] found]
+          (is (= "#/components/schemas/CurrencyCode" (get currency "$ref"))
+              (str "components.schemas." schema-name ".properties.currency is "
+                   (pr-str currency) " rather than a CurrencyCode reference")))))))
+
+(deftest a-019-the-currency-guard-fails-when-a-currency-property-is-a-pattern
+  (testing "the negative control (L-17). The precise old contract defect — a
+            three-uppercase-letter pattern where a CurrencyCode reference
+            belongs — reintroduced in an in-memory copy of the spec, which the
+            guard must reject. At the RC the same mutation passed"
+    (let [spec (assoc-in (load-spec)
+                         ["components" "schemas" "Money" "properties" "currency"]
+                         {"type" "string" "pattern" "^[A-Z]{3}$"})
+          checked (for [[schema-name schema] (get-in spec ["components" "schemas"])
+                        :let [currency (get-in schema ["properties" "currency"])]
+                        :when (map? currency)]
+                    [schema-name (= "#/components/schemas/CurrencyCode" (get currency "$ref"))])]
+      (is (seq checked) "the mutant must still present a non-empty population")
+      (is (some (comp false? second) checked)
+          (str "the mutated Money.currency must fail the reference check — "
+               (pr-str (vec checked))))
+      (is (= ["Money"] (mapv first (remove second checked)))
+          "and only the mutated one fails, so the guard is not simply failing
+           everything"))))
 
 ;; ---------------------------------------------------------------------------
 ;; A-018 — purpose codes, in all three places that state the set

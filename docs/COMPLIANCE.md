@@ -292,12 +292,23 @@ The transactional property is made structural rather than remembered.
 `clofin.audit.repository/record!` takes a `tx` and never opens one, so the only
 connection available to a caller *is* the transaction carrying the change.
 Every service that composes a change with its event likewise takes the caller's
-transaction and requires no `clofin.db.*` namespace at all —
-`clofin.payments.approval-service`, `clofin.ledger.service`,
-`clofin.organisations.service` and `clofin.settlement.service`. A service that
-could open its own connection is a service that could write an audit event
-outside the change it describes, and `clofin.ledger.purity-test` fails the build
-if any of them acquires one.
+transaction and requires no `clofin.db.*` namespace at all — all **five** of
+them: `clofin.payments.approval-service`, `clofin.ledger.service`,
+`clofin.organisations.service`, `clofin.settlement.service` and
+`clofin.recon.service`. A service that could open its own connection is a
+service that could write an audit event outside the change it describes, and
+`clofin.ledger.purity-test` fails the build if any of them acquires one.
+
+This paragraph named four and omitted `clofin.recon.service` from TASK-008
+onward, understating a built control-bearing service — ingestion, assignment,
+proposal and decision all compose their events here — and contradicting this
+control's own reconciliation row in the matrix below by omission (release-audit
+finding **2B-005**, standing lesson **L-15**: a document that understates what
+exists is as false as one that overstates it, and less likely to be caught
+because nobody is looking). The list is now compared with
+`clofin.ledger.purity-test/service-namespaces` in both directions, so a sixth
+service arriving without a line here fails the build rather than passing
+unnoticed.
 
 **And the other half, which was documentation until audit finding F-011.** Those
 services could not *open* a transaction; nothing made a caller *supply* one.
@@ -342,10 +353,16 @@ front:
   the whole set commits or none of it does.
 
 Because an approval's events carry the *approval* as their subject,
-`clofin.audit.repository/events-for-payment` relates them back through
-`approval.instruction_id`, and the evidence pack for a payment shows its
+`clofin.audit.repository/events-for-subject-and-its-approvals` relates them
+back through `approval.instruction_id` **and `approval.adjustment_id`**, and the
+evidence pack for a payment — or for a reconciliation adjustment — shows its
 approvals' history without the subject column having to lie about what an event
-is about.
+is about. It followed only the payment link until 2026-09-06, so an
+investigator starting from an adjustment could not reach the decision that
+decided it, while one starting from a payment could (release-audit finding
+**2C-012**, standing lesson **L-21**); the function was named
+`events-for-payment` and had not been only about payments since migration
+`0012` gave `approval` a second subject.
 
 **Enforcement points.**
 
@@ -469,8 +486,10 @@ L-7's rule. A **late** `timeout-resolution` can then move that already-terminal
 status again: a batch that derived to `failed` while an item was `timed-out`
 becomes `settled` or `partially-settled` when the late truth arrives. That
 transaction writes the payment's own event (`payment.settled` /
-`payment.returned`), posts its finality entry, updates the stored batch status —
-and writes `settlement-batch.status-restated`, whose subject *is* the batch.
+`payment.returned`), posts its finality entry — through
+`clofin.ledger.service/post-entry!`, so a `journal-entry.posted` is written
+beside it — updates the stored batch status, and writes
+`settlement-batch.status-restated`, whose subject *is* the batch.
 
 **Two terms rather than one, and the distinction is L-7's.** `completed` names
 the transition *into* a complete batch, and that transition happened earlier,
@@ -847,7 +866,17 @@ rule id is written to `reconciliation_match`. Agreement is a separate pass, so a
 pair identified as one movement can still be a break for disagreeing about the
 amount, the date or the direction of travel. The break lifecycle is data, and
 resolution is a new approved entry through
-`clofin.ledger.service/post-entry!` — the same path a release takes.
+`clofin.ledger.service/post-entry!` — **the same path a release takes**, which
+became true on 2026-09-06 and was written here before it was. Settlement posted
+its release and finality entries through `clofin.ledger.repository/post-entry!`
+directly, so those entries carried no `journal-entry.posted` event and their
+evidence packs answered `404`, while an identical entry raised through the
+ledger API carried both: journal evidence depended on which producer created
+the entry (release-audit finding **2C-009**). Both settlement sites now go
+through the service, and `clofin.ledger.purity-test` asserts that
+`clofin.ledger.service` is the **only** production namespace calling the
+repository primitive — so the sentence is now enforced rather than described
+(standing lesson **L-21**).
 
 **Enforcement points.**
 
@@ -870,7 +899,15 @@ resolution is a new approved entry through
 | `clofin.audit.repository/assert-unit-of-work!` in `clofin.recon.service` | Every reconciliation write and its audit event commit together or not at all |
 
 **Evidence.** `GET /reconciliation-statements/{id}` returns every line, every
-match with the rule that produced it, and every break the statement opened.
+match with the rule that produced it, and the breaks the statement opened —
+**bounded by the row cap, and the response says when the bound was reached**:
+`breaksLimit` and `breaksTruncated` travel with the list, as
+`adjustmentsLimit` and `adjustmentsTruncated` do on a break. The sentence used
+to say "every break", which was a universal quantifier over a capped read: a
+statement with 504 breaks returned 501 of them and nothing said so, while
+`GET /reconciliation-status` counted all 504 (release-audit finding
+**2C-001**, standing lesson **L-14**). Counting, not the list, is what answers
+"how many"; pagination for these nested collections is named debt in §4.
 `GET /reconciliation-breaks` lists breaks oldest first with their derived ages.
 `GET /reconciliation-status` reports matched, unmatched and breaks by state for
 an account and period, counted over the rows rather than over a page.
@@ -915,4 +952,5 @@ Being explicit about gaps is part of the control design.
 | Log sanitiser for exception paths | **Not built. Target: the operational-hardening brief.** C-11 deliberately logs an unexpected throwable in full, and a throwable's message can carry anything the code that threw it put there — which is why C-09 is now scoped to request and configuration logging rather than to every log line. The mechanism is a sanitiser on the defect-logging path (`clofin.http.middleware/wrap-errors`, `clofin.http.server`), with a pattern set and a test that a credential in an exception message does not reach the log either. Audit finding **A-007**; the claim was narrowed at the same time, so nothing is over-stated while the debt is open |
 | Live-schema catalogue hashing | **Not built. Target: the operational-hardening brief.** C-10 covers the migration *history*: the runner hashes indexed SQL files, so a direct `ALTER TABLE` or a dropped trigger leaves every checksum and the reported `schemaVersion` unchanged. The mechanism is a canonical digest over the catalogue — tables, columns, constraints, triggers, functions, indexes, privileges — recorded per environment and comparable between them. Audit finding **A-008**. Partially mitigated today by `clofin.db.vocabulary-test`, which compares every closed vocabulary with the live catalogue on each integration run and would fail if a constraint were widened by hand |
 | Transitive dependency SBOM | **Not built. Target: the operational-hardening brief.** C-12 covers the seven **direct** dependencies in `deps.edn`; nothing here inventories the resolved graph, and ADR-0004's claim to "a short, auditable SBOM" describes a document the repository does not contain. The mechanism is a generated SBOM (CycloneDX or SPDX) produced in CI from the resolved classpath, reviewed on change, with an upstream security process named per component. Audit finding **A-010** |
-| Deep OpenAPI/handler contract validation | **Not built. Target: the operational-hardening brief.** `clofin.contract-test` proves route identity, published-vocabulary equality and the declared actor boundary. It does not invoke a handler, so request bodies, required members, response schemas and media types are maintained by review — which is how a `CreatePaymentInstructionRequest` that *required* a member the handler *refuses* passed green (findings **A-011** and **A-012**). The mechanism is schema-validating every fixture request and recorded response against the operation it names, so an unsatisfiable schema fails the build rather than an audit |
+| Deep OpenAPI/handler contract validation | **Narrowed, not built. Target: the operational-hardening brief.** `clofin.contract-test` proves route identity, published-vocabulary equality and the declared actor boundary, and does not invoke a handler — which is how a `CreatePaymentInstructionRequest` that *required* a member the handler *refuses* passed green (findings **A-011** and **A-012**). Since `ref-2`, `clofin.api.conformance-test` drives every operation in the route table through the real handler stack and checks three dimensions of each recorded **response**: that its status is declared, that every `required` member of the schema it names is present, and that every value under a declared `enum` is in it. Every operation the contract gives a `2xx` is driven to one, so no operation is counted as covered on a refusal alone. **What is still maintained by review**: request bodies are not validated against their schemas at all; `oneOf`/`anyOf` are unimplemented and a response declaring one is reported rather than checked; and the walk is one path through each operation, not its state space |
+| Pagination for nested reconciliation collections | **Not built, and the bound is now visible.** A statement's breaks and a break's adjustments are capped at 500 with `breaksTruncated` / `adjustmentsTruncated` on the response (C-13, finding **2C-001**); there is no cursor, so the rows past the cap are reachable only by counting them through `GET /reconciliation-status`. A cursor contract has been deferred since increment 2 for the reason it is still deferred — designed without a consumer it would be guesswork — and the finding was that the omission was *silent*, which it no longer is |

@@ -118,8 +118,14 @@ non-safelisted request header turned every green unit test into an opaque
 **No credentials.** `Access-Control-Allow-Credentials` is never sent, so a
 browser attaches no cookie and no HTTP authentication. CloFin's principal is a
 header a page sets deliberately, which needs no ambient credential and is safer
-without one. `Access-Control-Expose-Headers` names three headers explicitly —
-`location`, `x-correlation-id`, `allow` — and never `*`.
+without one. `Access-Control-Expose-Headers` names four headers explicitly —
+`location`, `x-correlation-id`, `allow`, `idempotent-replayed` — and never `*`.
+(Three when this ADR was written; `idempotent-replayed` was added at `ref-2`,
+finding **2B-003**, having been set by two namespaces and declared on six
+responses while a page could not read it. The list is no longer maintained by
+counting: `clofin.http.cors-test` derives what must be exposed from `src/` and
+from the contract, two sources that move independently of this sentence — which
+is why this sentence is the one that went stale.)
 
 **`Vary: Origin` on every response while the allowlist is active**, including
 responses carrying no CORS header. A shared cache that stored one origin's
@@ -165,6 +171,68 @@ larger than their enforcement, and "the service reports its commit" is exactly
 the sentence that acquires the word "proves" if nobody writes down that it does
 not. A contract test asserts the description contains *self-reported* and *not
 attested*, and does not contain *proves*.
+
+### 3a. Amendment, 2026-09-06 — `instanceId`, and what an echoed value establishes
+
+*Added by TASK-015, remediating release-audit finding **2C-006** (blocking) and
+adopting standing lesson **L-19**. Sections 1–4 above stand unchanged; this
+section adds a second self-reported field and states, in the wording the finding
+requires, what it does and does not show.*
+
+`GET /` gains an **optional** `instanceId`: an opaque identifier the operator
+passed as `CLOFIN_INSTANCE_ID` at start-up, echoed verbatim, and **absent when
+none was passed**. There is no `"unknown"` placeholder for it, and the asymmetry
+with `sourceCommit` is deliberate — that field is always rendered because a
+blank where a commit should be is worse than the word "unknown", while a caller
+that passed no instance id must not receive a string that looks like an answer.
+The service does not parse it, generate one, or refuse a value; it is not in
+`required`, and the contract test covers both presence and absence.
+
+**What it is for.** The capture harness (ADR-0022) had no way to establish that
+the stack it interrogated was the stack it started. It checked a port and a
+schema version, and neither is an identity: the release audit put an unrelated
+local responder reporting schema `0013` on the capture port, asked the harness
+to spawn `/bin/false`, and watched it accept the stranger's `200` and stamp it
+with the commit under capture. The harness now mints a fresh identifier per run
+— *after* anything already listening has started, so no such process can produce
+it — passes it to the child, and refuses any answer that does not echo it back.
+
+**Amended 2026-09-07.** That last clause holds for every commit whose `GET /`
+renders `instanceId`, which means `ref-2` and after — this ADR is what put it
+there. It cannot hold for `ref-1`, whose `GET /` reports service, description,
+environment, disclaimer and documentation and nothing else, and which is the
+documented default of `make capture-trace`. Demanding an echo such a service has
+no way to produce would not make a capture safer; it would refuse every capture
+of the only tag that exists, with a message asserting the process answering is
+not the one the run started when it is exactly that process — and it would
+contradict ADR-0022, which established that `ref-1` predates any build stamp and
+that changing the source to make it capturable captures a different source
+state. So the harness reads the **worktree** to decide which gate applies, never
+the answer: a commit whose source renders the field must echo it, and one whose
+source does not binds by port exclusion instead, which the run states rather
+than implies. A worktree the harness cannot read is neither, and refuses.
+
+**What an echoed value establishes, exactly.** `instanceId` and `sourceCommit`
+are both **self-reported**, and this amendment does not soften that. Neither
+proves that the bytes serving the response are the bytes at a commit; a process
+can be started with any stamp, and section 3 says so about `sourceCommit` for
+precisely that reason. What the harness establishes with them is narrower and
+sufficient for what a stamp's consumers depend on: **the process that answered
+is the one this run spawned, from a worktree it verified clean at that commit.**
+The word *attested* does not appear, here or in the capture docstrings, and the
+contract test's existing prohibition on *proves* covers the new field's
+description too.
+
+**A second hole, closed in the same change.** A child process inherits its
+parent's environment, and `make capture-trace` exports `CLOFIN_SOURCE_COMMIT`
+as the *harness's* own `HEAD` — the harness runs from `main` while the stack
+runs from a tag. The captured commit's service therefore inherited it and
+reported `main`'s SHA under `sourceCommit`: resolution order step 1, working
+exactly as section 2 describes, applied to a value nobody intended it to see.
+The harness now sets `CLOFIN_SOURCE_COMMIT` explicitly from the commit under
+capture and refuses a stack that reports anything else. Section 2's resolution
+order is unchanged; what changed is that the harness stopped leaving the input
+to chance.
 
 ### 4. What does not change
 
@@ -265,6 +333,15 @@ needed no exemption.
   from an allowed origin and an unlisted one, because a preflight fault is
   invisible to `curl` and to every unit test in this file. The evidence is in
   `docs/audits/012-REQ-cockpit-connect-and-bootstrap.md`.
+- **`instanceId`** (amendment 3a). `clofin.tools.capture-stack-test` runs the
+  audit's own probe — an unrelated `HttpServer` reporting schema `0013` on the
+  port, `/bin/false` as the child — and asserts the occupied port is refused
+  before spawning, a dead child is refused however healthy the port looks, a
+  responder echoing the wrong instance id or none is refused, one echoing the
+  right id with a different commit is refused, and a destroyed child fails the
+  check before the next file is written. `clofin.api.health-test` asserts the
+  field is absent when nothing was passed and echoed verbatim when it was;
+  `clofin.contract-test` asserts it is declared and is not `required`.
 - **Nothing else moved.** `make verify` covers the same suite it did before,
   plus this increment's; no migration, no route, no dependency, and
   `docs/COMPLIANCE.md` is untouched.

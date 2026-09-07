@@ -85,6 +85,62 @@
                            "commit" (get-in p [:harness :commit])
                            "dirty"  (boolean (get-in p [:harness :dirty?])))))
 
+(defn wire->internal
+  "The stamp read back out of the shape a written artifact carries it in.
+
+  `clofin.tools.capture.provenance/problems` works on the internal shape and a
+  bundle holds the wire shape, so something has to translate. This is that
+  something, and there is one of it: the same conversion used to be written out
+  twice — once inside `write!`'s validation and once inside `write-fixture!`'s
+  — while two of the four writers validated nothing at all (release-audit
+  finding **2C-005**)."
+  [p]
+  {:source-commit          (get p "sourceCommit")
+   :source-commit-short    (get p "sourceCommitShort")
+   :source-ref             (get p "sourceRef")
+   :source-url             (get p "sourceUrl")
+   :tag                    (get p "tag")
+   :tag-kind               (get p "tagKind")
+   :release-audit          {:label         (get-in p ["releaseAudit" "label"])
+                            :statement     (get-in p ["releaseAudit" "statement"])
+                            :source        (get-in p ["releaseAudit" "source"])
+                            :source-ref    (get-in p ["releaseAudit" "sourceRef"])
+                            :source-sha256 (get-in p ["releaseAudit" "sourceSha256"])}
+   :captured-at            (get p "capturedAt")
+   :schema-version-applied (get p "schemaVersionApplied")
+   :harness                {:commit (get-in p ["harness" "commit"])}})
+
+(defn stamp-problems
+  "Every reason a wire-shape stamp is not a complete one, as sentences.
+
+  **The one definition of a complete stamp**, and every writer reaches it.
+  Empty means valid."
+  [wire]
+  (prov/problems (wire->internal wire)))
+
+(defn assert-provenance!
+  "Refuse, before a file is opened, unless the stamp is complete.
+
+  ADR-0022 says a refusal leaves nothing behind that looks like output, because
+  the next step in the pipeline copies files. That was true of `write!` and of
+  `write-fixture!` and simply not true of `write-quotations!` and
+  `write-manifest!`, which opened their files with no provenance check at all:
+  the exhaustive required-field test covered one writer of four while the
+  promised precondition applied to every artifact sink (**2C-005**, standing
+  lesson **L-17** — a guard complete along one dimension of its set and absent
+  along another).
+
+  Every writer now calls this first. `what` names the artifact, because the
+  operator reading the refusal needs to know which one stopped."
+  [wire what path]
+  (let [found (stamp-problems wire)]
+    (when (seq found)
+      (throw (ex-info (str "capture refuses to write " path ": the " what
+                           " is not fully stamped.\n  - "
+                           (str/join "\n  - " found))
+                      {:path (str path) :problems found}))))
+  wire)
+
 (defn- step->wire
   [step]
   (into (array-map)
@@ -298,24 +354,9 @@
   captured fixture is the drift this arrangement exists to catch."
   [bundle service-info]
   (into
-   (prov/problems
-    ;; `problems` works on the internal shape; the wire shape is what a bundle
-    ;; carries, so it is read back through the same names.
-    (let [p (get bundle "provenance")]
-      {:source-commit (get p "sourceCommit")
-       :source-commit-short (get p "sourceCommitShort")
-       :source-ref (get p "sourceRef")
-       :source-url (get p "sourceUrl")
-       :tag (get p "tag")
-       :tag-kind (get p "tagKind")
-       :release-audit {:label (get-in p ["releaseAudit" "label"])
-                       :statement (get-in p ["releaseAudit" "statement"])
-                       :source (get-in p ["releaseAudit" "source"])
-                       :source-ref (get-in p ["releaseAudit" "sourceRef"])
-                       :source-sha256 (get-in p ["releaseAudit" "sourceSha256"])}
-       :captured-at (get p "capturedAt")
-       :schema-version-applied (get p "schemaVersionApplied")
-       :harness {:commit (get-in p ["harness" "commit"])}}))
+   ;; The stamp's own problems come from the one definition of a complete
+   ;; stamp, which every other writer also reaches (**2C-005**).
+   (stamp-problems (get bundle "provenance"))
    (remove
     nil?
     [(when (not= prov/schema-version (get bundle "schemaVersion"))
@@ -372,27 +413,13 @@
                                   "bodyRaw"    (:body-raw service-info)
                                   "body"       (:body service-info)
                                   "bodySha256" (:body-sha256 service-info))
-                 "disclaimer"    (:disclaimer service-info))
-        found   (prov/problems
-                 (let [p (provenance->wire provenance)]
-                   {:source-commit (get p "sourceCommit")
-                    :source-commit-short (get p "sourceCommitShort")
-                    :source-ref (get p "sourceRef")
-                    :source-url (get p "sourceUrl")
-                    :tag (get p "tag")
-                    :tag-kind (get p "tagKind")
-                    :release-audit {:label (get-in p ["releaseAudit" "label"])
-                                    :statement (get-in p ["releaseAudit" "statement"])
-                                    :source (get-in p ["releaseAudit" "source"])
-                                    :source-ref (get-in p ["releaseAudit" "sourceRef"])
-                                    :source-sha256 (get-in p ["releaseAudit" "sourceSha256"])}
-                    :captured-at (get p "capturedAt")
-                    :schema-version-applied (get p "schemaVersionApplied")
-                    :harness {:commit (get-in p ["harness" "commit"])}}))]
-    (when (seq found)
-      (throw (ex-info (str "capture refuses to write " path
-                           ": the fixture is not fully stamped.\n  - " (str/join "\n  - " found))
-                      {:path (str path) :problems found})))
+                 ;; Said in the artifact rather than left for a reader to
+                 ;; notice: the one value in `GET /` that belongs to the
+                 ;; capture run and not to the commit has been replaced, so
+                 ;; that two captures of one commit are the same bytes.
+                 "instanceIdRedacted" true
+                 "disclaimer"    (:disclaimer service-info))]
+    (assert-provenance! (provenance->wire provenance) "fixture" path)
     (when (str/blank? (str (:disclaimer service-info)))
       (throw (ex-info (str "capture refuses to write " path
                            ": the captured GET / response carries no disclaimer.")
@@ -410,6 +437,7 @@
   with the commit it was taken from attached — RULE 3 says *attributed and
   linked at the captured commit*, and the link is built from the stamp."
   [{:keys [path provenance quotations]}]
+  (assert-provenance! (provenance->wire provenance) "quotation fixture" path)
   (let [payload (array-map
                  "schemaVersion" prov/schema-version
                  "fixture"       "quotations"
@@ -417,7 +445,8 @@
                  "note"          (str "Extracted verbatim from the captured commit's own "
                                       "docs/COMPLIANCE.md and docs/DOMAIN_MODEL.md. The only "
                                       "transformation is unwrapping hard-wrapped lines into the "
-                                      "paragraph they are. ADR-0020 RULE 3.")
+                                      "paragraph they are; paragraphs and list items within a "
+                                      "statement are kept apart, one per line. ADR-0020 RULE 3.")
                  "controls"      (get quotations "controls")
                  "invariants"    (get quotations "invariants"))
         text    (json-text payload)
@@ -437,6 +466,7 @@
   is whatever happens to be in the directory, and a fixture that was supposed
   to be there and is not should be a failure rather than a shorter page."
   [{:keys [path provenance fixture quotations bundles]}]
+  (assert-provenance! (provenance->wire provenance) "manifest" path)
   (let [payload (array-map
                  "schemaVersion" prov/schema-version
                  "provenance"    (provenance->wire provenance)

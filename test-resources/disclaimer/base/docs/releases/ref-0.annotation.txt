@@ -1,0 +1,4 @@
+Date:        2026-01-01
+
+WHAT THIS IS. A fixture release body that predates the canonical sentence and
+is listed as a historical exemption, so the check must pass without it.

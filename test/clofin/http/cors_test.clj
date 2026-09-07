@@ -13,6 +13,7 @@
   sends a preflight at all (011-REQ §7)."
   (:require [clofin.build-info :as build-info]
             [clofin.config :as config]
+            [clofin.contract-test :as contract]
             [clofin.http.cors :as cors]
             [clofin.http.middleware :as middleware]
             [clofin.http.response :as resp]
@@ -138,8 +139,11 @@
       (let [response (handler (request :get "/" {"origin" origin}))]
         (testing origin
           (is (= origin (get-in response [:headers "access-control-allow-origin"])))
-          (is (= "location, x-correlation-id, allow"
-                 (get-in response [:headers "access-control-expose-headers"])))
+          (is (= (str/join ", " cors/exposed-response-headers)
+                 (get-in response [:headers "access-control-expose-headers"]))
+              "the header carries the list, in order; what is *in* the list is
+               `exposed-headers-are-the-ones-a-browser-could-not-otherwise-read`'s
+               business, and restating it here was half of 2B-003")
           (is (= "origin" (get-in response [:headers "vary"])))
           (is (= 200 (:status response)) "the response itself is untouched"))))))
 
@@ -302,16 +306,262 @@
              "reads — no guessed extras, and nothing missing. Read by src/: "
              (pr-str read-by-service) ", allowed: " (pr-str cors/allowed-request-headers)))))
 
+(def ^:private cors-safelisted-response-headers
+  "The response headers a browser page can read without being told it may.
+
+  Fetch's CORS-safelisted response-header names. `content-type` is the only one
+  CloFin sets; the rest are here so that subtracting them is a rule rather than
+  a special case for the one that happens to apply."
+  #{"cache-control" "content-language" "content-length" "content-type"
+    "expires" "last-modified" "pragma"})
+
+(defn- header-names-in
+  "Every string naming a header inside a `:headers` value.
+
+  Called only on forms already known to be in header position, which is what
+  makes it safe to treat a map's keys as header names. `assoc` is handled in
+  both its shapes — `(assoc m \"h\" v)` and the threaded `(assoc \"h\" v)` a
+  `cond->` produces — because the replay header is set the second way and a
+  rule that knew only the first would have missed exactly the header this
+  guard exists for."
+  [form]
+  (cond
+    (map? form)
+    (concat (filter string? (keys form)) (mapcat header-names-in (vals form)))
+
+    (and (seq? form) (symbol? (first form)) (= "assoc" (name (first form))))
+    (let [args (rest form)
+          keys* (if (string? (first args)) (take-nth 2 args) (take-nth 2 (rest args)))]
+      (filter string? keys*))
+
+    (coll? form)
+    (mapcat header-names-in form)
+
+    :else nil))
+
+(defn- header-var-values
+  "`{\"correlation-header\" \"x-correlation-id\"}` — every `def` in one file
+  whose value is a string.
+
+  Read so that a header set through a var is discovered by its value rather
+  than by its var name. Which of these are *response* headers is decided by
+  where they are used, not by what they are called."
+  [file]
+  (into {}
+        (for [form (forms-of file)
+              :when (and (seq? form) (symbol? (first form))
+                         (= "def" (name (first form)))
+                         (symbol? (second form))
+                         (string? (last form))
+                         (> (count form) 2))]
+          [(name (second form)) (last form)])))
+
+(defn- header-names-set-by
+  "Every response header name one source file sets.
+
+  Four shapes, which are the four this codebase uses:
+
+    (assoc-in resp [:headers \"h\"] v)   a write into a response map
+    {:headers <anything>}               a response map literal, however the
+                                        header map inside it is built
+    (with-header resp \"h\" v)           the helper, threaded or not
+    (update resp :headers f)            a rebuild of the header map, where the
+                                        name is inside `f` — the shape
+                                        `middleware.clj` uses for
+                                        `content-type`
+
+  The fourth was found by an adversarial review of this test, which is worth
+  recording: the docstring said *three, which are the three this codebase
+  uses*, and the counter-example was already in the tree. The header it missed
+  is CORS-safelisted and set in `response.clj` too, so the answer this guard
+  gave was right — but the producer dimension was short by one shape, and the
+  next non-safelisted header set through `update` would have left the exposed
+  list short with the guard green, which is **2B-003** again.
+
+  A header named by a var — `(assoc-in response [:headers correlation-header]
+  …)` — is resolved through `header-vars`, and **only where it is written**.
+  Resolving every `*-header` def instead would pull in `idempotency-header` and
+  `actor-header`, which name headers CloFin *reads*; this guard would then
+  demand that a browser be allowed to read `idempotency-key`.
+
+  A **scan**, not a list, and the distinction is the finding. This test used to
+  assert a three-name set against the three-name list it was asserting about,
+  so the two copies could only agree and agreement proved nothing (**L-16**).
+  `idempotent-replayed` was set by two namespaces, declared on six responses in
+  the contract, and missing from the exposed list — and this test was green
+  (**2B-003**).
+
+  A `[:headers \"h\"]` path is counted only inside `assoc-in`, because the same
+  path inside `get-in` **reads** a request header. `allow-headers-are-the-
+  headers-the-service-reads` owns that direction; conflating the two would have
+  this guard demanding that CloFin expose `idempotency-key`."
+  [header-vars file]
+  (let [found (atom #{})
+        walk (fn walk [form]
+               (cond
+                 (map? form)
+                 (do (when (contains? form :headers)
+                       (swap! found into (header-names-in (get form :headers))))
+                     (run! walk (concat (keys form) (vals form))))
+
+                 (seq? form)
+                 (let [[head & args] form
+                       head-name (when (symbol? head) (name head))]
+                   (cond
+                     (= "assoc-in" head-name)
+                     (doseq [a args
+                             :when (and (vector? a) (= 2 (count a))
+                                        (= :headers (first a)))
+                             :let [k (second a)
+                                   n (cond (string? k) k
+                                           (symbol? k) (get header-vars (name k)))]
+                             :when n]
+                       (swap! found conj n))
+
+                     ;; Threaded or not: the first string argument is the name.
+                     (= "with-header" head-name)
+                     (when-let [n (first (filter string? args))] (swap! found conj n))
+
+                     ;; `(update resp :headers f)` / `(update-in resp [:headers]
+                     ;; f)`. The name is not in this form at all — it is inside
+                     ;; `f`, as `(assoc headers "content-type" …)` — so the
+                     ;; whole form is swept for `assoc` keys once it is known
+                     ;; to be rebuilding a header map.
+                     (and (contains? #{"update" "update-in"} head-name)
+                          (some (fn [a] (or (= :headers a)
+                                            (and (vector? a) (= [:headers] a))))
+                                args))
+                     (let [assoc-keys
+                           (fn collect [form]
+                             (concat
+                              (when (and (seq? form) (symbol? (first form))
+                                         (= "assoc" (name (first form))))
+                                (keep (fn [k] (cond (string? k) k
+                                                    (symbol? k) (get header-vars (name k))))
+                                      ;; `(assoc m k v k v …)` — the keys.
+                                      (take-nth 2 (drop 2 form))))
+                              (when (coll? form) (mapcat collect form))))]
+                       (swap! found into (assoc-keys form)))
+
+                     :else nil)
+                   (run! walk form))
+
+                 (coll? form) (run! walk form)
+                 :else nil))]
+    (run! walk (forms-of file))
+    @found))
+
+(defn- response-headers-the-contract-declares
+  "Every `responses.*.headers` key across every operation, lower-cased.
+
+  A source that moves independently of `src/`: the contract is what a client
+  generator reads, and it is edited when an interface changes rather than when
+  a handler does."
+  []
+  (let [spec (contract/load-spec)
+        deref-response (fn deref-response [x]
+                         (if-let [r (get x "$ref")]
+                           (deref-response (get-in spec (vec (rest (str/split r #"/")))))
+                           x))]
+    (into (sorted-set)
+          (for [[_ methods] (get spec "paths")
+                [_ operation] methods
+                :when (map? operation)
+                [_ response] (get operation "responses")
+                header (keys (get (deref-response response) "headers"))]
+            (str/lower-case header)))))
+
 (deftest exposed-headers-are-the-ones-a-browser-could-not-otherwise-read
-  (testing "every response header CloFin sets that is not CORS-safelisted is exposed"
-    ;; `content-type` is CORS-safelisted and readable without being named here;
-    ;; the other three are not, and each is one a client displaying raw
-    ;; responses would otherwise silently lose.
-    (is (= #{"location" "x-correlation-id" "allow"} (set cors/exposed-response-headers)))
+  (testing "every response header CloFin sets or declares, and that a browser
+            could not otherwise read, is exposed — discovered from two
+            independently moving sources rather than restated (2B-003, L-16)"
+    (let [header-vars (into {} (mapcat header-var-values) source-files)
+          set-by-service (into (sorted-set)
+                               (mapcat (partial header-names-set-by header-vars))
+                               ;; `clofin.http.cors` sets the CORS protocol's
+                               ;; own headers — `access-control-*`, `vary`.
+                               ;; Those are how a browser is answered, not part
+                               ;; of CloFin's API, and a page never asks
+                               ;; permission to read them. The mirror-image
+                               ;; exclusion `allow-headers-…` makes, for the
+                               ;; mirror-image reason.
+                               (remove #(str/ends-with? (str %) "cors.clj") source-files))
+          declared (response-headers-the-contract-declares)
+          discovered (into (sorted-set) (concat set-by-service declared))
+          should-expose (into (sorted-set)
+                              (remove cors-safelisted-response-headers)
+                              discovered)
+          exposed (into (sorted-set) cors/exposed-response-headers)]
+      (is (seq set-by-service)
+          "the source scan found nothing, which means it is broken rather than clean")
+      (is (seq declared)
+          "the contract declares no response header at all, which means this
+           discovery is broken rather than the contract empty")
+
+      (is (= should-expose exposed)
+          (str "Access-Control-Expose-Headers must be exactly the non-safelisted "
+               "response headers this service sets or declares. Set by src/: "
+               (pr-str (vec set-by-service)) "; declared in api/openapi.yaml: "
+               (pr-str (vec declared)) "; exposed: " (pr-str (vec exposed))))
+
+      (testing "the negative control (L-17), and it has to mutate what a
+                *source* discovers rather than the answer.
+
+                What stood here compared `should-expose` with `exposed` minus a
+                name, and with `exposed` plus one — but the line above has just
+                asserted those two sets equal, so an n-1 set is never equal to
+                an n set and neither comparison could fail for any reason
+                except cardinality. They restated the equality assertion and
+                added nothing. The mutation that means something is to the
+                scan's input: delete the line that sets the header and the scan
+                must stop reporting it"
+        (let [setter "src/clofin/api/payments.clj"
+              text (slurp setter)
+              without (str/replace text "\"idempotent-replayed\"" "\"x-not-set-here\"")
+              scan (fn [content]
+                     (let [f (java.io.File/createTempFile "cors-probe" ".clj")]
+                       (.deleteOnExit f)
+                       (spit f content)
+                       (header-names-set-by header-vars f)))]
+          (is (not= text without) "the mutation must actually change the source")
+          (is (contains? (scan text) "idempotent-replayed")
+              (str setter " sets the header the 2B-003 finding was about, and the "
+                   "scan must be what finds it"))
+          (is (not (contains? (scan without) "idempotent-replayed"))
+              "with the write removed the scan must stop reporting the header")))
+
+      (testing "and the discovery, not this list, is what puts a name in
+                `should-expose`"
+        (is (contains? should-expose "idempotent-replayed")
+            "the header 2B-003 was about must be discovered, not assumed")
+        (is (not (contains? should-expose "x-invented-by-nobody"))
+            "a name nothing sets and nothing declares must not appear")
+        (is (not (contains? should-expose "content-type"))
+            "a CORS-safelisted header must be excluded even though the scan
+             finds it — that exclusion is the guard's other half")))
+
     (is (= middleware/correlation-header "x-correlation-id")
         "the correlation header's name is the one exposed")
     (is (not-any? #{"*"} cors/exposed-response-headers)
         "a wildcard would expose headers nobody decided to expose")))
+
+(deftest a-browser-page-can-read-the-replay-header
+  (testing "the finding from the side that matters: a page distinguishing an
+            idempotent replay from new synthetic work reads
+            `Idempotent-Replayed`, and could not (2B-003)"
+    (let [handler (cors/wrap-cors (fn [_] {:status 200
+                                           :headers {"idempotent-replayed" "true"}
+                                           :body nil})
+                                  allowed)
+          response (handler (request :post "/payment-instructions" {"origin" allowed}))
+          exposed (get-in response [:headers "access-control-expose-headers"])]
+      (is (= "true" (get-in response [:headers "idempotent-replayed"]))
+          "the header is on the response either way — CORS decides who may read it")
+      (is (some? exposed) "an allowed origin must be told what it may read")
+      (is (contains? (into #{} (map str/trim) (str/split exposed #","))
+                     "idempotent-replayed")
+          (str "Access-Control-Expose-Headers is " (pr-str exposed)
+               " — a page cannot read a header that is not in it")))))
 
 ;; ---------------------------------------------------------------------------
 ;; Configuration reaches the middleware

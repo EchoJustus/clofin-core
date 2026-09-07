@@ -12,7 +12,8 @@
   pass while the source still contains the dependency this rule forbids."
   (:require [clojure.java.io :as io]
             [clojure.string :as str]
-            [clojure.test :refer [deftest is testing]]))
+            [clojure.test :refer [deftest is testing]]
+            [clojure.walk]))
 
 (def pure-namespaces
   "Domain namespaces that must not reach for infrastructure.
@@ -165,3 +166,214 @@
       (is (.exists (io/file path))
           (str namespace-sym " no longer exists at " path
                " — update or remove its entry rather than leaving the guard stale.")))))
+
+;; ---------------------------------------------------------------------------
+;; 2C-009 — the producer census
+;;
+;; `clofin.ledger.service/post-entry!` posts an entry **and** emits
+;; `journal-entry.posted` in the same transaction. Settlement posted through
+;; `clofin.ledger.repository/post-entry!` instead, so its release and finality
+;; entries had no event of their own and their evidence packs answered `404` —
+;; while the identical entry raised through the ledger API had both. Journal
+;; evidence depended on which producer created the entry.
+;;
+;; The list of who may post is now a fact this test asserts rather than a
+;; convention. Standing lesson **L-21**: the audited set is every committing
+;; producer, discovered from the code, not the first service that implemented
+;; one.
+;; ---------------------------------------------------------------------------
+
+(def audited-write-primitives
+  "Repository writes that a service must wrap, and the service that wraps each.
+
+  A production namespace calling one of these directly commits the change
+  without the audit event that describes it — the state C-05 calls
+  unrepresentable."
+  {"clofin.ledger.repository/post-entry!" 'clofin.ledger.service})
+
+(defn- production-sources
+  []
+  (->> (file-seq (io/file "src"))
+       (filter #(and (.isFile ^java.io.File %)
+                     (str/ends-with? (.getName ^java.io.File %) ".clj")))
+       (sort-by #(.getPath ^java.io.File %))))
+
+(defn- namespace-of
+  [file]
+  (second (ns-form (.getPath ^java.io.File file))))
+
+(defn- require-specs
+  "Every `[namespace opts]` a `:require` clause names.
+
+  Flattens a prefix list — `[clofin.ledger [repository :as r] [service :as s]]`
+  — and tolerates a bare symbol and an odd option list rather than throwing:
+  a census that dies on a `:require` shape reports nothing about the file it
+  died on."
+  [clause]
+  (letfn [(opts-of [xs] (try (apply hash-map xs) (catch Exception _ {})))]
+    (mapcat
+     (fn [spec]
+       (cond
+         (symbol? spec) [[spec {}]]
+         (sequential? spec)
+         (let [[head & more] spec]
+           (if (and (seq more) (every? sequential? more))
+             (for [sub more
+                   :let [[sub-ns & sub-opts] sub]]
+               [(symbol (str head "." sub-ns)) (opts-of sub-opts)])
+             [[head (opts-of more)]]))
+         :else []))
+     (rest clause))))
+
+(defn- resolvers
+  "How one file can name a var from another namespace: by alias, by refer, or
+  by referring everything."
+  [form]
+  (reduce
+   (fn [acc [nsym opts]]
+     (let [n (str nsym)]
+       (cond-> acc
+         (:as opts)                   (assoc-in [:aliases (str (:as opts))] n)
+         (sequential? (:refer opts))  (update :referred into
+                                              (for [r (:refer opts)] [(str r) n]))
+         (= :all (:refer opts))       (update :refer-all conj n))))
+   {:aliases {} :referred {} :refer-all #{}}
+   (mapcat require-specs
+           (filter #(and (seq? %) (= :require (first %))) (drop 2 form)))))
+
+(defn- calls-to
+  "Every var of another namespace a file names, as `namespace/name`.
+
+  **All three spellings**, because the dimension this walks is the *spelling*
+  and covering one of three would make the census's answer — `post-entry!` is
+  called by `clofin.ledger.service` and by nothing else — true only of code
+  written one way (L-17):
+
+    `ledger/post-entry!`                     resolved through `:as`
+    `clofin.ledger.repository/post-entry!`   taken as written
+    `post-entry!`                            resolved through `:refer`
+
+  A symbol that resolves to nothing is still recorded as written, which cannot
+  produce a false positive: a primitive is named here fully qualified, and an
+  unresolved `ledger/post-entry!` never equals it."
+  [file]
+  (let [path (.getPath ^java.io.File file)
+        {:keys [aliases referred refer-all]} (resolvers (ns-form path))
+        found (atom #{})]
+    (with-open [r (java.io.PushbackReader. (io/reader path))]
+      (let [eof (Object.)]
+        (doseq [form (take-while #(not (identical? eof %))
+                                 (repeatedly #(read {:read-cond :allow :eof eof} r)))]
+          (clojure.walk/postwalk
+           (fn [x]
+             (when (symbol? x)
+               (if-let [ns* (namespace x)]
+                 (do (swap! found conj (str (get aliases ns* ns*) "/" (name x)))
+                     (swap! found conj (str x)))
+                 (let [n (name x)]
+                   (when-let [owner (get referred n)]
+                     (swap! found conj (str owner "/" n)))
+                   (doseq [owner refer-all]
+                     (swap! found conj (str owner "/" n))))))
+             x)
+           form))))
+    @found))
+
+(deftest the-census-sees-a-call-however-it-is-spelled
+  (testing "the census's dimension is the *spelling*, and it used to cover one
+            of three: only `alias/name` resolved through an `:as` clause. A
+            namespace that `:refer`red the primitive, or wrote it fully
+            qualified, was invisible — so the guard would have reported
+            `post-entry!` called by the audited service and by nothing else
+            while a second producer posted unaudited entries beside it. `:refer`
+            happens not to be used in `src/` today, which is why this was silent
+            rather than red (L-17)"
+    (let [dir (.toFile (java.nio.file.Files/createTempDirectory
+                        "clofin-census"
+                        (into-array java.nio.file.attribute.FileAttribute [])))
+          primitive "clofin.ledger.repository/post-entry!"
+          spelling (fn [label requires body]
+                     (let [f (io/file dir (str label ".clj"))]
+                       (spit f (str "(ns probe." label "\n  (:require " requires "))\n"
+                                    "(defn go [tx e] " body ")\n"))
+                       [label (contains? (#'calls-to f) primitive)]))]
+      (is (= {"aliased" true "qualified" true "referred" true "refer-all" true}
+             (into {} [(spelling "aliased"
+                                 "[clofin.ledger.repository :as ledger]"
+                                 "(ledger/post-entry! tx e)")
+                       (spelling "qualified"
+                                 "[clofin.audit.repository :as audit]"
+                                 "(clofin.ledger.repository/post-entry! tx e)")
+                       (spelling "referred"
+                                 "[clofin.ledger.repository :refer [post-entry!]]"
+                                 "(post-entry! tx e)")
+                       (spelling "refer-all"
+                                 "[clofin.ledger.repository :refer :all]"
+                                 "(post-entry! tx e)")]))
+          "every spelling a caller could use must be seen")
+
+      (testing "and a file that does not call it is not swept in, so the four
+                above are not passing because everything matches"
+        (is (false? (second (spelling "innocent"
+                                      "[clofin.ledger.repository :as ledger]"
+                                      "(ledger/find-entry tx e)")))))
+
+      (testing "a prefix list is read rather than throwing — it used to take the
+                whole census down with `No value supplied for key`"
+        (is (true? (second (spelling "prefixed"
+                                     "[clofin.ledger [repository :as ledger]]"
+                                     "(ledger/post-entry! tx e)"))))))))
+
+(deftest ac-16-only-the-audited-service-calls-an-audited-write-primitive
+  (testing "every committing producer, discovered from the code (L-21). A
+            namespace that posts a journal entry without going through
+            `clofin.ledger.service` writes one with no `journal-entry.posted`
+            and an evidence pack that answers 404 (2C-009)"
+    (doseq [[primitive owner] audited-write-primitives]
+      (let [callers (into (sorted-set)
+                          (comp (filter #(contains? (calls-to %) primitive))
+                                (map namespace-of))
+                          (production-sources))
+            ;; The primitive's own namespace defines it rather than calling it.
+            defining (symbol (namespace (symbol primitive)))
+            callers (disj callers defining)]
+        (is (seq callers)
+            (str "no production namespace calls " primitive
+                 " — either the scan is broken or the primitive is dead"))
+        (is (= #{owner} callers)
+            (str primitive " must be called by " owner " and by nothing else in "
+                 "src/; it is called by " (pr-str (vec callers))
+                 ". A second caller posts a journal entry whose evidence pack "
+                 "answers 404 (2C-009, L-21)."))))))
+
+;; ---------------------------------------------------------------------------
+;; 2B-005 — C-05's service list, compared with this one
+;; ---------------------------------------------------------------------------
+
+(defn- compliance-section
+  "The text of one `### C-nn` section of `docs/COMPLIANCE.md`."
+  [id]
+  (let [text (slurp (io/file "docs/COMPLIANCE.md"))
+        from (str/index-of text (str "### " id " "))]
+    (assert from (str id " has no section in docs/COMPLIANCE.md"))
+    (let [rest* (subs text from)
+          to (str/index-of rest* "\n### ")]
+      (if to (subs rest* 0 to) rest*))))
+
+(deftest ac-17-c-05-names-every-audit-composing-service
+  (testing "C-05 named four services and there are five: `clofin.recon.service`
+            composes ingestion, assignment, proposal and decision with their
+            events, and the document understated a built control-bearing
+            service while contradicting its own later reconciliation section by
+            omission (2B-005). Both directions, against a source that moves
+            independently of the prose (L-16)"
+    (let [section (compliance-section "C-05")
+          in-code (into (sorted-set) (map str) (keys service-namespaces))
+          named (into (sorted-set) (re-seq #"clofin\.[a-z-]+\.[a-z-]*service" section))]
+      (is (seq named) "C-05 names no service at all, so this guard checks nothing")
+      (is (= in-code named)
+          (str "C-05's section names " (pr-str (vec named))
+               " and clofin.ledger.purity-test/service-namespaces holds "
+               (pr-str (vec in-code))
+               ". A service missing from the document understates the control; "
+               "a name in the document that is not a service overstates it.")))))

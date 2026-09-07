@@ -68,8 +68,14 @@ help: ## Show this help
 	     /^[a-zA-Z0-9_-]+:.*?## / {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}' \
 	     $(MAKEFILE_LIST)
 	@echo ""
-	@echo "CloFin uses synthetic data only. It is not connected to any bank,"
-	@echo "payment scheme or central bank, and holds no regulatory approval."
+	@cat resources/disclaimer.txt
+
+# `help` prints the canonical sentence from `resources/disclaimer.txt` rather
+# than restating it. It used to say synthetic data, no institutional connection
+# and no regulatory approval — and omitted the explicit never-processes-real-
+# funds clause, so the operator-facing restatement was weaker than the boundary
+# `GET /` states (release-audit finding 2B-007). One file, three readers:
+# this target, `clofin.api.health/disclaimer`, and `scripts/check-disclaimer.sh`.
 
 # ---------------------------------------------------------------------------
 # Local environment
@@ -237,8 +243,18 @@ check-release-annotation: ## Compare docs/releases/*.annotation.txt with the pub
 # the deferral it replaces was pinned by a test, deleted in the same commit).
 # A failure here means two documents disagree about what is built — fix the
 # stale one on `meta` if it is a governance document, never in place.
+# `check-disclaimer` entered `verify` on 2026-09-06 (TASK-015, findings 2B-007
+# and 2B-008): it compares `make help` and every release annotation with the
+# one canonical sentence, so a surface cannot quietly restate the scope
+# boundary more weakly than the service does. Offline, like the rest of
+# `verify` — `check-release-annotation` is the one that needs the network and
+# is deliberately outside it.
+.PHONY: disclaimer-check
+disclaimer-check: ## Verify every scope-statement surface carries the canonical sentence
+	@sh scripts/check-disclaimer.sh
+
 .PHONY: verify
-verify: test docs-check diagrams-check doc-consistency ## Everything CI runs that does not need a database
+verify: test docs-check diagrams-check doc-consistency disclaimer-check ## Everything CI runs that does not need a database
 
 # ---------------------------------------------------------------------------
 # Housekeeping

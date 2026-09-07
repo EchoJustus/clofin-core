@@ -49,6 +49,15 @@
 ;; ---------------------------------------------------------------------------
 
 (defn- batch->wire
+  "One batch as `SettlementBatch` declares it — **including `simulated`**.
+
+  It belongs here rather than on the envelope, and that is release-audit
+  finding **2C-010**. `simulated` is `required` on the schema, and it was set
+  by the two handlers that render a batch on its own while every item of
+  `GET /settlement-batches` went out without it: a list is a list *of
+  `SettlementBatch`*, and a caller validating an item against the schema it
+  names was told the response was invalid. Setting it where the batch becomes
+  wire is the only arrangement in which a third caller cannot forget."
   [batch]
   {"id"             (str (:id batch))
    "organisationId" (str (:organisation-id batch))
@@ -57,7 +66,8 @@
    "valueDate"      (str (:value-date batch))
    "status"         (:status batch)
    "createdBy"      (str (:created-by batch))
-   "createdAt"      (str (:created-at batch))})
+   "createdAt"      (str (:created-at batch))
+   "simulated"      true})
 
 (defn- item->wire
   [item]
@@ -99,8 +109,7 @@
            "items" (mapv item->wire items)
            "itemCount" (count items)
            "exceptions" (mapv item->wire (filter #(= "returned" (:outcome %)) items))
-           "schemeResponses" (mapv response->wire responses)
-           "simulated" true)))
+           "schemeResponses" (mapv response->wire responses))))
 
 (defn- optional-object
   "The decoded body, or `{}` when there is none.

@@ -16,6 +16,8 @@
   Acceptance criteria from `docs/briefs/008-TASK-reconciliation.md` are named in
   the tests that cover them."
   (:require [clofin.db.core :as db]
+            [clofin.money :as money]
+            [clofin.recon.repository :as recon]
             [clofin.system :as system]
             [clofin.test-db :as tdb]
             [clojure.data.json :as json]
@@ -1120,8 +1122,11 @@
         "nothing posted, so nothing says it did")
     (is (nil? (get after "reconciliation-break.resolved"))
         "and the break did not resolve")
-    (is (nil? (get after "journal-entry.posted"))
-        "no entry reached the journal at all")
+    (is (= (get before "journal-entry.posted" 0) (get after "journal-entry.posted" 0))
+        "no entry reached the journal: the rejection posted nothing. Counted as
+         a delta rather than as a tenant-wide zero, which it was only because
+         settlement's own release and finality entries emitted no posting event
+         until 2026-09-06 (2C-009)")
 
     (testing "a refused decision writes nothing — the self-approval attempt below
               rolls its whole transaction back"
@@ -1211,3 +1216,176 @@
                             and column_name in ('instruction_id', 'retried_by_ids',
                                                 'retries_id')"]))))
         "reconciliation_break has no column for either fact")))
+
+;; ---------------------------------------------------------------------------
+;; TASK-015 — the `ref-2` release audit's reconciliation findings
+;; ---------------------------------------------------------------------------
+
+;; AC-5 (2C-001) — the nested evidence lists say where they stop.
+;;
+;; The repository half is `clofin.recon.repository-test`; this is the half a
+;; caller sees. The extra breaks are written to the repository rather than
+;; produced by matching, because what is under test is the projection, not the
+;; matcher — and 504 real disagreements would test the matcher slowly.
+
+(defn- pad-breaks!
+  "Open `n` further breaks on `statement-id`, straight through the repository."
+  [f statement-id account-id n]
+  (db/with-transaction [tx tdb/*pool*]
+    (dotimes [_ n]
+      (recon/insert-break! tx {:id (random-uuid)
+                               :organisation-id (:org f)
+                               :statement-id (uuid statement-id)
+                               :account-id (uuid account-id)
+                               :kind "statement-line-unmatched"
+                               :line-no 1
+                               :entry-id nil
+                               :currency "SGD"
+                               :statement-amount (money/of "SGD" 125000)
+                               :ledger-amount nil
+                               :detail "A padded disagreement"
+                               :assignee-id (:controller f)}))))
+
+(deftest ac-5-truncation-a-statement-past-the-cap-says-so-on-both-reads
+  (let [f (setup)
+        response (reconcile! f :perturbation "unknown-line")
+        statement-id (get-in response [:json "id"])
+        account-id (get-in response [:json "reconciledAccountId"])
+        show (fn [] (call :get (str "/reconciliation-statements/" statement-id)
+                          :actor (:controller f)
+                          :query (str "organisationId=" (:org f))))]
+    (testing "below the cap, both flags are answered rather than omitted"
+      (is (= 500 (get-in response [:json "breaksLimit"])))
+      (is (false? (get-in response [:json "breaksTruncated"])))
+      (is (= 500 (get-in (show) [:json "breaksLimit"])))
+      (is (false? (get-in (show) [:json "breaksTruncated"]))))
+
+    (testing "past it, the list is the cap and the response says it was cut"
+      ;; The ingestion opened some; pad to 504 in total.
+      (let [opened (count (breaks response))]
+        (pad-breaks! f statement-id account-id (- 504 opened)))
+      (let [read (show)]
+        (is (= 200 (:status read)))
+        (is (= 500 (count (get-in read [:json "breaks"])))
+            (str "501 is the cap plus the sentinel row that detected it; the "
+                 "response carried 501 at the RC and said nothing"))
+        (is (true? (get-in read [:json "breaksTruncated"])))
+        (is (= 500 (get-in read [:json "breaksLimit"]))))
+
+      (testing "and the count that answers \"how many\" is over the rows, not the list"
+        (let [status (call :get "/reconciliation-status" :actor (:controller f)
+                           :query (str "organisationId=" (:org f)
+                                       "&accountId=" account-id
+                                       "&from=" (:from (period)) "&to=" (:to (period))))]
+          (is (= 504 (reduce + (vals (get-in status [:json "breaksByState"]))))
+              "the status endpoint counted all 504 while the projection showed
+               501 — that disagreement is the finding"))))))
+
+(deftest ac-5-truncation-a-break-past-the-cap-says-so
+  (let [f (setup)
+        brk (a-break! f)
+        show (fn [] (call :get (str "/reconciliation-breaks/" (get brk "id"))
+                          :actor (:controller f)
+                          :query (str "organisationId=" (:org f))))]
+    (testing "below the cap"
+      (let [read (show)]
+        (is (= 500 (get-in read [:json "adjustmentsLimit"])))
+        (is (false? (get-in read [:json "adjustmentsTruncated"])))))
+
+    (db/with-transaction [tx tdb/*pool*]
+      (dotimes [_ 502]
+        (recon/insert-adjustment!
+         tx {:id (random-uuid) :organisation-id (:org f) :break-id (uuid (get brk "id"))
+             :amount (money/of "SGD" 125000) :direction :credit
+             :narrative "A padded proposal" :approvals-required 1
+             :created-by (:controller f)})))
+
+    (let [read (show)]
+      (is (= 500 (count (get-in read [:json "adjustments"]))))
+      (is (true? (get-in read [:json "adjustmentsTruncated"])))
+      (is (= 500 (get-in read [:json "adjustmentsLimit"]))))))
+
+;; AC-6 (2C-011) — a `Location` that resolves.
+
+(deftest ac-6-following-a-location-answers-with-the-representation-the-break-embeds
+  (let [f (setup)
+        brk (a-break! f)
+        proposal (propose! f brk :minor 100000)
+        adjustment-id (get-in proposal [:json "id"])
+        decision (decide! f adjustment-id :actor (:checker f) :decision "rejected"
+                          :reason "The scheme's figure is the right one")
+        follow (fn [location]
+                 (call :get location :actor (:controller f)
+                       :query (str "organisationId=" (:org f))))]
+    (testing "the proposal's Location and the decision's both resolve"
+      (doseq [[what response] [["proposal" proposal] ["decision" decision]]]
+        (is (= 201 (:status response)) what)
+        (let [location (get-in response [:headers "location"])]
+          (is (some? location) what)
+          (is (= 200 (:status (follow location)))
+              (str "following the " what "'s Location answered "
+                   (:status (follow location)) " — at the RC the decision's was 404")))))
+
+    (testing "and the adjustment read is the representation the break embeds,
+              not a second view of the same row"
+      (let [direct (:json (follow (str "/reconciliation-adjustments/" adjustment-id)))
+            embedded (->> (get-in (follow (str "/reconciliation-breaks/" (get brk "id")))
+                                  [:json "adjustments"])
+                          (filter #(= adjustment-id (get % "id")))
+                          first)]
+        (is (= embedded direct))))
+
+    (testing "a foreign tenant and a malformed id answer exactly as
+              getReconciliationBreak does — copied, not decided again"
+      (let [other (setup)]
+        (doseq [[label path] [["adjustment" (str "/reconciliation-adjustments/" adjustment-id)]
+                              ["break" (str "/reconciliation-breaks/" (get brk "id"))]]]
+          (is (= 404 (:status (call :get path :actor (:controller other)
+                                    :query (str "organisationId=" (:org other)))))
+              (str label ": another tenant's id is not found here"))
+          (is (= 403 (:status (call :get path :actor (:controller other)
+                                    :query (str "organisationId=" (:org f)))))
+              (str label ": and asserting somebody else's organisation is refused")))
+        (doseq [[label path] [["adjustment" "/reconciliation-adjustments/not-a-uuid"]
+                              ["break" "/reconciliation-breaks/not-a-uuid"]]]
+          (is (= 400 (:status (call :get path :actor (:controller f)
+                                    :query (str "organisationId=" (:org f)))))
+              (str label ": a malformed id is a bad request, not a 404")))))))
+
+;; AC-7 (2C-012) — an adjustment's evidence carries the decisions about it.
+
+(deftest ac-7-adjustment-evidence-traverses-its-approval-decisions
+  (let [f (setup)
+        brk (a-break! f)
+        proposal (propose! f brk :minor 100000)
+        adjustment-id (get-in proposal [:json "id"])
+        _ (is (= 201 (:status (decide! f adjustment-id :actor (:checker f)
+                                       :decision "rejected"
+                                       :reason "The scheme's figure is the right one"))))
+        pack (fn [subject-id]
+               (call :get (str "/audit/evidence/" subject-id)
+                     :actor (:auditor f)
+                     :query (str "organisationId=" (:org f))))
+        actions (fn [p] (mapv #(get % "action") (get-in p [:json "events"])))]
+    (let [p (pack adjustment-id)]
+      (is (= 200 (:status p)))
+      (is (some #{"reconciliation-adjustment.proposed"} (actions p)))
+      (is (some #{"reconciliation-adjustment.rejected"} (actions p)))
+      (is (some #{"approval.recorded"} (actions p))
+          (str "an investigator starting from an adjustment must reach the "
+               "decision that decided it, as one starting from a payment does. "
+               "At the RC the join read instruction_id only, so this event was "
+               "unreachable by the route the pack offers — got " (pr-str (actions p)))))
+
+    (testing "and a payment's pack is unchanged: the second relationship adds
+              nothing where there is none (L-21, both directions)"
+      (let [instruction (raise! f)
+            p (pack instruction)]
+        (is (= 200 (:status p)))
+        (is (some #{"payment.submitted"} (actions p)))
+        (is (some #{"approval.recorded"} (actions p)))
+        (is (every? #(contains? #{"payment-instruction" "approval"} %)
+                    (mapv #(get % "subjectType") (get-in p [:json "events"])))
+            (str "a payment's pack must carry its own events and its approvals' "
+                 "and nothing else — " (pr-str (mapv #(get % "subjectType")
+                                                     (get-in p [:json "events"])))))))))

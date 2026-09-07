@@ -118,11 +118,17 @@ See [ADR-0003](ADR/0003-money-as-integer-minor-units.md).
 and the response it produced.
 
 Modelled as a **record of its own** rather than as a field on the instruction,
-because the key protects *every* mutating operation — a submission, an
-amendment, a cancellation — and not only the creation of an instruction. A key
-that lived on `payment_instruction` could make creation idempotent and nothing
-else, which would leave submission unprotected: precisely the operation whose
-timeout the control exists for. See
+because the key protects every mutating **payment and approval** operation — a
+submission, an amendment, a cancellation, a decision — and not only the creation
+of an instruction. A key that lived on `payment_instruction` could make creation
+idempotent and nothing else, which would leave submission unprotected: precisely
+the operation whose timeout the control exists for.
+
+The six it protects are `clofin.idempotency/protected-operations`; the route
+table's other eleven mutations do not take a caller key and are guarded
+otherwise, which [C-06](COMPLIANCE.md) sets out. This paragraph said "*every*
+mutating operation" until the `ref-2` release audit (**2B-009**, standing
+lesson **L-14**). See
 [C-06](COMPLIANCE.md) and
 [ADR-0013](ADR/0013-canonical-request-digest-for-idempotency.md).
 
@@ -390,9 +396,12 @@ one. Two naming rules hold, both of them corrections from Milestone 1's audit:
 | `organisation.created`, `account.created`, `journal-entry.posted` | The three writes that emitted nothing until TASK-005. Each is a creation, so each is written once, in the transaction where the row it names first exists, with a null before-digest. None has a decision or a partial step to distinguish it from, so none needs a second term the way `approval.recorded` needed one beside `payment.approved`. `posted` rather than `created` for a journal entry: an entry is never drafted and never amended (C-03), so posting is the only transition it has. |
 
 An approval's events name the approval, not the payment, because that is what
-they are about. `clofin.audit.repository/events-for-payment` relates them back
-through `approval.instruction_id`, so a payment's evidence pack still shows
-them without the subject column having to misdescribe them.
+they are about. `clofin.audit.repository/events-for-subject-and-its-approvals`
+relates them back through `approval.instruction_id` **and
+`approval.adjustment_id`**, so a payment's evidence pack — and a reconciliation
+adjustment's — still shows them without the subject column having to
+misdescribe them. Both links are followed from 2026-09-06; the adjustment one
+was missing (**2C-012**).
 
 ### 2.7 Authorisation context ✅
 

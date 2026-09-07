@@ -27,6 +27,18 @@
         (str "load-config produced " (pr-str reported)
              ", which is neither a commit id nor the literal \"unknown\""))))
 
+(deftest the-instance-id-is-what-was-passed-or-it-is-absent
+  (testing "no default, generated or otherwise: a value this process invented
+            would answer the question the field exists to ask (ADR-0027
+            amendment 3a). Read from the environment, so this asserts what a
+            machine with nothing set sees"
+    (when (nil? (System/getenv "CLOFIN_INSTANCE_ID"))
+      (is (nil? (:instance-id (config/load-config))))))
+
+  (testing "and the key exists whether or not it has a value, so a caller
+            reading it never has to know whether load-config ran"
+    (is (contains? (config/load-config) :instance-id))))
+
 (deftest error-detail-is-a-development-only-affordance
   (is (config/expose-error-detail? {:environment :dev}))
   (is (not (config/expose-error-detail? {:environment :test})))

@@ -26,7 +26,24 @@
   **Nothing is summarised, shortened or re-punctuated.** The only
   transformation is unwrapping: a paragraph hard-wrapped across source lines
   becomes one line, because the wrap points are an artifact of an 80-column
-  file and not of the sentence."
+  file and not of the sentence. Paragraphs and list items stay apart, joined by
+  a newline — a control that states seven numbered guarantees states seven
+  things.
+
+  ## The statement is the whole labelled block
+
+  It was the first paragraph, and that is release-audit finding **2C-007**: the
+  extractor stopped at the first blank line, so C-13's statement arrived as its
+  introductory sentence — *\"Read each sentence with its named set, because each
+  is bounded on purpose\"* — with all seven of the guarantees it introduces
+  missing. Thirteen controls were found and thirteen were reported, which is
+  what made it invisible: **complete along the id dimension and empty along the
+  content one** (standing lesson **L-17**). A consumer restricted to the fixture
+  could not display the guarantees it exists to quote.
+
+  A labelled block now runs to the next bold label, heading or horizontal rule.
+  See `label-line?` for why *starting a paragraph* — and not the closing `**` —
+  is what makes a bold run a label."
   (:require [clojure.java.io :as io]
             [clojure.string :as str]))
 
@@ -37,12 +54,75 @@
       (str/replace #"\s+" " ")
       str/trim))
 
+(defn- list-item?
+  [line]
+  (boolean (re-find #"^\s*(?:\d+\.|[-*+])\s" line)))
+
+(defn- blocks
+  "Source lines grouped into the blocks a reader sees.
+
+  A block is one paragraph or one item of a list. Hard wrapping is undone
+  *inside* a block; the blocks themselves stay apart, because a control that
+  states seven numbered guarantees states seven things and a consumer has to be
+  able to render them as seven rather than as one run-on sentence."
+  [lines]
+  (->> lines
+       (reduce (fn [acc line]
+                 (cond
+                   (str/blank? line)   (conj acc [])
+                   (list-item? line)   (conj acc [line])
+                   :else               (if (seq acc)
+                                         (update acc (dec (count acc)) conj line)
+                                         [[line]])))
+               [[]])
+       (remove empty?)
+       vec))
+
+(defn- label-line?
+  "Does this line begin a **bold-labelled** block?
+
+  A bold run at the start of a line is not enough, and telling the two apart is
+  the whole of release-audit finding **2C-007**. `docs/COMPLIANCE.md` contains
+  seven lines that open with `**` in the middle of a hard-wrapped paragraph —
+  `**F-003** reproduced it`, `**account 1 / event 0** and …` — and four labels
+  whose own bold run wraps onto the next line before it closes. What separates
+  them is not the closing `**`: it is that a label **starts a paragraph**. So
+  the previous line must be blank, which is true of every one of the file's 76
+  labels and of none of its 7 continuations."
+  [lines i]
+  (and (pos? i)
+       (str/blank? (nth lines (dec i)))
+       (str/starts-with? (nth lines i) "**")))
+
+(defn- block-end
+  "Where a labelled block stops.
+
+  The next bold label at line start, the next heading, or the next horizontal
+  rule — whichever comes first inside this control's own section. **Not the
+  next blank line**, which is what it used to be: a statement made of numbered
+  guarantees, or of more than one paragraph, was silently truncated to its
+  introductory sentence, and C-13 lost all seven of its guarantees while the
+  fixture reported complete control coverage (**2C-007**, standing lesson
+  **L-17** — complete along the id dimension and empty along the content one)."
+  [lines from to]
+  (or (first (keep-indexed
+              (fn [i l]
+                (when (and (> i from) (< i to)
+                           (or (label-line? lines i)
+                               (re-find #"^#{1,6}\s" l)
+                               (re-matches #"-{3,}\s*" l)))
+                  i))
+              lines))
+      to))
+
 (defn- labelled-paragraph
-  "The paragraph beginning `**Label.**`, with the label removed, and its line.
+  "The block beginning `**Label.**`, with the label removed, and its line.
 
   Returns `[text line-number]` or nil. `from` and `to` bound the search to one
   control's section so a label found in the next control is not attributed to
-  this one."
+  this one. The text runs to the end of the labelled block — every paragraph,
+  every list item and every blank line between them — with each block unwrapped
+  and the blocks joined by a newline."
   [lines from to label]
   (let [idx (first (keep-indexed
                     (fn [i l] (when (and (>= i from) (< i to)
@@ -50,10 +130,11 @@
                                 i))
                     lines))]
     (when idx
-      (let [body (take-while #(not (str/blank? %)) (drop idx lines))]
-        [(-> (unwrap body)
+      (let [body (subvec (vec lines) idx (block-end lines idx to))]
+        [(-> (str/join "\n" (map unwrap (blocks body)))
              (str/replace (re-pattern (str "^\\*\\*" (java.util.regex.Pattern/quote label) "\\.\\*\\*\\s*"))
-                          ""))
+                          "")
+             str/trim)
          (inc idx)]))))
 
 (defn- permalink

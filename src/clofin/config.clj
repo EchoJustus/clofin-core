@@ -62,6 +62,15 @@
      ;; and refuses to report anything it did not resolve to a commit id.
      :source-commit (build-info/resolve-source-commit (env build-info/env-variable)
                                                       (env "CLOFIN_SOURCE_ROOT" "."))
+     ;; An opaque label the operator passed at start-up, echoed verbatim by
+     ;; `GET /` and **absent when nothing was passed** — never a generated
+     ;; default and never an empty string, because a value this process invented
+     ;; would answer the question the field exists to ask. The capture harness
+     ;; mints one per run and refuses a stack that does not echo it back, which
+     ;; is how a capture binds to the process it started rather than to a port
+     ;; (release-audit finding **2C-006**, standing lesson **L-19**; ADR-0027's
+     ;; amendment of 2026-09-06). `env` already turns blank into nil.
+     :instance-id (env "CLOFIN_INSTANCE_ID")
      :migrate-on-start? (env-bool "CLOFIN_MIGRATE_ON_START" true)}))
 
 (defn expose-error-detail?
