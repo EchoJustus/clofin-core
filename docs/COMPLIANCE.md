@@ -486,8 +486,10 @@ L-7's rule. A **late** `timeout-resolution` can then move that already-terminal
 status again: a batch that derived to `failed` while an item was `timed-out`
 becomes `settled` or `partially-settled` when the late truth arrives. That
 transaction writes the payment's own event (`payment.settled` /
-`payment.returned`), posts its finality entry, updates the stored batch status —
-and writes `settlement-batch.status-restated`, whose subject *is* the batch.
+`payment.returned`), posts its finality entry — through
+`clofin.ledger.service/post-entry!`, so a `journal-entry.posted` is written
+beside it — updates the stored batch status, and writes
+`settlement-batch.status-restated`, whose subject *is* the batch.
 
 **Two terms rather than one, and the distinction is L-7's.** `completed` names
 the transition *into* a complete batch, and that transition happened earlier,

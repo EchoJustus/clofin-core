@@ -413,6 +413,11 @@
                                   "bodyRaw"    (:body-raw service-info)
                                   "body"       (:body service-info)
                                   "bodySha256" (:body-sha256 service-info))
+                 ;; Said in the artifact rather than left for a reader to
+                 ;; notice: the one value in `GET /` that belongs to the
+                 ;; capture run and not to the commit has been replaced, so
+                 ;; that two captures of one commit are the same bytes.
+                 "instanceIdRedacted" true
                  "disclaimer"    (:disclaimer service-info))]
     (assert-provenance! (provenance->wire provenance) "fixture" path)
     (when (str/blank? (str (:disclaimer service-info)))

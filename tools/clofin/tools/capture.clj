@@ -82,20 +82,57 @@
 ;; The scope-statement fixture
 ;; ---------------------------------------------------------------------------
 
+(def redacted-instance-id
+  "What replaces this run's instance id in the published fixture.
+
+  A constant, so the fixture is the same bytes for the same commit."
+  "<redacted: per-capture-run value>")
+
+(defn redact-instance-id
+  "Take this run's instance id out of the recorded `GET /` response.
+
+  The id is a property of **the run**, not of the commit under capture: the
+  harness mints a fresh UUID each time so that no process already listening can
+  echo it (**2C-006**). It has to be in the response — that is what makes the
+  echo an identity — and it must not be in the artifact, because
+  `service-info.json` carries `bodyRaw` verbatim and every bundle carries
+  `scopeStatement.bodySha256`. Left in, two captures of the same commit produce
+  different fixture bytes, different per-bundle digests and a different
+  manifest, and the walkthrough renders a random UUID under *what this service
+  says it is*. ADR-0022's premise is that a value read from the artifact does
+  not drift; a nonce in the fixture is the artifact drifting from itself.
+
+  A literal replacement of the exact string this run passed, not a re-encode: a
+  re-serialised body would be a body that had been through this function's idea
+  of JSON, and `clofin-trace`'s `disclaimer-verbatim` check compares bytes. The
+  digest is then taken over what the artifact actually holds, which is the only
+  digest that means anything to whoever recomputes it."
+  [res instance-id]
+  (if (str/blank? (str instance-id))
+    res
+    (let [raw (str/replace (str (:body-raw res)) (str instance-id) redacted-instance-id)]
+      (cond-> (assoc res :body-raw raw :body-sha256 (prov/sha256 raw))
+        (contains? (:body res) "instanceId")
+        (assoc-in [:body "instanceId"] redacted-instance-id)))))
+
 (defn capture-service-info
   "`GET /` — the response whose disclaimer the walkthrough renders.
 
   Captured, not transcribed, and kept as raw bytes as well as parsed data:
   `clofin-trace`'s `disclaimer-verbatim` check compares bytes, and a byte
   comparison against a value that has been through somebody's paraphrase is a
-  comparison against the paraphrase."
-  [base-url]
+  comparison against the paraphrase.
+
+  With this run's instance id taken out — see `redact-instance-id`, and
+  `instanceIdRedacted` in the fixture, which says so rather than leaving a
+  reader to notice."
+  [base-url instance-id]
   (let [r    (rec/recorder {:base-url base-url})
         step (rec/request! r {:id "service-info"
                               :title "GET / — what this service says it is"
                               :method "GET" :path "/"
                               :expect-status 200})
-        res  (:response step)
+        res  (redact-instance-id (:response step) instance-id)
         disclaimer (get-in res [:body "disclaimer"])]
     (when (str/blank? (str disclaimer))
       (throw (ex-info (str "capture refuses: GET / carries no disclaimer, so there is no scope "
@@ -175,7 +212,7 @@
         (let [applied (stack/assert-schema-matches! (:readyz running) worktree)
               stamp   (assoc base-stamp :schema-version-applied applied)
               base    (:base-url running)
-              info    (capture-service-info base)]
+              info    (capture-service-info base instance-id)]
           (with-open [conn (store/connect db)]
             (let [written
                   (doall

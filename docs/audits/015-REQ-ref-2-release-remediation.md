@@ -13,7 +13,7 @@
 | **Migrations** | **None.** Every item was code, tests, contract or prose against the schema at `0013`. The brief's migration pre-flight says *No migration* and nothing here needed one. Migrations replayed `0001`→`0013` from an empty schema after the last commit: 13 applied, 0 pending |
 | **Controls touched** | **C-05** and **C-13** in `docs/COMPLIANCE.md`, plus one new §4 row and one §4 row rewritten (A-011: this batch made its "does not invoke a handler" sentence false) — **statements narrowed or made true, no control weakened**. C-05 **strengthened**: its service list is now compared with `service-namespaces` in both directions, and it carries the `events-for-payment` → `events-for-subject-and-its-approvals` rename from 2C-012. C-13 **strengthened** twice: its evidence sentence states the bound it always had, and its posting-path sentence became true and is now enforced by a producer census rather than described. C-06's prose copies outside COMPLIANCE are narrowed (§6b); its own section already narrowed and is unchanged. The capture harness (ADR-0022) is strengthened on both of its findings |
 | **Status** | Implemented, for the set this branch owns. Both blockers closed. Of the 20 should-fix, the register dispositions **14 as actioned in the subject** — those, the consider, and C-R10a are closed here; **5 were actioned on `meta`** (2B-001, 2B-002, 2B-006, 2B-011, 2C-008) and are not this branch's; **1 is deferred with a target** (2B-008 — the published `ref-1` release body is not rewritten, §7). "All 20 actioned" is what an earlier draft said, and it was a universal quantifier over a set the reader would take to be this branch when it was neither this branch's set nor all actioned (**L-14**, and the register's own vocabulary distinguishes *actioned* from *deferred*). **Four objections in §9**, none resolved unilaterally |
-| **Verification** | `make verify` **530 tests / 3,273 assertions**, 0 failures, 0 errors. `make test-it` **958 tests / 7,309 assertions**, 0 failures, 0 errors. The adversarial review §8 held this PR for has **run, reported, and been acted on** — thirty defects in this branch's own work, twenty-seven fixed in `c918ca1` and `2e67dc5` and three recorded (§8, **O-6**). Nothing is in flight (**L-9**) |
+| **Verification** | `make verify` **532 tests / 3,292 assertions**, 0 failures, 0 errors. `make test-it` **960 tests / 7,325 assertions**, 0 failures, 0 errors. The adversarial review §8 held this PR for has **run, reported, and been acted on** — thirty-eight defects in this branch's own work, thirty-four fixed and four recorded (§8, **O-5**, **O-6**). Nothing is in flight (**L-9**) |
 
 ---
 
@@ -370,9 +370,9 @@ omitted four others (`authz/model.clj`, `api/reconciliation.clj`, `ADR-0023`,
 
 ## 8. Verification status at completion (L-9)
 
-**The review this section held the PR for has run. It found thirty defects in
-this branch's own work: twenty-seven are fixed, three are recorded and left with
-a reason.** `make verify` and `make test-it`
+**The review this section held the PR for has run. It found thirty-eight
+defects in this branch's own work: thirty-four are fixed, four are recorded and
+left with a reason.** `make verify` and `make test-it`
 were run to completion on the final tree, green, with the counts in the header.
 The migration replay from empty was run after the last commit. The live-stack
 run in §5 was completed and its stack torn down. Every RC comparison quoted
@@ -382,11 +382,10 @@ above was run before the corresponding fix.
 
 An adversarial review of the whole diff across five dimensions — correctness of
 each fix, whether the new guards are non-vacuous, brief compliance, the accuracy
-of this file's own claims, and regressions — with every finding put through an
-independent verification pass before I acted on it. Three of the five dimensions
-reported; the verification pass then refuted three findings as already fixed by
-the commits they had prompted, which is the pass working rather than a
-disagreement.
+of this file's own claims, and what the change broke — with every finding put
+through an independent verification pass before I acted on it. All five reported;
+the verification pass then refuted four findings as already fixed by the commits
+they had prompted, which is the pass working rather than a disagreement.
 
 The three headline defects were all in work this batch added, and all three were
 the shape the batch exists to remediate — **a guard whose stated set is larger
@@ -421,6 +420,55 @@ tautologies; the schema checker dropped `allOf` siblings and passed `oneOf`
 silently; `COMPLIANCE` §4's A-011 row had been made false by this very batch and
 the guard over it only checked that a heading existed; and rule 5's `next`
 required a trailing space.
+
+### What it found downstream of the fixes
+
+The fifth dimension asked what the change broke or nearly broke, and found six
+things this batch had made false or unstable elsewhere. All six are fixed:
+
+- **Two sentences in the published contract became false.**
+  `submitSettlementBatch` enumerated the audit trail as *one `payment.released`
+  per instruction plus one `settlement-batch.submitted`*, and
+  `recordSchemeResponse` said a finality response *emits one audit event*.
+  Routing both postings through `clofin.ledger.service/post-entry!` (2C-009) adds
+  a `journal-entry.posted` to each. Closed enumerations, in the one surface an
+  external consumer reads, made false by this batch — the same class it exists
+  to close, and `COMPLIANCE` had been updated while the contract had not.
+- **ADR-0027 still said the exposed-header list names three headers.** 2B-003
+  added a fourth in the same change that amended the ADR. Nothing caught it
+  because `clofin.http.cors-test` derives its expectation from `src/` and the
+  contract and deliberately not from the ADR — which is right, and is why the
+  sentence had to be found by reading.
+- **`COMPLIANCE` C-05's `timeout-resolution` paragraph** enumerated that
+  transaction's writes and omitted the `journal-entry.posted` this batch added
+  to it — understating C-05 inside the section that defines it, in the same
+  document the batch widened for 2C-009 elsewhere.
+- **The capture fixture had become unstable.** The harness mints a fresh
+  instance id per run, `GET /` echoes it from `ref-2` on, and
+  `service-info.json` records `bodyRaw` verbatim while every bundle carries
+  `scopeStatement.bodySha256`. Two captures of the *same commit* would have
+  produced different fixture bytes, different per-bundle digests and a different
+  manifest, and the walkthrough would have rendered a per-run UUID under *what
+  this service says it is*. ADR-0022's premise is that a value read from the
+  artifact does not drift; this made the artifact drift from itself. The id is
+  now replaced by a constant before the fixture is written, the digest is taken
+  over what the artifact holds, and the fixture carries `instanceIdRedacted`
+  saying so.
+
+One further effect it found is **intended, and was unrecorded, which was the
+error**. Widening a control's quotation from the first paragraph to the whole
+labelled block (2C-007, for C-13's seven guarantees) also changes C-09, C-10 and
+C-12, each of which states a claim and then narrows it in the next paragraph.
+Published without that paragraph, C-09 reads as *no logging emits a sensitive
+value* full stop — the sentence the `ref-1` audit found false (A-007) and which
+C-11 contradicts on the same page. The block is the unit, not the paragraph, and
+`a-control-s-statement-carries-the-paragraph-that-scopes-it` now pins it so it
+cannot silently revert.
+
+One is left: `docs/audits/003-REQ-authorisation-and-audit-trail.md:943` still
+names `events-for-payment` in the present tense. It is the last occurrence of
+the old name in the tree, and it is a historical report of what was true when it
+was written. Repairing it would edit the record rather than the code.
 
 ### What it found in this file
 
@@ -631,12 +679,15 @@ transcript required; it is reproducible from the scripts as they stand.
 `payments/repository.clj` (2B-009 prose), `config.clj` and `api/health.clj`
 (2C-006, 2B-007), `routes.clj` (2C-011).
 
-**Harness.** `tools/…/capture/stack.clj` and `capture.clj` (2C-006),
-`capture/bundle.clj` (2C-005), `capture/quotations.clj` (2C-007).
+**Harness.** `tools/…/capture/stack.clj` and `capture.clj` (2C-006, and the
+redaction of the run's instance id from the published fixture),
+`capture/bundle.clj` (2C-005, and `instanceIdRedacted`),
+`capture/quotations.clj` (2C-007).
 
 **Contract.** `api/openapi.yaml` — `instanceId`, the four truncation fields, the
 new operation, five `400`s, one `422`, the readiness enum, and three
-descriptions.
+descriptions; plus `submitSettlementBatch`'s and `recordSchemeResponse`'s audit
+enumerations, which 2C-009 made false and which the review caught.
 
 **Scripts and build.** `scripts/check-disclaimer.sh` (new),
 `scripts/check-doc-consistency.sh` and `.awk` (rule 5), `Makefile`

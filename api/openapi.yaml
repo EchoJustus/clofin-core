@@ -1446,8 +1446,9 @@ paths:
       description: |
         In **one transaction**: every member moves `approved` to `released`,
         each posts its release entry to the journal, the batch moves `open` to
-        `submitted`, and the audit trail gains one `payment.released` event per
-        instruction plus one `settlement-batch.submitted` for the batch. A
+        `submitted`, and the audit trail gains one `payment.released` **and one
+        `journal-entry.posted`** per instruction, plus one
+        `settlement-batch.submitted` for the batch. A
         failure anywhere leaves the batch open, the instructions approved and
         the journal untouched.
 
@@ -1537,8 +1538,10 @@ paths:
 
         - `ack` — the batch was acknowledged. Recorded; moves nothing.
         - `settled` / `returned` — resolves one item, transitions its
-          instruction, posts finality, and emits one audit event named after
-          the transition. A `returned` response must carry a `reason`.
+          instruction, posts finality, and emits **two** audit events: one named
+          after the transition (`payment.settled` / `payment.returned`) and one
+          `journal-entry.posted` for the finality entry. A `returned` response
+          must carry a `reason`.
         - `timeout-resolution` — the late answer for an item a sweep already
           gave up on. Must carry `outcome`, and resolves that item exactly once.
 

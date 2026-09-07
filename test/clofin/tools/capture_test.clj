@@ -19,7 +19,8 @@
   the stamp without a test here fails rather than passing unnoticed
   (**L-6** — a guard over the copy the author was looking at is the defect it
   exists to catch)."
-  (:require [clofin.tools.capture.bundle :as bundle]
+  (:require [clofin.tools.capture :as capture]
+            [clofin.tools.capture.bundle :as bundle]
             [clofin.tools.capture.provenance :as prov]
             [clofin.tools.capture.quotations :as quotations]
             [clojure.data.json :as json]
@@ -507,6 +508,90 @@
       (is (= discovered (set (keys writers)))
           (str "clofin.tools.capture.bundle exposes " (pr-str (vec (sort discovered)))
                " and this namespace exercises " (pr-str (vec (sort (keys writers)))))))))
+
+(deftest a-control-s-statement-carries-the-paragraph-that-scopes-it
+  (testing "2C-007 was C-13's seven numbered guarantees being cut off after the
+            first paragraph. Widening to the whole labelled block fixes that and
+            also changes four other controls, which is the *point* rather than a
+            side effect: C-09, C-10 and C-12 each state a claim and then, in the
+            next paragraph, say what it is narrowed to and why. Published
+            without that paragraph, C-09 reads as *no logging emits a sensitive
+            value* full stop — which is the sentence the `ref-1` audit found
+            false (A-007) and which C-11 contradicts on the same page. A
+            walkthrough that renders the first paragraph alone renders the
+            un-narrowed claim, so the block is the unit, not the paragraph
+            (**L-14**)"
+    (let [by-id (into {} (map (juxt #(get % "id") #(get % "statement")))
+                      (quotations/controls "." "HEAD"))]
+      (doseq [[id scoping] {"C-09" "scoped to the two enforcement points"
+                            "C-10" "narrower than"
+                            "C-12" "load-bearing"}]
+        (let [statement (get by-id id)]
+          (is (some? statement) id)
+          (is (str/includes? statement scoping)
+              (str id "'s statement must carry the paragraph that scopes it, or "
+                   "the walkthrough publishes a claim the document itself "
+                   "narrows — got " (pr-str statement)))))
+
+      (testing "and a control whose claim needs no narrowing is not padded"
+        (is (= 1 (count (str/split-lines (get by-id "C-03"))))
+            (str "C-03 is one sentence and must stay one — " (pr-str (get by-id "C-03"))))))))
+
+(deftest the-run-s-instance-id-does-not-reach-the-fixture
+  (testing "the harness mints a fresh instance id per run so that no process
+            already listening can echo it (2C-006). It therefore appears in
+            `GET /` from `ref-2` on — and `service-info.json` records `bodyRaw`
+            verbatim while every bundle carries `scopeStatement.bodySha256`, so
+            left in it would make two captures of the *same commit* differ in
+            fixture bytes, in every per-bundle digest and in the manifest, and
+            would render a meaningless UUID under *what this service says it
+            is*. ADR-0022's premise is that a value read from the artifact does
+            not drift"
+    (let [id "11111111-2222-3333-4444-555555555555"
+          raw (str "{\"service\":\"clofin-core\",\"instanceId\":\"" id
+                   "\",\"disclaimer\":\"synthetic only\"}")
+          res {:status 200
+               :body {"service" "clofin-core" "instanceId" id
+                      "disclaimer" "synthetic only"}
+               :body-raw raw
+               :body-sha256 (prov/sha256 raw)}
+          out (capture/redact-instance-id res id)]
+      (is (not (str/includes? (:body-raw out) id))
+          (str "the run's id must not survive into the fixture — " (:body-raw out)))
+      (is (str/includes? (:body-raw out) capture/redacted-instance-id))
+      (is (= capture/redacted-instance-id (get (:body out) "instanceId")))
+      (is (= (prov/sha256 (:body-raw out)) (:body-sha256 out))
+          "the digest must be of what the artifact holds, or nobody can recompute it")
+      (is (not= (:body-sha256 res) (:body-sha256 out))
+          "and it must actually differ from the digest of the unredacted body")
+
+      (testing "two runs of the same commit produce the same fixture bytes,
+                which is the property the redaction exists for"
+        (let [other "99999999-8888-7777-6666-555555555555"
+              raw-2 (str/replace raw id other)
+              out-2 (capture/redact-instance-id
+                     {:status 200
+                      :body {"service" "clofin-core" "instanceId" other
+                             "disclaimer" "synthetic only"}
+                      :body-raw raw-2
+                      :body-sha256 (prov/sha256 raw-2)}
+                     other)]
+          (is (= (:body-raw out) (:body-raw out-2)))
+          (is (= (:body-sha256 out) (:body-sha256 out-2)))))
+
+      (testing "and everything else in the response is untouched — a redaction
+                that re-encoded the body would defeat `clofin-trace`'s
+                byte-comparison of the disclaimer"
+        (is (= "synthetic only" (get (:body out) "disclaimer")))
+        (is (str/includes? (:body-raw out) "\"disclaimer\":\"synthetic only\""))
+        (is (str/includes? (:body-raw out) "\"service\":\"clofin-core\"")))
+
+      (testing "a commit that reports no instance id at all is left alone"
+        (let [plain {:status 200 :body {"service" "clofin-core"}
+                     :body-raw "{\"service\":\"clofin-core\"}"
+                     :body-sha256 "x"}]
+          (is (= plain (capture/redact-instance-id plain nil)))
+          (is (= plain (capture/redact-instance-id plain ""))))))))
 
 (def ^:private sink-primitives
   "Every way a JVM Clojure namespace can put bytes on disk, as the literal text

@@ -118,8 +118,14 @@ non-safelisted request header turned every green unit test into an opaque
 **No credentials.** `Access-Control-Allow-Credentials` is never sent, so a
 browser attaches no cookie and no HTTP authentication. CloFin's principal is a
 header a page sets deliberately, which needs no ambient credential and is safer
-without one. `Access-Control-Expose-Headers` names three headers explicitly —
-`location`, `x-correlation-id`, `allow` — and never `*`.
+without one. `Access-Control-Expose-Headers` names four headers explicitly —
+`location`, `x-correlation-id`, `allow`, `idempotent-replayed` — and never `*`.
+(Three when this ADR was written; `idempotent-replayed` was added at `ref-2`,
+finding **2B-003**, having been set by two namespaces and declared on six
+responses while a page could not read it. The list is no longer maintained by
+counting: `clofin.http.cors-test` derives what must be exposed from `src/` and
+from the contract, two sources that move independently of this sentence — which
+is why this sentence is the one that went stale.)
 
 **`Vary: Origin` on every response while the allowlist is active**, including
 responses carrying no CORS header. A shared cache that stored one origin's
