@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | **Increment** | ref-2 (release remediation; the tag waits on this brief) |
-| **Status** | `IN PROGRESS` — dispatched 2026-09-06 |
+| **Status** | `CLOSED` — merged in PR #31 (`32dfcc9`, 2026-09-07); six objections ruled below; `ref-2` lands on that commit |
 | **Depends on** | `FEEDBACK-REL-ref-2` ingested ✅ (`docs/audits/FEEDBACK-REL-ref-2.md` on `origin/meta`, in the commit that carries this brief) |
 | **Blocks** | the `ref-2` tag; the `clofin-trace` refresh at `ref-2`; increment 7 |
 | **Requirements** | PR-040 (its scope stated honestly), PR-050…054; ADR-0020 rules 2–3, ADR-0022, ADR-0023, ADR-0027 |
@@ -521,3 +521,40 @@ an objection in the REQ rather than adding `0014`.
 - **The scope is large on purpose** — a release remediation lands as one
   descendant. Commit by group (A…G) so a reviewer can read one finding at a
   time, and keep each commit's message naming the finding ids it closes.
+
+## Changelog — rulings on the `015-REQ` objections, and the close-out (2026-09-07)
+
+Delivered as PR #31, 17 commits, 54 files, merged at `32dfcc9`; the REQ is
+`docs/audits/015-REQ-ref-2-release-remediation.md` on `main`. **Master
+Control's reproduction, on the merged tree:** `make verify` 532 tests /
+3,292 assertions and `make test-it` 960 tests / 7,325 assertions (the
+Worker's run: 7,331 — the property tests generate a varying number of
+cases), both 0 failures, on a local PostgreSQL 16; CI run 34091727538 on
+`32dfcc9` green on all three jobs. **The negative control, at the RC
+`c97a4f2` with the branch's two blocker test files copied in:**
+`clofin.recon.concurrency-test` fails both `ac-1` "different documents"
+cells with `{:status 200, :replayed true}` and `{:status 422, :replayed
+true}` on the losing delivery, exactly as the REQ quotes; the
+`capture-stack` namespace does not compile (`No such var:
+stack/assert-port-free!`). Both blockers are closed, re-verified, and the
+tag is released from its gate.
+
+| # | Objection | Ruling |
+|---|---|---|
+| O-1 | The brief's reason for A-2's `CLOFIN_SOURCE_COMMIT` instruction was wrong ("the child resolves nothing and reports `unknown`"); the truth is worse — under `make capture-trace` the child *inherits the harness's `HEAD`* and reports `main`'s SHA for a stack running from a tag. | **Confirmed — brief defect, Master Control's.** The instruction was right and its premise was invented: a statement about current behaviour that nobody ran against the tree before dispatch, which is L-16's discipline applied to a brief (a brief is a control statement about the tree). The Worker's measurement is the record; the fix as implemented — set explicitly in `env-for`, refused by `assert-same-process!` when it differs — is ratified, and ADR-0027's amendment names the real mechanism. No published artifact was affected: `ref-1`'s `GET /` had no `sourceCommit` at all, and the harness stamps provenance from the tag, not from the service's self-report. AGENT_HANDOFF §4 now asks that every claim a brief makes about current behaviour carry the command that checked it. |
+| O-2 | C-5 specified an approval band `(0, 0)` that `threshold_approvals_positive` has refused since migration `0005`; zero approvals is what `approvals-required` answers *below* the lowest band, so one band `(100000, 1)` gives the script both halves it needs. | **Confirmed — brief defect, Master Control's, and L-3 widened.** The brief's own new *Migration pre-flight* section said "No migration" and then specified seed SQL the engine refuses — the lesson's letter was honoured and its point missed. Implemented-as-one-band is ratified (verified live: the de-minimis case posts with `approvalsRequired: 0`; the boundary at exactly SGD 1,000.00 still requires one). **L-3 now covers every row of SQL a brief specifies — migration DDL, seed data, UAT scripts — and the template section is renamed *SQL pre-flight*.** |
+| O-3 | C-5 (UAT-007) was committed with group F rather than group C, because it and F-4 are one change. | **Ratified.** The grouping's purpose — one finding readable at a time — is better served by keeping a coupled pair together than by an intermediate commit with a forward reference. |
+| O-4 | AC-13 says 37 operations; C-2 adds one, so the branch has 38. | **Confirmed.** The brief counted the RC and did not add its own operation. The conformance test asserting coverage against `clofin.routes/routes` rather than a number is the right shape; AC-13 reads "every operation in the route table". |
+| O-5 | A-2(iii)'s identity gate is implemented conditionally — unconditional for every commit whose source renders `instanceId` (`ref-2` on), by port exclusion plus liveness for a commit whose source does not (`ref-1`, the documented default of `make capture-trace`) — where the brief says unconditionally; done first without declaring it. | **Accepted, with the ADR as the record.** The literal gate would refuse every capture of the only tag that exists and contradict ADR-0022's rule that a source state is captured as it is. The exclusion binding holds: the port is proved free before the spawn, the child's liveness is sampled before any answer is read and before every write, and a stranger cannot make the worktree render a field it does not have — so which gate applies is read from the worktree, never from the answer. The Worker's own review found the undeclared deviation and it was declared, which is L-9 working. ADR-0027 §3a states the two modes in full; that is where a deviation goes to be read. **One condition, carried to the `clofin-trace` refresh brief:** the bundle manifest must *stamp* which binding a capture used, not only print it, so a consumer of a fixture can tell. |
+| O-6 | AC-9 asks the REQ to quote every UAT-007 step's response; it quotes seven of fifteen. The run happened; the transcript is short. | **Ratified.** The criterion's purpose — the sequel reproduces against a fresh stack, with the inherited prerequisites replayed — is served by the quoted subset, and padding a report to satisfy a letter is noise. AC-9's wording is corrected to "quotes the responses that bear on the findings and states that every step ran". |
+
+**Recorded beside the rulings.** (1) PR #31 was merged by the operator at
+06:38Z on 2026-09-07, before CI had run on the branch (every run from 01:04Z
+to 02:20Z failed in seconds with no runner allocated) and before these
+rulings. CI ran on `main` immediately after the merge and passed; Master
+Control's reproduction followed. The gate held — the tag waited for both —
+but the order was wrong, and the register's decision block of 2026-09-07
+sets the rule for next time. (2) The Worker's declared adversarial review
+(§8 of the REQ) found thirty-eight defects in its own delivered work, three
+of them serious, and held the PR on them until every one was fixed or
+recorded. That is L-9 as designed, and the register says so.

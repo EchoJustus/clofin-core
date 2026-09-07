@@ -299,12 +299,17 @@ audit's findings against Master Control's own briefs.* The **dependency
 matrix** (finding 2B-002, lesson L-4): one row per scope item, acceptance
 criterion and vocabulary term, naming the state transition, interface, DDL and
 DoD clause it depends on — a cell that cannot be filled is a question to
-answer before dispatch, not a note for the Worker. The **migration pre-flight**
-(2B-001, L-3): every migration the brief specifies was executed on PostgreSQL
-16 before dispatch with one row of every documented shape inserted, and the
-command and output are in the brief — or the brief says *No migration* in so
-many words. The **negative control** (L-17): for every guard the brief adds or
-changes, the mutation that must fail is named.
+answer before dispatch, not a note for the Worker. The **SQL pre-flight**
+(2B-001, L-3; widened 2026-09-07 by 015-REQ O-2): every migration the brief
+specifies was executed on PostgreSQL 16 before dispatch with one row of every
+documented shape inserted, **and so was every other row of SQL the brief
+specifies** — seed data, a UAT script's inserts — with the command and output
+in the brief; or the brief says *No SQL* in so many words. The **negative
+control** (L-17): for every guard the brief adds or changes, the mutation that
+must fail is named. And from 015-REQ O-1: **every claim a brief makes about
+current behaviour** ("today the child reports `unknown`") carries the command
+that checked it against the tree — a brief is a control statement about the
+tree, and L-16's discipline applies to it.
 
 ```markdown
 # TASK-NNN: <title>
@@ -345,10 +350,11 @@ One row each. Every cell filled, or the question answered before dispatch (L-4).
 Given / When / Then. Each one testable. Each traced to a PR-nnn. For every
 guard added or changed: the negative control — the mutation that must fail (L-17).
 
-## Migration pre-flight
-Either `No migration.` — or, for each migration specified: executed on
-PostgreSQL 16 before dispatch, one row of every documented shape inserted,
-command and output recorded here (L-3).
+## SQL pre-flight
+Either `No SQL.` — or, for each migration and for every other row of SQL this
+brief specifies (seed data, UAT inserts): executed on PostgreSQL 16 before
+dispatch, one row of every documented shape inserted, command and output
+recorded here (L-3, widened by 015-REQ O-2).
 
 ## Definition of done
 The increment checklist above, plus anything specific to this work.
