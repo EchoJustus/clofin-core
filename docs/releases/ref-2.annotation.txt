@@ -1,0 +1,53 @@
+Date:        2026-09-07
+Commit:      32dfcc99025fa339478f7ecf91b42ded71d725c2
+Candidate:   c97a4f25a4cb2d9210613939cb55c3dafcddf32f (tagged on its
+             remediation descendant, as the release rules permit)
+
+WHAT THIS IS. A tagged, audited snapshot of a reference implementation.
+CloFin operates on synthetic data only. It is not connected to any bank, payment scheme or central bank, holds no regulatory authorisation, and never processes real funds.
+It is not a production deployment and not an attestation, and it makes no
+claim of real institutional connectivity. The release audit is an internal
+quality gate.
+
+RELEASE AUDIT: COMPLETE. Charter items 1-8 of 8 were performed (migrations
+replayed from empty; the full suite; cross-document consistency; the
+partial-set sweep; standing-lessons compliance; known-debt reconciliation;
+the synthetic-data and neutrality sweep; citation discipline over 230
+citations). Four sessions on the CodeSpace path: A-C on GPT-5.6 Sol, D -
+citation verification and the report - on a model the session could not
+name. Nothing was skipped and no fallback was needed. Deliverable:
+docs/audits/FEEDBACK-REL-ref-2.md.
+
+FINDINGS. 23 raised (2 blocking, 20 should-fix, 1 consider) plus one
+unnumbered residual. The two blocking findings - a concurrent contradictory
+statement reported as a replay (2C-002), and the capture harness accepting
+another process's readiness as the commit under capture (2C-006) - were
+remediated in TASK-015 (PR #31) with regression tests that fail at the
+candidate and pass at this commit, verified by CI on this commit and by
+Master Control's own reproduction. 18 findings are actioned in this tree, 5
+on the control plane, 1 deferred with a target (2B-008: the ref-1 release
+body is a published artifact and is not rewritten; this annotation is the
+first written under the rule that finding produced). None disputed.
+
+CONTENTS. Increments 1-6 and the core half of 8: double-entry ledger,
+payment lifecycle and idempotency, authorisation with maker-checker and an
+append-only audit trail, settlement simulation, reconciliation with
+synthetic statements, deterministic matching, breaks, adjustments and linked
+retries; generated diagrams and three document guards; the capture harness
+that produces the fixtures clofin-trace replays; a default-closed CORS
+allowlist and instance self-identification for clofin-cockpit. Thirteen
+forward-only migrations. Controls C-01 through C-06 and C-08 through C-13
+enforced; C-07 (screening) designed and not built.
+
+VERIFICATION AT THIS COMMIT. make verify: 532 tests, 3,292 assertions, 0
+failures, 0 errors; make test-it: 960 tests, 0 failures, 0 errors (7,331
+assertions in the Worker's run, 7,325 in Master Control's reproduction -
+the property tests generate a varying number of cases); migrations
+0001-0013 replayed from an empty schema. CI run 34091727538 on this commit,
+all three jobs green. Master Control's reproduction also ran the two
+blocking findings' regression tests against the candidate, where they fail
+as the remediation report says.
+
+Records: docs/audits/ on the meta branch - FEEDBACK-REL-ref-2 and its
+commission, the register's decision block of 2026-09-06, and standing
+lessons L-1 through L-21.
