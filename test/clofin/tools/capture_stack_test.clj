@@ -23,6 +23,8 @@
   verified clean at that commit."
   (:require [clofin.tools.capture.stack :as stack]
             [clojure.data.json :as json]
+            [clojure.java.io :as io]
+            [clojure.java.shell :as shell]
             [clojure.test :refer [deftest is testing]])
   (:import [com.sun.net.httpserver HttpExchange HttpHandler HttpServer]
            [java.net InetSocketAddress]
@@ -83,6 +85,25 @@
            "documentation" "https://github.com/EchoJustus/clofin-core"}
           overrides)))
 
+(defn- worktree!
+  "A throwaway worktree whose `GET /` handler either renders `instanceId` or
+  does not.
+
+  `stack/self-identifies?` reads the **source**, so which gate applies is a
+  property of the commit under capture rather than of the answer on the port.
+  That is what makes it safe: a stranger can withhold a field, but it cannot
+  reach into the worktree and remove the code that renders one."
+  [self-identifies?]
+  (let [dir (.toFile (java.nio.file.Files/createTempDirectory
+                      "clofin-worktree"
+                      (into-array java.nio.file.attribute.FileAttribute [])))
+        handler (io/file dir "src" "clofin" "api" "health.clj")]
+    (io/make-parents handler)
+    (spit handler (if self-identifies?
+                    "(resp/ok (cond-> {\"service\" \"clofin-core\"}\n  id (assoc \"instanceId\" id)))"
+                    "(resp/ok {\"service\" \"clofin-core\" \"documentation\" \"…\"})"))
+    dir))
+
 (defn- start-against
   "`start!` pointed at an occupied port, spawning a child that cannot serve.
 
@@ -91,7 +112,7 @@
   somewhere else, which is exactly the case the finding is about."
   [server & {:keys [instance-id source-commit]
              :or {instance-id "run-under-test" source-commit commit}}]
-  (stack/start! {:worktree (System/getProperty "java.io.tmpdir")
+  (stack/start! {:worktree (worktree! true)
                  :db {:url "jdbc:postgresql://127.0.0.1:1/nothing"
                       :user "nobody" :password "nothing"}
                  :port (port server)
@@ -160,7 +181,8 @@
            (stack/assert-same-process! {:process nil
                                         :base-url (str "http://127.0.0.1:" (port server))
                                         :instance-id "run-under-test"
-                                        :source-commit commit})))))
+                                        :source-commit commit
+                                        :self-identifies? true})))))
 
   (testing "or none at all"
     (with-responder [server (info)]
@@ -169,7 +191,8 @@
            (stack/assert-same-process! {:process nil
                                         :base-url (str "http://127.0.0.1:" (port server))
                                         :instance-id "run-under-test"
-                                        :source-commit commit}))))))
+                                        :source-commit commit
+                                        :self-identifies? true}))))))
 
 (deftest ac-2-the-right-instance-with-the-wrong-commit-is-refused
   (testing "the second hole, and the one that was live: a child inherits its
@@ -184,17 +207,72 @@
            (stack/assert-same-process! {:process nil
                                         :base-url (str "http://127.0.0.1:" (port server))
                                         :instance-id "run-under-test"
-                                        :source-commit commit}))))))
+                                        :source-commit commit
+                                        :self-identifies? true}))))))
 
 (deftest ac-2-a-stack-that-echoes-both-is-accepted
   (testing "the positive case, so the refusals above cannot pass by refusing
             everything"
     (with-responder [server (info {"instanceId" "run-under-test"})]
-      (is (= {:instance-id "run-under-test" :source-commit commit}
+      (is (= {:instance-id "run-under-test" :source-commit commit
+              :identity-established-by :instance-id}
              (stack/assert-same-process! {:process nil
                                           :base-url (str "http://127.0.0.1:" (port server))
                                           :instance-id "run-under-test"
-                                          :source-commit commit}))))))
+                                          :source-commit commit
+                                          :self-identifies? true}))))))
+
+(deftest a-commit-that-predates-instance-ids-is-still-capturable
+  (testing "`ref-1` renders neither `instanceId` nor `sourceCommit` from
+            `GET /` — it predates both — and it is the documented default of
+            `make capture-trace` (`CAPTURE_REF ?= ref-1`) and of
+            `clojure -M:capture`, and the only tag that exists. A gate that
+            demanded an echo such a service has no way to produce would refuse
+            every capture of it, with a message saying the process answering is
+            not the one this run started when it is exactly that process — and
+            it would contradict ADR-0022, which established that `ref-1`
+            predates any build stamp and that changing the source to make it
+            capturable captures a different source state"
+    (with-responder [server (dissoc (info) "sourceCommit")]
+      (let [child (.start (ProcessBuilder. ["sleep" "30"]))
+            running {:process child
+                     :base-url (str "http://127.0.0.1:" (port server))
+                     :instance-id "run-under-test"
+                     :source-commit commit
+                     :self-identifies? false}]
+        (try
+          (is (= :port-exclusion
+                 (:identity-established-by (stack/assert-same-process! running)))
+              "a pre-stamp commit binds by exclusion, and the run says which")
+          (testing "and the weakening is *named*, not silent: the same responder
+                    against a commit whose source does render the field is
+                    refused, so the two gates are genuinely different"
+            (is (thrown-with-msg?
+                 clojure.lang.ExceptionInfo #"reports instance id"
+                 (stack/assert-same-process! (assoc running :self-identifies? true)))))
+          (finally (.destroy child)))))))
+
+(deftest which-gate-applies-is-read-from-the-source-not-from-the-answer
+  (testing "the discriminator must be one the thing being gated cannot reach.
+            A stranger on the port can withhold `instanceId`; it cannot stop
+            the worktree's handler from rendering one"
+    (is (false? (boolean (stack/self-identifies? (worktree! false)))))
+    (is (true? (boolean (stack/self-identifies? (worktree! true)))))
+    (testing "a worktree with no handler at all is not evidence of capability"
+      (is (false? (boolean (stack/self-identifies?
+                            (System/getProperty "java.io.tmpdir")))))))
+
+  (testing "and against the two real commits: `ref-1`, and this working tree"
+    (let [ref-1 (java.io.File/createTempFile "ref1" "")
+          dir (io/file (str ref-1 ".d"))
+          handler (io/file dir "src" "clofin" "api" "health.clj")]
+      (io/make-parents handler)
+      (spit handler (:out (shell/sh
+                           "git" "show" (str commit ":src/clofin/api/health.clj"))))
+      (is (false? (boolean (stack/self-identifies? dir)))
+          "ref-1's GET / renders service/description/environment/disclaimer/documentation")
+      (is (true? (boolean (stack/self-identifies? ".")))
+          "this tree renders instanceId (ADR-0027)"))))
 
 ;; ---------------------------------------------------------------------------
 ;; (e) liveness is re-checked, not checked once
@@ -208,7 +286,8 @@
             running {:process child
                      :base-url (str "http://127.0.0.1:" (port server))
                      :instance-id "run-under-test"
-                     :source-commit commit}]
+                     :source-commit commit
+                     :self-identifies? true}]
         (is (map? (stack/assert-same-process! running))
             "alive and echoing: the capture may continue")
         (.destroy child)
@@ -241,7 +320,7 @@
             own process must not start one"
     (is (thrown-with-msg?
          clojure.lang.ExceptionInfo #"must carry an instance id"
-         (stack/start! {:worktree (System/getProperty "java.io.tmpdir")
+         (stack/start! {:worktree (worktree! true)
                         :db {:url "jdbc:x" :user "u" :password "p"}
                         :port 1 :clojure-bin "/bin/false" :log-file nil
                         :source-commit commit})))))

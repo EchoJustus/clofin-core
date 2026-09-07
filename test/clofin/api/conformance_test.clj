@@ -207,6 +207,12 @@
         q (str "organisationId=" org)]
     (tdb/insert-threshold! tdb/*pool* {:organisation-id org :currency "SGD"
                                        :from-minor 100000 :approvals-required 1})
+    ;; A second band, so that one instruction is still `pendingApproval` after a
+    ;; single approval. `withdrawApproval` is only lawful while it is: with one
+    ;; band the sole approval meets the threshold and the way back is to amend,
+    ;; so the operation could not have reached its `200` at all.
+    (tdb/insert-threshold! tdb/*pool* {:organisation-id org :currency "SGD"
+                                       :from-minor 135000 :approvals-required 2})
     (call "getOrganisation" :get (str "/organisations/" org) :actor controller)
 
     ;; --- accounts and the journal ----------------------------------------
@@ -223,8 +229,6 @@
           funds (get by-code "1100-CLIENT-FUNDS")
           payable (get by-code "2100-CLIENT-PAYABLE")]
       (call "getAccount" :get (str "/accounts/" funds) :actor controller :query q)
-      (call "getAccountStatement" :get (str "/accounts/" funds "/statement")
-            :actor controller :query q)
       (let [entry (call "postJournalEntry" :post "/journal-entries" :actor controller
                         :idempotency-key (str (random-uuid))
                         :body {"organisationId" (str org)
@@ -237,7 +241,17 @@
                                         {"accountId" funds "direction" "debit"
                                          "amount" {"currency" "SGD" "minorUnits" 5000000}}]})]
         (call "getJournalEntry" :get (str "/journal-entries/" (get-in entry [:json "id"]))
-              :actor controller :query q))
+              :actor controller :query q)
+        ;; After the entry, and with the period the contract marks **required**.
+        ;; Called without `from`/`to` this answers `400`, and `Statement` — the
+        ;; only `$ref` to it in the whole contract is this operation's `200` —
+        ;; goes unvalidated along with its eight required members,
+        ;; `MovementLine`, and three of the contract's four `allOf` sites. An
+        ;; operation driven only to a refusal is an operation whose success
+        ;; representation nothing checks.
+        (call "getAccountStatement" :get (str "/accounts/" funds "/statement")
+              :actor controller
+              :query (str q "&from=" (:from (period)) "&to=" (:to (period)))))
 
       ;; --- payments -------------------------------------------------------
       (let [raise (fn [amount]
@@ -278,8 +292,21 @@
                                      (str "/payment-instructions/" withdrawn "/approvals")
                                      :actor checker-2 :idempotency-key (str (random-uuid))
                                      :body {"organisationId" (str org) "decision" "approved"})
-                               [:json "id"])]
-          (call "withdrawApproval" :delete (str "/approvals/" approval)
+                               ;; The approval id is nested: the 201 body is
+                               ;; `{"approval" {…} "paymentInstruction" {…}}`.
+                               ;; Read from the top level this is `nil`, the URI
+                               ;; becomes `/approvals/`, and the router's own
+                               ;; generic 404 gets recorded as `withdrawApproval`
+                               ;; having been exercised — the operation counted
+                               ;; as covered while its 200 schema, which requires
+                               ;; `approval` and `paymentInstruction`, was
+                               ;; checked by nothing.
+                               [:json "approval" "id"])]
+          ;; `DELETE /payment-instructions/:id/approvals/:approvalId`. The walk
+          ;; built `/approvals/<id>` — a path no route matches — so the router's
+          ;; own `404` was recorded and the operation counted as exercised.
+          (call "withdrawApproval" :delete
+                (str "/payment-instructions/" withdrawn "/approvals/" approval)
                 :actor checker-2 :idempotency-key (str (random-uuid))
                 :query q))
 
@@ -439,6 +466,42 @@
             (str operation-id " must be driven to " expected
                  " — the audit found it emitting one undeclared; observed "
                  (pr-str (mapv :status (get statuses operation-id)))))))))
+
+(deftest every-operation-the-contract-gives-a-success-reaches-one
+  (testing "the other half of the coverage claim. `every-operation-in-the-route-
+            table-is-exercised` counts an operation as driven the moment *any*
+            response is recorded for it — so an operation the walk only ever
+            provokes into a refusal, or one whose URI the walk builds out of a
+            nil id and which the router therefore answers `404` without ever
+            reaching the handler, passes it while its success representation is
+            validated by nothing. That is the L-17 shape — coverage complete
+            along the operation-id dimension and absent along the status
+            dimension — inside the guard written to close it, and it hid two:
+            `withdrawApproval` (never reached its handler) and
+            `getAccountStatement` (only ever a `400`, and the sole `$ref` to
+            `Statement` in the contract)"
+    (let [declared (operations)
+          by-id (group-by :operation-id (corpus))
+          success? (fn [status] (<= 200 status 299))
+          ;; From the contract, not from a list here: an operation that gains a
+          ;; success response is covered by this the day it does.
+          expected (into (sorted-set)
+                         (for [[operation-id responses] declared
+                               :when (contains? by-id operation-id)
+                               :when (some #(re-matches #"2\d\d" (str %)) (keys responses))]
+                           operation-id))
+          missing (into (sorted-set)
+                        (remove (fn [operation-id]
+                                  (some (comp success? :status) (by-id operation-id)))
+                                expected))]
+      (is (seq expected) "no operation was matched against the contract at all")
+      (is (empty? missing)
+          (str "the contract declares a 2xx for these operations and the walk "
+               "never drove one: "
+               (pr-str (into {} (for [operation-id missing]
+                                  [operation-id (mapv :status (by-id operation-id))])))
+               ". An operation seen only refusing is an operation whose success "
+               "schema this namespace does not check.")))))
 
 (deftest the-check-is-bounded-and-says-so
   (testing "this narrows the A-011 debt; it does not close it, and COMPLIANCE

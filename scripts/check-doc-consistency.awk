@@ -90,12 +90,50 @@ FNR == 1 {
   global_row = 0; global_done = 0
 }
 
-# `s` with every double-quoted span removed.
+# Whether `s` records a *superseded* claim rather than making one.
+#
+# The exemption below exists for exactly one sentence shape — a repair that
+# keeps what a heading used to say, `This heading said "phase 8.1 in flight"
+# until 2026-09-05` — so this is what the exemption is gated on. Scare quotes
+# around a status word (`TASK-001 is "IN PROGRESS" this week`) are a live claim
+# by an author who chose to quote, and must still be caught.
+function records_a_repair(s,   lower) {
+  lower = tolower(s)
+  return (index(lower, "used to say") > 0 \
+          || index(lower, "said \"") > 0 \
+          || index(lower, "until 20") > 0 \
+          || index(lower, "superseded") > 0 \
+          || index(lower, "previously") > 0 \
+          || index(lower, "formerly") > 0)
+}
+
+# How many `"` characters `s` holds. `s` is a scalar parameter, so `gsub` works
+# on awk's own copy and the caller's string is untouched.
+function count_quotes(s) {
+  return gsub(/"/, "\"", s)
+}
+
+# `s` with every double-quoted span removed — **only** where removing them is
+# the documented exemption.
 #
 # Used to decide whether a line *claims* something, never to decide what it
 # names: a task identifier inside a quotation is still the task the sentence is
 # about, and only the claim words are silenced.
-function strip_quoted(s,   out, open) {
+#
+# Two gates, both failing closed — an ungated version silenced far more than the
+# repair it was written for:
+#
+#   1. The line must record a repair. Without this, any author who quotes a
+#      status word disables the rule for that line.
+#   2. The quotes must pair up. An odd count means one of them is not a
+#      quotation mark at all — `the 24" wallboard` — and pairing it with the
+#      opening quote of a later, real quotation deletes everything between them,
+#      including a claim and the task it names.
+#
+# Failing closed here means keeping the words, so the claim is still counted.
+function strip_quoted(s,   out) {
+  if (!records_a_repair(s)) return s
+  if (count_quotes(s) % 2 != 0) return s
   out = ""
   while (match(s, /"[^"]*"/)) {
     out = out substr(s, 1, RSTART - 1) " "

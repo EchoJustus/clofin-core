@@ -372,6 +372,38 @@
                           " after it stopped being true)*")])]
       (is (zero? exit) (str "a quoted superseded claim must not be read as live — " out)))))
 
+(deftest ac-20-scare-quotes-around-a-status-word-are-still-a-claim
+  (testing "the exemption above is for one sentence shape — a repair that keeps
+            what a heading used to say. An ungated version silenced far more
+            than that: it removed every quoted span from every line before the
+            claim words were looked for, so an author who wrote `TASK-001 is
+            \"IN PROGRESS\" this week` disabled the rule for that line. Nothing
+            asserted that a *quoted* claim still fails, so the guard could be
+            walked past by adding two characters"
+    (doseq [line ["TASK-001 is \"IN PROGRESS\" this week."
+                  "Phase 8.1 is \"in flight\" as TASK-001."]]
+      (let [{:keys [exit out]}
+            (scenario ["docs/ROADMAP.md"
+                       "- Statement ingestion and matching"
+                       (str "- Statement ingestion and matching\n\n" line)])]
+        (is (= 1 exit) (str line " — " out))
+        (is (str/includes? out "TASK-001") out)))))
+
+(deftest ac-20-an-unpaired-quote-does-not-swallow-the-claim-after-it
+  (testing "the pairing was naive left-to-right, so a single stray `\"` — a 24\"
+            wallboard — paired with the opening quote of a later, real
+            quotation and deleted everything between them, claim and task
+            identifier included. An odd count means one of them is not a
+            quotation mark, and the rule keeps the words rather than guessing"
+    (let [{:keys [exit out]}
+          (scenario ["docs/ROADMAP.md"
+                     "- Statement ingestion and matching"
+                     (str "- Statement ingestion and matching\n\n"
+                          "The 24\" wallboard shows it: TASK-001 is currently in"
+                          " hand — see the \"handoff\" note.")])]
+      (is (= 1 exit) out)
+      (is (str/includes? out "TASK-001") out))))
+
 (deftest ac-20-a-task-named-as-live-with-no-brief-is-caught
   (testing "fail closed: prose naming a task nothing describes is a claim
             nothing can check (L-6)"

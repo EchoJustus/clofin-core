@@ -239,6 +239,30 @@
                       {:port port :path path :status (:status res)}))))
   :free)
 
+(defn self-identifies?
+  "Whether the commit in `worktree` can tell a caller which process it is.
+
+  Asked of the **source**, not of the answer, and that is the whole point: a
+  stranger on the port can withhold a field, but it cannot make the worktree's
+  `GET /` handler stop rendering one. So this decides which of the two gates
+  below applies, and the decision cannot be influenced by the thing being
+  gated.
+
+  `instanceId` reached `GET /` in `ref-2` (ADR-0027). Every earlier commit —
+  `ref-1` among them, and it is the documented default of `make capture-trace`
+  — renders service, description, environment, disclaimer and documentation and
+  nothing else. ADR-0022 already settled the general form of this problem in so
+  many words: `ref-1` predates any build stamp, so provenance is established
+  from git rather than by asking the service, and *changing the source state to
+  make it capturable captures a different source state*. Demanding an echo such
+  a commit has no way to produce would not make the capture safer; it would end
+  the capture, with a refusal that says the process answering is not the one
+  this run started when it is exactly that process."
+  [worktree]
+  (let [handler (io/file worktree "src" "clofin" "api" "health.clj")]
+    (and (.exists handler)
+         (str/includes? (slurp handler) "\"instanceId\""))))
+
 (defn- reported-identity
   "What the stack answering on `base-url` says it is.
 
@@ -255,14 +279,29 @@
 (defn assert-same-process!
   "The stack being captured must still be the process this run started.
 
-  Three checks, none of which is the port and none of which is the schema
-  version:
+  The child is asked first, of its `Process` handle rather than of the network:
+  a dead child makes every answer on the port someone else's, whatever it says.
+  Then `GET /` must answer `200`, because a harness that cannot see the service
+  at all has established nothing.
 
-  1. the child is alive — asked of the `Process` handle, not of the network;
-  2. `GET /` echoes **this run's** instance id, which was minted after any
-     process already listening had started, so no such process can produce it;
-  3. `GET /` reports the commit under capture, which is passed to the child
-     explicitly rather than left to an inherited environment variable.
+  What happens next depends on whether the **commit under capture** can
+  identify itself, which `self-identifies?` reads from the worktree:
+
+  - **It can** — every commit from `ref-2` on. `GET /` must echo this run's
+    instance id, minted after any process already listening had started, and
+    the commit under capture, passed to the child explicitly rather than left
+    to an inherited environment variable. This is the gate finding **2C-006**
+    asked for: the previous version compared schema versions, which two
+    unrelated processes share, and accepted a stranger's `200`.
+
+  - **It cannot** — `ref-1` and earlier. There is no answer such a service can
+    give that would bind it, so the harness does not pretend to have asked. The
+    binding it does have is stated rather than implied: the port was proved free
+    before the child was spawned (`assert-port-free!`), the child is alive, and
+    the service is answering there. That is exclusion, not self-report, and it
+    is weaker — a process that took the port in the window between those two
+    moments would pass it. The run says so on stdout rather than leaving the
+    operator to infer which of the two gates ran.
 
   Both echoed values are **self-reported**, and this function does not pretend
   otherwise: it establishes that the process answering is the one spawned from
@@ -270,7 +309,7 @@
   consumer of a stamp actually needs. It is called before each artifact is
   written as well as at start-up, because a child that dies halfway through a
   capture leaves a port a stranger can take."
-  [{:keys [^Process process base-url instance-id source-commit]}]
+  [{:keys [^Process process base-url instance-id source-commit self-identifies?]}]
   (when (and process (not (.isAlive process)))
     (throw (ex-info (str "capture refuses: the stack it started is no longer running, so nothing "
                          "answering on " base-url " can be attributed to it.")
@@ -280,21 +319,28 @@
       (throw (ex-info (str "capture refuses: GET / on " base-url " did not answer 200, so the "
                            "harness cannot establish which process is there.")
                       {:base-url base-url})))
-    (when-not (= instance-id (:instance-id reported))
-      (throw (ex-info (format (str "capture refuses: the stack answering on %s reports instance id "
-                                   "%s, and this run started one with %s. A schema version is a "
-                                   "check, not an identity: the process answering is not the "
-                                   "process this capture started.")
-                              base-url (pr-str (:instance-id reported)) (pr-str instance-id))
-                      {:base-url base-url :reported (:instance-id reported)
-                       :expected instance-id})))
-    (when-not (= source-commit (:source-commit reported))
-      (throw (ex-info (format (str "capture refuses: the stack answering on %s reports source "
-                                   "commit %s, and the commit under capture is %s.")
-                              base-url (pr-str (:source-commit reported)) (pr-str source-commit))
-                      {:base-url base-url :reported (:source-commit reported)
-                       :expected source-commit})))
-    reported))
+    (if-not self-identifies?
+      (do (println (format (str "capture: %s predates instanceId in GET / — identity is by port "
+                                "exclusion (the port was free before this run spawned its child, "
+                                "and that child is alive), not by self-report")
+                           source-commit))
+          (assoc reported :identity-established-by :port-exclusion))
+      (do
+        (when-not (= instance-id (:instance-id reported))
+          (throw (ex-info (format (str "capture refuses: the stack answering on %s reports instance id "
+                                       "%s, and this run started one with %s. A schema version is a "
+                                       "check, not an identity: the process answering is not the "
+                                       "process this capture started.")
+                                  base-url (pr-str (:instance-id reported)) (pr-str instance-id))
+                          {:base-url base-url :reported (:instance-id reported)
+                           :expected instance-id})))
+        (when-not (= source-commit (:source-commit reported))
+          (throw (ex-info (format (str "capture refuses: the stack answering on %s reports source "
+                                       "commit %s, and the commit under capture is %s.")
+                                  base-url (pr-str (:source-commit reported)) (pr-str source-commit))
+                          {:base-url base-url :reported (:source-commit reported)
+                           :expected source-commit})))
+        (assoc reported :identity-established-by :instance-id)))))
 
 (defn start!
   "Start the service from the worktree and wait until it is ready.
@@ -343,7 +389,12 @@
 
           (and res (= 200 (:status res)))
           (let [running {:process p :base-url base-url :readyz (:body res)
-                         :instance-id instance-id :source-commit source-commit}]
+                         :instance-id instance-id :source-commit source-commit
+                         ;; Decided once, from the worktree, and carried — so
+                         ;; every later call gates the same way as this one and
+                         ;; the answer can never come from the thing being
+                         ;; gated.
+                         :self-identifies? (self-identifies? worktree)}]
             (try
               (assert-same-process! running)
               (catch Exception e
