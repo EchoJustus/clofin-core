@@ -90,6 +90,45 @@ FNR == 1 {
   global_row = 0; global_done = 0
 }
 
+# `s` with every double-quoted span removed.
+#
+# Used to decide whether a line *claims* something, never to decide what it
+# names: a task identifier inside a quotation is still the task the sentence is
+# about, and only the claim words are silenced.
+function strip_quoted(s,   out, open) {
+  out = ""
+  while (match(s, /"[^"]*"/)) {
+    out = out substr(s, 1, RSTART - 1) " "
+    s = substr(s, RSTART + RLENGTH)
+  }
+  return out s
+}
+
+# The `TASK-NNN` identifiers named in `s`, into out[1..n]. Returns n.
+#
+# Both spellings the ROADMAP uses: a markdown link,
+# `[TASK-011](briefs/011-TASK-….md)`, and bare bold text, `**TASK-001**`. The
+# second is why this scans for the identifier rather than for a link target —
+# the pickup paragraph that sent a worker to a closed task had no link at all
+# (release-audit finding 2C-008).
+function tasks_in(s, out,   n, id) {
+  n = 0
+  while (match(s, /TASK-[0-9][0-9][0-9]/)) {
+    id = substr(s, RSTART, RLENGTH)
+    s = substr(s, RSTART + RLENGTH)
+    out[++n] = id
+  }
+  return n
+}
+
+# The brief file for `TASK-NNN`, or "" when this tree has none.
+function brief_for(id,   i, prefix) {
+  prefix = "docs/briefs/" substr(id, 6) "-TASK-"
+  for (i = 1; i <= nbrief_files; i++)
+    if (index(brief_files[i], prefix) == 1) return brief_files[i]
+  return ""
+}
+
 # ---------------------------------------------------------------------------
 # COMPLIANCE.md §2 — the control statuses everything else is compared against
 # ---------------------------------------------------------------------------
@@ -228,6 +267,49 @@ kind == "roadmap" && /^\*\*Brief:\*\*/ && current_section_claim > 0 {
   }
 }
 
+
+# -- 5. prose and headings that speak of a task as live ----------------------
+#
+# Rules 2 and 3 compare the global-state table and each section's `**Brief:**`
+# line. They do not read a task named *inside* a heading or a paragraph, and
+# that is the gap the `ref-2` release audit walked through twice: the same
+# document marked phases 8.1-8.4 CLOSED in its table and said "phase 8.1 in
+# flight as TASK-011" in a heading (2B-011), and told the next worker to take
+# "currently **TASK-001**" when all fourteen briefs were CLOSED (2C-008). Both
+# times the guard passed, because the claim was prose.
+#
+# A line speaks of a task as live when it carries a lifecycle status word or
+# one of the phrases this project uses for work in hand. Table rows are skipped:
+# they are rules 2-4's, and reporting them twice would bury the new finding.
+kind == "roadmap" && !/^\|/ {
+  # A **quotation is not a claim.** The repaired heading records what it used
+  # to say — `This heading said "phase 8.1 in flight" until 2026-09-05` — and a
+  # checker that read those words as live would fail the very repair it exists
+  # to enforce, and would push the next author into deleting the history rather
+  # than keeping it. `scripts/check-doc-links.sh` learned the same thing about
+  # fenced blocks when FEEDBACK-REL-ref-2 was ingested; this is that rule for an
+  # inline quotation.
+  unquoted = strip_quoted($0)
+
+  claim = ""
+  if (index(unquoted, "IN PROGRESS") > 0)   claim = "IN PROGRESS"
+  else if (index(unquoted, "READY") > 0)    claim = "READY"
+  else if (index(unquoted, "in flight") > 0 || index(unquoted, "currently") > 0 \
+           || index(unquoted, " next ") > 0)
+    claim = "LIVE"
+
+  if (claim != "") {
+    ntask = tasks_in($0, tasks)
+    for (t = 1; t <= ntask; t++) {
+      nprose++
+      prose_line[nprose]  = FNR
+      prose_task[nprose]  = tasks[t]
+      prose_claim[nprose] = claim
+      prose_text[nprose]  = trim($0)
+    }
+  }
+}
+
 # -- the controls prose ------------------------------------------------------
 
 kind == "roadmap" && /^\*\*Controls/ {
@@ -336,6 +418,41 @@ END {
            "          The brief is authoritative; the ROADMAP is the stale copy (L-15).")
   }
 
+
+  # -- 5. prose claims about a task, against that task's own brief -----------
+  for (i = 1; i <= nprose; i++) {
+    id = prose_task[i]
+    path = brief_for(id)
+    if (path == "") {
+      fail("docs/ROADMAP.md:" prose_line[i] "  speaks of " id " as work in hand and\n" \
+           "          docs/briefs/ holds no brief for it. A task named as live that no\n" \
+           "          brief describes is a claim nothing can check.")
+      continue
+    }
+    if (!(path in brief_status)) {
+      fail("docs/ROADMAP.md:" prose_line[i] "  names " id " (" path "),\n" \
+           "          which has no readable status.")
+      continue
+    }
+    status = brief_status[path]
+    if (prose_claim[i] == "LIVE") {
+      if (status == "CLOSED" || status == "IMPLEMENTED")
+        fail("docs/ROADMAP.md:" prose_line[i] "  speaks of " id " as work in hand:\n" \
+             "            " prose_text[i] "\n" \
+             "          " path ":" brief_status_line[path] "  its brief says " status "\n" \
+             "          A reader who enters this document here is told a finished task is\n" \
+             "          live, and may repeat it. The status table on the same page says\n" \
+             "          otherwise, which is what makes it a contradiction rather than a\n" \
+             "          stale note (L-16: a restatement is a copy, same file included).")
+    }
+    else if (status != prose_claim[i]) {
+      fail("docs/ROADMAP.md:" prose_line[i] "  says " id " is " prose_claim[i] ":\n" \
+           "            " prose_text[i] "\n" \
+           "          " path ":" brief_status_line[path] "  the brief itself says " status "\n" \
+           "          The brief is authoritative; the ROADMAP is the stale copy (L-15).")
+    }
+  }
+
   # -- 4. the brief sets, in every direction ---------------------------------
   for (i = 1; i <= nroadmap_briefs; i++) {
     path = roadmap_briefs[i]
@@ -362,8 +479,8 @@ END {
 
   # -- output ----------------------------------------------------------------
   if (nfail == 0) {
-    printf "Document consistency OK (%d control(s), %d increment status claim(s), %d brief(s)).\n",
-           ncontrols, nincrement, nbacklog_briefs
+    printf "Document consistency OK (%d control(s), %d increment status claim(s), %d prose task claim(s), %d brief(s)).\n",
+           ncontrols, nincrement, nprose, nbacklog_briefs
     exit 0
   }
   for (i = 1; i <= nfail; i++) printf "DISAGREE  %s\n\n", failures[i]
