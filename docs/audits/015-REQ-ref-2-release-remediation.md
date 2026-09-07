@@ -13,7 +13,7 @@
 | **Migrations** | **None.** Every item was code, tests, contract or prose against the schema at `0013`. The brief's migration pre-flight says *No migration* and nothing here needed one. Migrations replayed `0001`→`0013` from an empty schema after the last commit: 13 applied, 0 pending |
 | **Controls touched** | **C-05** and **C-13** in `docs/COMPLIANCE.md`, plus one new §4 row and one §4 row rewritten (A-011: this batch made its "does not invoke a handler" sentence false) — **statements narrowed or made true, no control weakened**. C-05 **strengthened**: its service list is now compared with `service-namespaces` in both directions, and it carries the `events-for-payment` → `events-for-subject-and-its-approvals` rename from 2C-012. C-13 **strengthened** twice: its evidence sentence states the bound it always had, and its posting-path sentence became true and is now enforced by a producer census rather than described. C-06's prose copies outside COMPLIANCE are narrowed (§6b); its own section already narrowed and is unchanged. The capture harness (ADR-0022) is strengthened on both of its findings |
 | **Status** | Implemented, for the set this branch owns. Both blockers closed. Of the 20 should-fix, the register dispositions **14 as actioned in the subject** — those, the consider, and C-R10a are closed here; **5 were actioned on `meta`** (2B-001, 2B-002, 2B-006, 2B-011, 2C-008) and are not this branch's; **1 is deferred with a target** (2B-008 — the published `ref-1` release body is not rewritten, §7). "All 20 actioned" is what an earlier draft said, and it was a universal quantifier over a set the reader would take to be this branch when it was neither this branch's set nor all actioned (**L-14**, and the register's own vocabulary distinguishes *actioned* from *deferred*). **Four objections in §9**, none resolved unilaterally |
-| **Verification** | `make verify` **532 tests / 3,292 assertions**, 0 failures, 0 errors. `make test-it` **960 tests / 7,325 assertions**, 0 failures, 0 errors. The adversarial review §8 held this PR for has **run, reported, and been acted on** — thirty-eight defects in this branch's own work, thirty-four fixed and four recorded (§8, **O-5**, **O-6**). All five dimensions reported and every finding is acted on; two second-order verification verdicts are outstanding, both on findings already fixed, and §8 says so rather than rounding it off (**L-9**) |
+| **Verification** | `make verify` **532 tests / 3,292 assertions**, 0 failures, 0 errors. `make test-it` **960 tests / 7,331 assertions**, 0 failures, 0 errors. The adversarial review §8 held this PR for has **run, reported, and been acted on** — thirty-eight defects in this branch's own work, thirty-four fixed and four recorded (§8, **O-5**, **O-6**). All five dimensions reported, every finding acted on, and the second-order pass finished with **nothing confirmed outstanding** — 43 agents, 38 findings, 38 verdicts. Nothing is in flight (**L-9**) |
 
 ---
 
@@ -513,20 +513,23 @@ index, which answers `500` on a collision (`api/settlement_api_test.clj`,
 authored were changed to `random-uuid`; the other six predate it and widening
 the PR to them is not mine to decide.
 
-**The hold is all but discharged, and the remainder is stated rather than
-rounded off.** All five dimensions have reported and every finding is acted on
-— fixed, or recorded above with a reason. What is still running is the
-second-order pass: each finding is put to an independent agent that tries to
-refute it, and two of those verdicts have not landed. Eighteen have, and every
-one of them refuted the finding *as already fixed by the commit it prompted*,
-which is the pass agreeing rather than disagreeing. Both outstanding verdicts
-are on findings already fixed here, so neither can produce work that is not
-already done — but "already fixed" is a claim about my own commits, and **L-9**
-is precisely the lesson that a declared verification is not finished because its
-author expects the answer. I will report when they land. **L-9** is why this section exists at all: PR #6 was merged ten
-minutes before its author's declared review surfaced a real false-contract
-defect, whose fix then could not land. That review would have found what this one
-found; the difference is only that this one finished first.
+**The hold is discharged.** All five dimensions reported, every finding is
+acted on — fixed, or recorded above with a reason — and the second-order pass
+has finished: each of the thirty-eight findings was put to an independent agent
+whose job was to refute it, and **none survived as an outstanding defect**.
+Every verdict came back refuting the finding *as already fixed by the commit it
+prompted*, which is the pass agreeing rather than disagreeing. Forty-three
+agents, thirty-eight findings, thirty-eight verdicts, nothing confirmed
+outstanding.
+
+I have no verification in flight and no pending fix I expect to push.
+
+**L-9** is why this section exists at all: PR #6 was merged ten minutes before
+its author's declared review surfaced a real false-contract defect, whose fix
+then could not land. That review would have found what this one found; the
+difference is only that this one finished first. It found thirty-eight things,
+three of them serious, in work I had already reported as complete — which is
+the argument for the lesson, not against it.
 
 **One qualification on how the suites were run, stated because the numbers are
 the claim.** This environment has no Docker daemon, so `make test-it`'s
