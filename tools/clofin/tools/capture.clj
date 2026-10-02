@@ -191,8 +191,9 @@
   established that the process answering is the one this run started —
   `\"instance-id\"` or `\"port-exclusion\"`, the keyword's name. A `running`
   map that carries no binding produces a stamp without one, and every writer
-  then refuses it through the one gate (`bundle/assert-provenance!`) rather
-  than this function guessing which binding it might have been."
+  then refuses it through the one gate they all call first
+  (`bundle/assert-provenance!`) rather than this function guessing which
+  binding it might have been."
   [base-stamp applied running]
   (assoc base-stamp
          :schema-version-applied applied

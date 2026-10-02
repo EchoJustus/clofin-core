@@ -395,7 +395,8 @@
    ;; TASK-015's ruling on objection O-5, carried to TASK-016: the run used to
    ;; *print* which of the two bindings `clofin.tools.capture.stack` established
    ;; and nothing on disk recorded it, so a reader of a fixture could not tell.
-   ;; What each value does and does not establish is ADR-0027 §3a's to say.
+   ;; What the two modes are is ADR-0027 §3a's to say, and the limit of port
+   ;; exclusion `clofin.tools.capture.stack/assert-same-process!`'s.
    [[:identity-binding]              #{"instance-id" "port-exclusion"}
     "how the capture established that the answering process was the one it started"]])
 

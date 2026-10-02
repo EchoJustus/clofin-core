@@ -116,3 +116,31 @@
                                                      :to   "2027-01-02T00:00:00Z"}]]]
       (with-redefs [store/now (fn [_] (java.time.Instant/parse now))]
         (is (= expected (period ::no-connection)) now)))))
+
+;; ---------------------------------------------------------------------------
+;; The script's read-only confirmations
+;; ---------------------------------------------------------------------------
+
+(deftest a-confirmation-the-database-contradicts-stops-the-capture
+  (let [confirm! @#'scenarios/confirm!]
+    (testing "the script's \"if they differ, stop and raise a defect\": a count that
+              is not the one the step expects stops the capture, naming both"
+      (with-redefs [store/query (fn [& _] [{"receipts" 1}])]
+        (is (thrown-with-msg?
+             clojure.lang.ExceptionInfo
+             #"UAT-007 step 5 confirms that neither refused document left a receipt: it expects .*0.*, and the database holds .*1"
+             (confirm! ::no-connection
+                       {:step "5" :what "that neither refused document left a receipt"
+                        :sql "select …" :params ["org"] :expected [{"receipts" 0}]})))))
+    (testing "and the count it expects passes, returning what was read"
+      (with-redefs [store/query (fn [& _] [{"receipts" 0}])]
+        (is (= [{"receipts" 0}]
+               (confirm! ::no-connection
+                         {:step "5" :what "…" :sql "select …" :params ["org"]
+                          :expected [{"receipts" 0}]})))))
+    (testing "the query is scoped: it receives the organisation it is given"
+      (let [seen (atom nil)]
+        (with-redefs [store/query (fn [_ sql & params] (reset! seen [sql params]) [])]
+          (confirm! ::no-connection {:step "x" :what "…" :sql "select … ?::uuid"
+                                     :params ["org-1"] :expected []})
+          (is (= ["select … ?::uuid" ["org-1"]] @seen)))))))

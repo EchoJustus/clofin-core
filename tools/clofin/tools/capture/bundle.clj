@@ -387,8 +387,13 @@
   "Validate, then write. There is no other way to produce a bundle file.
 
   Returns `{:path :sha256}`. Throws — leaving nothing behind — when the bundle
-  is not fully stamped."
+  is not fully stamped.
+
+  The stamp is refused through `assert-provenance!` first, as every other
+  writer's is, so that \"the one gate every writer calls first\" (ADR-0022) is
+  a sentence about the code; the bundle-level problems follow."
   [{:keys [path bundle service-info]}]
+  (assert-provenance! (get bundle "provenance") "bundle" path)
   (let [found (problems bundle service-info)]
     (when (seq found)
       (throw (ex-info (str "capture refuses to write " path

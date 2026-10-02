@@ -215,24 +215,33 @@ replace with an enforcement point.
 | `"instance-id"` | the captured commit's source renders `instanceId` in `GET /`, and the answering process echoed this run's instance id and the commit under capture |
 | `"port-exclusion"` | the captured commit's source does not render it (`ref-1` and earlier), and the binding is the port proved free before the child was spawned, with the child alive |
 
-What each value **establishes, and what it does not**, is
+What the two modes are, and what an echoed instance id **establishes and does
+not**, is
 [ADR-0027 §3a](0027-browser-clients-cors-allowlist-and-instance-self-identification.md)'s
 to say and is not restated here: a second account of a control's reach is the
-copy that drifts. This amendment records only that the harness now writes down
-which of §3a's two modes a capture was made under.
+copy that drifts. §3a names port exclusion as the second mode without stating
+its limit; that is stated in the docstring of
+`clofin.tools.capture.stack/assert-same-process!`, which this amendment cites
+rather than copies (016-REQ records the gap for a ruling). This amendment
+records only that the harness now writes down which mode a capture was made
+under.
 
 **Where it comes from.** `clofin.tools.capture.stack/start!` returns the
 binding `assert-same-process!` established at start-up (which gate applies is
 decided once, from the worktree, so it cannot change during a run), and
 `clofin.tools.capture/run-stamp` completes the stamp with it beside the schema
 version the stack reported. On the wire it sits after `schemaVersionApplied`
-and before `harness`, because key order is part of the contract — the block is
-rendered in that order.
+and before `harness`, the order TASK-016 specifies: beside the schema version,
+the other fact only the running stack supplies. The order is fixed and
+asserted; consumers read the field by name.
 
 **It is enforced where every other field is.** The field is a row of
 `clofin.tools.capture.provenance/required`, so the one gate every writer calls
 first (`bundle/assert-provenance!`) refuses a stamp whose `identityBinding` is
-absent or anything but those two strings, and leaves no file. A run whose
+absent or anything but those two strings, and leaves no file. *Every writer*
+became true of `write!` in the same change: it reached the same definition of a
+complete stamp by another route, and now calls the gate first like the other
+three — asserted per writer by `every-writer-calls-the-one-gate-first`. A run whose
 `start!` returned no binding produces a stamp without one, and is refused
 there, rather than a value being guessed.
 

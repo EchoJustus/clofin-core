@@ -551,7 +551,8 @@
           (.delete (io/file path)))))))
 
 (deftest ac-1-the-binding-sits-between-the-schema-version-and-the-harness
-  (testing "key order is part of the contract: the block is rendered in it"
+  (testing "the order is fixed, as the brief specifies: the binding beside the
+            schema version, which is the other fact only the running stack supplies"
     (let [wire (bundle/provenance->wire
                 (assoc (stamp (fake-git (answers)))
                        :schema-version-applied "0013"
@@ -566,6 +567,26 @@
       (testing "and it survives the round trip every writer validates through"
         (is (= "instance-id" (:identity-binding (bundle/wire->internal wire))))
         (is (empty? (bundle/stamp-problems wire)))))))
+
+(deftest every-writer-calls-the-one-gate-first
+  (testing "ADR-0022 says every writer refuses through `assert-provenance!` before
+            it opens a file. Asserted per writer — `write!` reached the same
+            definition by another route until TASK-016, and a sentence naming
+            one gate for four writers is only true if each calls it (L-17)"
+    (let [complete (assoc (stamp (fake-git (answers)))
+                          :schema-version-applied "0011"
+                          :identity-binding "port-exclusion")]
+      (doseq [[name* write!] writers]
+        (let [path (temp-path "artifact.json")
+              gate (atom 0)]
+          (with-redefs [bundle/assert-provenance!
+                        (fn [_ _ _] (swap! gate inc)
+                          (throw (ex-info "the gate" {:sentinel true})))]
+            (is (thrown-with-msg? clojure.lang.ExceptionInfo #"the gate"
+                                  (write! complete path))
+                (str name* " opened its file without asking the gate")))
+          (is (= 1 @gate) name*)
+          (is (not (.exists (io/file path))) name*))))))
 
 (deftest ac-1-the-run-stamp-carries-what-start-established
   (let [base (stamp (fake-git (answers)))]

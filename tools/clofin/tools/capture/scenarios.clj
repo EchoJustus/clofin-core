@@ -137,6 +137,12 @@
 
 (defn- body [step k] (get-in step [:response :body k]))
 
+(defn- closing
+  "The captured closing balance, in minor units, of the recorded step `id`."
+  [rec id]
+  (some #(when (= id (:id %)) (get-in % [:response :body "closingBalance" "minorUnits"]))
+        (rec/steps rec)))
+
 ;; ---------------------------------------------------------------------------
 ;; Scenario 1 — segregation of duties, attempted and refused
 ;; ---------------------------------------------------------------------------
@@ -401,9 +407,9 @@
   [{{:keys [maker checker ctrl]} :people :as ctx} org-id]
   (seed! ctx {:id "seed-actors"
               :title "Seed a maker, a checker and a controller"
-              :narrative (str "No role holds both `payment/approve` and `settlement/execute`: "
-                              "the actor who agreed a payment is never the actor who pushes it "
-                              "out of the door.")
+              :narrative (str "Three actors, one role each: the maker holds `operator`, the "
+                              "checker `approver` with an SGD limit, and the controller "
+                              "`controller`; and one SGD approval band.")
               :statement (format
                           (str "insert into actor (id, organisation_id, display_name) values "
                                "('%s','%s','Maker'),('%s','%s','Checker'),('%s','%s','Controller'); "
@@ -928,6 +934,51 @@
   (when-not ok?
     (throw (ex-info (str "capture refuses: " message) data))))
 
+(defn- confirm!
+  "One of UAT-007's read-only SQL confirmations, made and asserted rather than
+  recorded.
+
+  The script tells its reader to check the database after several steps —
+  counts unchanged, no receipt written, the status figures equal to the rows —
+  and in step 14 says *if they differ, stop and raise a defect*. A replay that
+  skipped them would narrate a fact nobody checked. So each runs here, scoped
+  to this scenario's organisation (the script's queries are database-wide, and
+  the capture database holds every scenario's), and a disagreement stops the
+  capture, as `verify-against-journal!` stops it for the sand table. They are
+  not steps on the tape: the tables they read are not in the bundle, and a row
+  count printed beside a query would read as a statement the page cannot back.
+
+  Returns the value read, so a later confirmation can compare with it."
+  [conn {:keys [step what sql params expected]}]
+  (let [actual (vec (apply store/query conn sql params))]
+    (expect! (= expected actual)
+             (format "UAT-007 step %s confirms %s: it expects %s, and the database holds %s."
+                     step what (pr-str expected) (pr-str actual))
+             {:step step :sql sql :expected expected :actual actual})
+    actual))
+
+(defn- org-counts
+  "The rows a statement delivered twice must not add to — matches, breaks and
+  journal entries, for one organisation."
+  [conn org-id]
+  (first (store/query conn
+                      (str "select (select count(*) from reconciliation_match m"
+                           "          join reconciliation_statement s on s.id = m.statement_id"
+                           "         where s.organisation_id = ?::uuid) as matches,"
+                           "       (select count(*) from reconciliation_break"
+                           "         where organisation_id = ?::uuid) as breaks,"
+                           "       (select count(*) from journal_entry"
+                           "         where organisation_id = ?::uuid) as entries")
+                      org-id org-id org-id)))
+
+(def ^:private band-rows
+  "What UAT-007's band check expects: exactly one row, `100000 | 1`."
+  [{"from_minor" 100000 "approvals_required" 1}])
+
+(def ^:private band-check-sql
+  (str "select from_minor, approvals_required from approval_threshold"
+       " where organisation_id = ?::uuid and currency = 'SGD' order by from_minor"))
+
 (defn- statement-period
   "UAT-007 step 1's period: yesterday 00:00 to tomorrow 00:00, UTC, from the
   database's clock — `date -u -d 'yesterday 00:00'` and `'tomorrow 00:00'` in
@@ -976,9 +1027,14 @@
   `answer-settled!`, `answer-returned!`), in an organisation of its own. Then
   UAT-007's fifteen steps, every request with the status the script states.
 
-  Of UAT-006's steps 1–7 the scenario makes the calls that produce that state,
-  not the refusals among them (steps 2, 4, 5, 7b and 7c): those change nothing
-  this script reconciles, and the settlement scenario shows them.
+  UAT-007 accepts \"UAT-006 completed, or its steps 1–7 repeated\", and only
+  the second works: UAT-006's step 9 answers for the unanswered payment, after
+  which step 1 is no longer one line short and step 2's clearing balance is
+  zero. Of steps 1–7 the scenario makes the calls that produce that state; the
+  refusals, the duplicate and the draft among them (steps 2, 4, 5, 7b and 7c,
+  with 7c(ii))
+  change nothing this script reconciles, and the settlement scenario shows
+  them.
 
   Where the script names something it does not define, the replay fills it
   from the run, and every filling is listed here:
@@ -999,18 +1055,30 @@
   - Step 10's \"restore the bands\", which gives no statement — the script's
     own *Before you start* SQL, run again.
 
+  And where the script says something the system does not do, the replay
+  shows what it does, and the narrative says which:
+
+  - *Before you start* says \"two accounts beyond settlement's three\" and
+    creates one, `2200-UNAPPLIED`.
+  - Steps 9 and 12 say \"above\" the SGD 1,000.00 band and send exactly SGD
+    1,000.00, which needs approval because the bound is inclusive.
+  - Step 8's heading promises an attempt \"to skip a step\" that its body does
+    not contain; the replay makes the three calls the body states and no
+    fourth. The lifecycle permits `open` → `resolved`, and steps 10 and 12
+    take breaks there without assignment.
+
   The statuses the script states are the ones expected; where a call states
   none, the success status the step describes is expected. The script's
-  read-only SQL confirmations (steps 3, 4, 5, 12 and 14, and the band check)
-  are not replayed: the bundle carries the journal and the trail they count.
-  016-REQ records each substitution that changes what a step can show as an
-  objection."
+  read-only SQL confirmations — the band check, and steps 3, 4, 5, 12 and 14 —
+  run through `confirm!`: asserted, scoped to this organisation, not recorded.
+  016-REQ records each of the above as an objection."
   [{:keys [rec conn] {:keys [maker checker ctrl auditor]} :people :as ctx}]
   (rec/note! rec
              {:id "scenario-note"
               :title "What you are about to watch"
-              :narrative (str "A batch is settled, partly returned and partly unanswered, as in the "
-                              "settlement scenario. Then the simulated scheme's statement for it is "
+              :narrative (str "A batch of three payments is released; one settles, one is "
+                              "returned and one is never answered — the settlement scenario up to "
+                              "its timeout. Then the simulated scheme's statement for it is "
                               "ingested, delivered again, contradicted, and requested three more "
                               "times with a deliberate fault. The breaks those faults open are "
                               "queued, assigned and corrected, and the sand table follows the "
@@ -1025,9 +1093,10 @@
         accounts (settlement-accounts! ctx)
         unapplied (rec/request! rec {:id "account-unapplied"
                                      :title "Open 2200-UNAPPLIED"
-                                     :narrative (str "The one account UAT-007 needs beyond "
-                                                     "settlement's three: where an adjustment parks "
-                                                     "a difference.")
+                                     :narrative (str "The account UAT-007's *Before you start* "
+                                                     "creates — it says \"two accounts beyond "
+                                                     "settlement's three\" and creates this one. "
+                                                     "An adjustment's second line posts here.")
                                      :method "POST" :path "/accounts"
                                      :headers {"x-actor-id" ctrl}
                                      :body (array-map "organisationId" org-id
@@ -1067,8 +1136,9 @@
                            :title "Replace the organisation's SGD approval bands"
                            :narrative (str "UAT-007's own SQL, which deletes the band the "
                                            "settlement actors were seeded with and inserts one at "
-                                           "SGD 1,000.00 needing one approval. Below it, the "
-                                           "proposer alone may post.")})
+                                           "SGD 1,000.00 needing one approval.")})
+        _ (confirm! conn {:step "*Before you start*" :what "exactly one SGD band, 100000 | 1"
+                          :sql band-check-sql :params [org-id] :expected band-rows})
         {:keys [from to]} (statement-period conn)
         statement-query (fn [perturbation]
                           (cond-> (array-map "organisationId" org-id "scheme" "SIM-RTGS"
@@ -1085,6 +1155,12 @@
     (snap! "before-ingestion" "Before any statement is ingested"
            (str "After the settlement: the unanswered payment's SGD 1,250.00 is still in "
                 "1300-IN-TRANSIT, and nothing has reached 2200-UNAPPLIED."))
+    (expect! (= [125000 0] [(closing rec "balance-before-ingestion-1300-IN-TRANSIT")
+                            (closing rec "balance-before-ingestion-2200-UNAPPLIED")])
+             (str "the before-ingestion row's narrative names SGD 1,250.00 in 1300-IN-TRANSIT "
+                  "and nothing in 2200-UNAPPLIED, and the captured statements say otherwise.")
+             {:in-transit (closing rec "balance-before-ingestion-1300-IN-TRANSIT")
+              :unapplied (closing rec "balance-before-ingestion-2200-UNAPPLIED")})
 
     ;; -- Step 1 ------------------------------------------------------------
     (let [s1 (rec/request! rec {:id "s01-statement"
@@ -1128,13 +1204,26 @@
                          :query (array-map "organisationId" org-id "from" from "to" to)
                          :headers {"x-actor-id" ctrl}
                          :expect-status 200})
+      (expect! (= 125000 (closing rec "s02-in-transit"))
+               (str "UAT-007 step 2 says the clearing account's closing balance is the "
+                    "unanswered payment's value, SGD 1,250.00; the captured statement says "
+                    (pr-str (closing rec "s02-in-transit")) " minor units.")
+               {:closing (closing rec "s02-in-transit")})
 
       ;; -- Step 3 ----------------------------------------------------------
-      (ingest! {:id "s03-delivered-again"
-                :title "Step 3 · Deliver the same statement again"
-                :narrative (str "`replayed` is true and the `id` is the first delivery's receipt. "
-                                "Nothing is matched or opened a second time.")
-                :document statement :expect-status 200})
+      (let [before (org-counts conn org-id)]
+        (ingest! {:id "s03-delivered-again"
+                  :title "Step 3 · Deliver the same statement again"
+                  :narrative (str "`replayed` is true; the `id`, the matches and their `matchedAt` "
+                                  "are the first delivery's.")
+                  :document statement :expect-status 200})
+        (let [after (org-counts conn org-id)]
+          (expect! (= before after)
+                   (format (str "UAT-007 step 3 confirms that a second delivery changes no count; "
+                                "this organisation's matches, breaks and journal entries were %s "
+                                "before it and %s after.")
+                           (pr-str before) (pr-str after))
+                   {:before before :after after})))
 
       ;; -- Step 4 ----------------------------------------------------------
       (ingest! {:id "s04-different-document"
@@ -1144,6 +1233,13 @@
                                 "`replay-key-conflict`, with `replayed` false.")
                 :document (update-in statement ["lines" 0 "amount" "minorUnits"] inc)
                 :expect-status 409})
+      (confirm! conn {:step "4" :what "one receipt for the reference, not two"
+                      :sql (str "select statement_reference, count(*) as receipts"
+                                "  from reconciliation_statement where organisation_id = ?::uuid"
+                                " group by statement_reference")
+                      :params [org-id]
+                      :expected [{"statement_reference" (get statement "statementReference")
+                                  "receipts" 1}]})
 
       ;; -- Step 5 ----------------------------------------------------------
       (rec/request! rec {:id "s05-real-format"
@@ -1169,6 +1265,11 @@
                                           "statementReference" "Y"
                                           "periodStart" from "periodEnd" to "lines" [])
                          :expect-status 400})
+      (confirm! conn {:step "5" :what "that neither refused document left a receipt"
+                      :sql (str "select count(*) as receipts from reconciliation_statement"
+                                " where organisation_id = ?::uuid"
+                                "   and statement_reference in ('X', 'Y')")
+                      :params [org-id] :expected [{"receipts" 0}]})
 
       ;; -- Step 6 ----------------------------------------------------------
       (let [perturbed
@@ -1364,6 +1465,8 @@
                                              "start* SQL again, the band steps 9 and 12 depend "
                                              "on. The delete finds nothing: the step above "
                                              "removed every band.")})
+            (confirm! conn {:step "10" :what "the band restored: exactly one, 100000 | 1"
+                            :sql band-check-sql :params [org-id] :expected band-rows})
 
             ;; -- Step 11 -----------------------------------------------------
             (assign! {:id "s11-assign-resolved"
@@ -1394,8 +1497,9 @@
         ;; -- Step 12 -------------------------------------------------------
         (let [proposed (adjust! {:id "s12-proposed"
                                  :title "Step 12 · Propose a correction the checker will refuse"
-                                 :narrative (str "Against the `missing-line` break, at the band: "
-                                                 "`proposed`, with `post` and `reject` permitted.")
+                                 :narrative (str "Against the `missing-line` break, SGD 1,000.00 — "
+                                                 "at the band (UAT-007 says \"above\"): `proposed`, "
+                                                 "with `post` and `reject` permitted.")
                                  :break-id brk3 :minor-units 100000
                                  :text "Provisional: the scheme's figure looks wrong"
                                  :expect-status 201})
@@ -1411,16 +1515,27 @@
                     :narrative "Refused, naming `reason`."
                     :adjustment adj3 :actor checker :decision {"decision" "rejected"}
                     :expect-status 422})
-          (decide! {:id "s12-rejected"
-                    :title "Step 12 · The checker refuses it"
-                    :narrative (str "`rejected` true, `posted` false; the adjustment is `rejected` "
-                                    "with no `entryId` and no permitted transitions; the approval "
-                                    "carries the decision and the reason; the break is where it "
-                                    "was.")
-                    :adjustment adj3 :actor checker
-                    :decision {"decision" "rejected"
-                               "reason" "The statement is right; our posting is the one to investigate"}
-                    :expect-status 201})
+          (let [adjustment-entries
+                (fn [] (confirm! conn {:step "12" :what "the adjustment entries in the journal"
+                                       :sql (str "select count(*) as entries from journal_entry"
+                                                 " where organisation_id = ?::uuid"
+                                                 "   and reference_type = 'reconciliation-adjustment'")
+                                       :params [org-id]
+                                       ;; Steps 9 and 10 posted one each.
+                                       :expected [{"entries" 2}]}))]
+            (adjustment-entries)
+            (decide! {:id "s12-rejected"
+                      :title "Step 12 · The checker refuses it"
+                      :narrative (str "`rejected` true, `posted` false; the adjustment is `rejected` "
+                                      "with no `entryId` and no permitted transitions; the approval "
+                                      "carries the decision and the reason; the break is where it "
+                                      "was.")
+                      :adjustment adj3 :actor checker
+                      :decision {"decision" "rejected"
+                                 "reason" "The statement is right; our posting is the one to investigate"}
+                      :expect-status 201})
+            ;; "the entry count is unchanged by the refusal"
+            (adjustment-entries))
           (adjust! {:id "s12-second-proposal"
                     :title "Step 12 · A different correction, against the same break"
                     :narrative "SGD 999.99, below the band: it posts, and the break is `resolved`."
@@ -1520,7 +1635,7 @@
                                :headers {"x-actor-id" auditor}
                                :expect-status 200})))
         (snap! "s13" "After step 13 — the retry is raised"
-               "A retry in draft posts nothing.")
+               "Unchanged from step 12: raising the retry posted no entry.")
 
         ;; -- Step 14 -------------------------------------------------------
         (rec/request! rec {:id "s14-accounts"
@@ -1529,17 +1644,38 @@
                            :method "GET" :path "/accounts" :query org-only
                            :headers {"x-actor-id" ctrl}
                            :expect-status 200})
-        (rec/request! rec {:id "s14-status"
-                           :title "Step 14 · Reconciliation status for the account and period"
-                           :narrative (str "Read as the auditor: statements received, lines "
-                                           "matched and unmatched, matches by rule — every rule "
-                                           "listed — breaks by state, and the oldest unresolved "
-                                           "age.")
-                           :method "GET" :path "/reconciliation-status"
-                           :query (array-map "organisationId" org-id "accountId" transit-id
-                                             "from" from "to" to)
-                           :headers {"x-actor-id" auditor}
-                           :expect-status 200})
+        (let [status (rec/request! rec {:id "s14-status"
+                                        :title "Step 14 · Reconciliation status for the account and period"
+                                        :narrative (str "Read as the auditor: statements received, "
+                                                        "lines matched and unmatched, matches by "
+                                                        "rule — every rule listed — breaks by "
+                                                        "state, and the oldest unresolved age.")
+                                        :method "GET" :path "/reconciliation-status"
+                                        :query (array-map "organisationId" org-id
+                                                          "accountId" transit-id
+                                                          "from" from "to" to)
+                                        :headers {"x-actor-id" auditor}
+                                        :expect-status 200})
+              ;; The API zero-fills every state and rule; the rows hold only
+              ;; what exists. Compared on what exists.
+              nonzero (fn [m] (into {} (remove (comp zero? val)) m))]
+          ;; "Check the figures against the breaks themselves … If they differ,
+          ;; stop and raise a defect."
+          (confirm! conn {:step "14" :what "breaks by state, against the rows"
+                          :sql (str "select state, count(*) as breaks from reconciliation_break"
+                                    " where organisation_id = ?::uuid group by state order by state")
+                          :params [org-id]
+                          :expected (vec (for [[k v] (sort (nonzero (body status "breaksByState")))]
+                                           {"state" k "breaks" v}))})
+          (confirm! conn {:step "14" :what "matches by rule, against the rows"
+                          :sql (str "select m.rule_id, count(*) as matches"
+                                    "  from reconciliation_match m"
+                                    "  join reconciliation_statement s on s.id = m.statement_id"
+                                    " where s.organisation_id = ?::uuid"
+                                    " group by m.rule_id order by m.rule_id")
+                          :params [org-id]
+                          :expected (vec (for [[k v] (sort (nonzero (body status "matchesByRule")))]
+                                           {"rule_id" k "matches" v}))}))
 
         ;; -- Step 15 -------------------------------------------------------
         (rec/request! rec {:id "s15-trail"
@@ -1569,9 +1705,9 @@
                     :statement "delete from reconciliation_statement_line;"})
         (seed! ctx {:id "s15-truncate-refused"
                     :title "Step 15 · Empty the statements table"
-                    :narrative (str "UAT-007's statement, as written. The answer below comes from "
-                                    "the foreign key that references the table, which the database "
-                                    "checks before the table's own trigger.")
+                    :narrative (str "UAT-007's statement, as written. The database's own answer is "
+                                    "below; it names the foreign key from "
+                                    "`reconciliation_statement_line`.")
                     :expect-refusal true
                     :expect-error #"cannot truncate a table referenced in a foreign key constraint"
                     :statement "truncate reconciliation_statement;"})
@@ -1620,10 +1756,11 @@
     :summary (str "A simulated scheme's statement for a batch — one payment settled, one "
                   "returned, one never answered — is ingested, delivered again, contradicted "
                   "under the same reference, and then asked for three more times with a "
-                  "deliberate fault. The breaks those faults open are queued, "
-                  "assigned and corrected by adjustments that a second actor approves or "
-                  "refuses, and a returned payment is retried. The sand table follows the "
-                  "settlement accounts and 2200-UNAPPLIED as each correction posts.")
+                  "deliberate fault. The breaks those faults open are queued, assigned and "
+                  "corrected — one adjustment approved by a second actor, one refused by a "
+                  "second actor, two below the band posted by their proposer — and a returned "
+                  "payment is retried. The sand table follows the settlement accounts and "
+                  "2200-UNAPPLIED as each correction posts.")
     :source "docs/uat/UAT-007-reconciliation-and-breaks.md"
     :people (people "33333333")
     :run reconciliation-breaks}])
