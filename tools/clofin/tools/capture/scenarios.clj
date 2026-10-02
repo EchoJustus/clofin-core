@@ -980,11 +980,31 @@
   not the refusals among them (steps 2, 4, 5, 7b and 7c): those change nothing
   this script reconciles, and the settlement scenario shows them.
 
-  Three of the script's statements are replayed with a substitution, and say
-  so in their narrative: step 11's raw insert names a break, an entry and an
-  actor by placeholder; step 12's last call names `$CHECKER2`, an actor the
-  script never defines; step 10 says to restore the bands without saying how.
-  016-REQ records each as an objection."
+  Where the script names something it does not define, the replay fills it
+  from the run, and every filling is listed here:
+
+  - `$CONTROLLER`, `$CHECKER`, `$AUDITOR`, `$MAKER` — the scenario's people;
+    the maker is UAT-006's, whom step 13 uses and the inherits table omits.
+  - `$FUNDS` — this organisation's `1100-CLIENT-FUNDS`; `$VALUEDATE` — the
+    value date UAT-006 uses; `$SETTLED` — UAT-006's `$SETTLES`.
+  - `$BREAK`, `$BREAK2`, `$BREAK3` — the breaks the `unknown-line`,
+    `amount-mismatch` and `missing-line` runs open; `$BREAKR` — the
+    `missing-line` break, which is about the returned payment in a run that
+    passes the premise check below.
+  - `<entryId>` (step 9) and `<the retry>` (step 13) — the ids those steps
+    returned; step 11's placeholders — this organisation, `$BREAK`, the entry
+    step 9 posted, the controller.
+  - `$CHECKER2` (step 12), which no script defines — the checker; the step's
+    narrative says so.
+  - Step 10's \"restore the bands\", which gives no statement — the script's
+    own *Before you start* SQL, run again.
+
+  The statuses the script states are the ones expected; where a call states
+  none, the success status the step describes is expected. The script's
+  read-only SQL confirmations (steps 3, 4, 5, 12 and 14, and the band check)
+  are not replayed: the bundle carries the journal and the trail they count.
+  016-REQ records each substitution that changes what a step can show as an
+  objection."
   [{:keys [rec conn] {:keys [maker checker ctrl auditor]} :people :as ctx}]
   (rec/note! rec
              {:id "scenario-note"
