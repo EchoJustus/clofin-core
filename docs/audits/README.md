@@ -12,6 +12,37 @@
 Append-only. A later change appends a new dated block; an existing block is
 never edited — the record of what was decided, and when, is the point.
 
+**2026-10-02 — `ref-2` is tagged, annotated, and verified; the pre-release
+is pending.** The operator created the tag from the committed mirror and
+pushed it on 2026-10-01 (20:24 -0400). Verified by Master Control against the
+remote, not the notification:
+
+```
+$ git ls-remote --tags origin
+5c7b4badced5e807e1022fce44cbcad38c6d2095	refs/tags/ref-1
+420722fa9d43c930ba38d9d9c7125959b23f5ec2	refs/tags/ref-2
+32dfcc99025fa339478f7ecf91b42ded71d725c2	refs/tags/ref-2^{}
+$ git cat-file -t ref-2
+tag
+```
+
+The peeled line is the verification the `ref-1` correction of 2026-08-12
+asked for: `ref-2` is a **tag object** (`420722f`) pointing at the
+remediation descendant `32dfcc9`, tagger the operator. `git cat-file -p ref-2`
+minus its header is **byte-identical** to `docs/releases/ref-2.annotation.txt`
+(`cmp` agrees), and the coverage paragraph `RELEASE AUDIT: COMPLETE.` is in
+the tag message itself — so the capture harness takes the stronger source
+(`git-tag-annotation`) for `ref-2` without the mirror fallback it needs for
+`ref-1`. The subject did not move in the 24 days between the merge and the
+tag: `main` has been at `4ae4230` since 2026-09-07, which differs from
+`32dfcc9` by documents only. **Not yet done:** the GitHub pre-release on
+`ref-2`. `GET /releases/tags/ref-2` answers `404` and no draft is visible, so
+`make check-release-annotation` reports `UNREACHABLE ref-2` until it exists;
+the operator publishes it as a **pre-release** with the mirror's bytes as the
+body, and a one-line block below records the check passing. The tag form
+rule — annotated, pushed as a tag object, verified by the peeled line — is
+now satisfied once, at the first release where it applied.
+
 **2026-09-07 — TASK-015 delivered; both blockers re-verified; `ref-2`
 released from its gate; a merge rule set.** PR #31 (17 commits, 54 files,
 no migration, control-plane files untouched) merged at `32dfcc9`. **Master
