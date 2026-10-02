@@ -81,11 +81,14 @@ including the regression tests failing at the candidate. **`ref-2` is tagged
 on `32dfcc9`** — the remediation descendant, as the release rules permit — as
 an **annotated** tag whose message is mirrored byte for byte at
 `docs/releases/ref-2.annotation.txt` and carries the canonical disclaimer
-verbatim; published as a GitHub pre-release, like every `ref-<n>`. The tag
-object and the release were created by the operator from that text, because
-the proxy Master Control's session runs behind forbids tag pushes (the
-`ref-1` precedent); kind and target are verified by the peeled `^{}` line in
-`git ls-remote`, recorded in the audit register when done.
+verbatim. **Verified on the remote 2026-10-02:** `refs/tags/ref-2` →
+`420722fa9d43c930ba38d9d9c7125959b23f5ec2` (a tag object), peeled
+`refs/tags/ref-2^{}` → `32dfcc99025fa339478f7ecf91b42ded71d725c2`; the tag
+message is byte-identical to the mirror. Created and pushed by the operator
+from that file, because the proxy Master Control's session runs behind
+forbids tag pushes (the `ref-1` precedent). **The GitHub pre-release on
+`ref-2` is not yet published** — every `ref-<n>` is published as one, and
+`make check-release-annotation` reports `ref-2` unreachable until it is.
 
 **Visual layer — and what it displaces.** `ADR-0020`
 *(`docs/ADR/0020-two-repositories-and-the-generate-replay-rules.md`, merged to
