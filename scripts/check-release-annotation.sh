@@ -64,10 +64,21 @@ for mirror in "$dir"/*.annotation.txt; do
 /g; s/\\"/"/g; s/\\\\/\\/g' > "$work/published.txt"
   fi
 
-  # Both sides are compared with a trailing newline added if absent, because
-  # git adds one to the committed file and the API body does not carry one.
-  awk '{print}' "$mirror" > "$work/mirror.txt"
-  awk '{print}' "$work/published.txt" > "$work/remote.txt"
+  # Both sides are compared modulo trailing blank lines: every line of content
+  # must match byte for byte, and each side ends with exactly one newline. The
+  # earlier version added a newline "because the API body does not carry one"
+  # — true of a body typed into the web form, which strips trailing whitespace
+  # (`ref-1`), and false of a body sent from a file with `gh release create
+  # --notes-file`, which keeps the file's final newline (`ref-2`); `jq -r` then
+  # adds another, and a correct mirror reported DRIFT over an empty last line.
+  # A universal stated over one of the two ways a release is made (L-14), found
+  # the first time the other way was used (2026-10-02).
+  trim_trailing_blank_lines() {
+    awk '{ line[NR] = $0; if ($0 != "") last = NR }
+         END { for (i = 1; i <= last; i++) print line[i] }' "$1"
+  }
+  trim_trailing_blank_lines "$mirror" > "$work/mirror.txt"
+  trim_trailing_blank_lines "$work/published.txt" > "$work/remote.txt"
 
   if diff -u "$work/mirror.txt" "$work/remote.txt" > "$work/diff.txt" 2>&1; then
     echo "OK           $tag — mirror matches the published release body."

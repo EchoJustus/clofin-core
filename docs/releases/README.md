@@ -98,6 +98,24 @@ A tag listed here must carry a reason: an exemption nobody has to justify is
 not an exemption. `check-disclaimer.sh` fails on a row whose reason cell is
 empty.
 
+## Publishing a release
+
+The order below is the one that survived `ref-2`, where publishing through the
+web form re-created the tag as a lightweight ref on `main` and dropped the
+body's paragraph breaks, and the verified tag object had to be restored
+(audit register, decisions of 2026-10-02):
+
+1. Commit `docs/releases/<tag>.annotation.txt` to `main` first.
+2. `git tag -a <tag> <commit> -F docs/releases/<tag>.annotation.txt`, then
+   `git push origin refs/tags/<tag>` — a tag object, never a lightweight ref.
+3. `git ls-remote --tags origin` must print the peeled `<tag>^{}` line.
+4. `gh release create <tag> --verify-tag --prerelease --title <tag> --notes-file docs/releases/<tag>.annotation.txt`
+   — `--verify-tag` refuses to invent a tag, `--notes-file` sends the file's
+   bytes. Never "create new tag on publish" in the web form, and never paste
+   the body into it.
+5. `git ls-remote --tags origin` again: the peeled line must still be there.
+6. `make check-release-annotation` reports OK for every tag.
+
 ## Keeping them honest
 
 ```sh
