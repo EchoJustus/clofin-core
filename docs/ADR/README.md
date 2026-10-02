@@ -32,7 +32,7 @@ is a justification, not a decision.
 | [0019](0019-a-returned-payment-is-terminal-and-retries-as-a-new-instruction.md) | A returned payment is terminal; the retry is a new instruction | Accepted |
 | [0020](0020-two-repositories-and-the-generate-replay-rules.md) | Two repositories, and the rules that govern anything visual | Accepted (amended 1) |
 | [0021](0021-diagrams-are-mermaid-generated-from-code-and-tables.md) | Diagrams are Mermaid, generated from code and tables, on a tools path | Accepted |
-| [0022](0022-the-capture-harness-establishes-its-own-provenance.md) | The capture harness establishes its own provenance, and fails closed | Accepted |
+| [0022](0022-the-capture-harness-establishes-its-own-provenance.md) | The capture harness establishes its own provenance, and fails closed | Accepted (amended 1) |
 | [0023](0023-a-clofin-defined-synthetic-statement-format-and-an-ordered-matching-sequence.md) | A CloFin-defined synthetic statement format, and an ordered matching sequence | Accepted |
 | [0024](0024-a-retry-names-the-returned-payment-it-replaces.md) | A retry names the returned payment it replaces | Accepted |
 | [0025](0025-two-audit-terms-for-changes-the-trail-did-not-carry.md) | Two audit terms for changes the trail did not carry — a restated batch status, and a rejected adjustment | Accepted |

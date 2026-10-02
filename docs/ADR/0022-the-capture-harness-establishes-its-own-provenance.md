@@ -1,7 +1,7 @@
 # ADR-0022: The capture harness establishes its own provenance, and fails closed
 
 - **Status:** Accepted
-- **Date:** 2026-08-12
+- **Date:** 2026-08-12 · **Amended:** 2026-10-02 (§Amendment 1)
 - **Deciders:** Technical lead / product owner
 - **Supersedes / Superseded by:** — (implements [ADR-0020](0020-two-repositories-and-the-generate-replay-rules.md) RULE 2)
 
@@ -195,3 +195,62 @@ literally in a response is produced at capture time, in this repository:
 - `clofin-trace`'s `provenance-present` re-validates every stamp and resolves
   every displayed figure against the fixture it names, independently of the
   renderer that wrote it.
+
+## Amendment 1 — the stamp says how the capture bound to its process (2026-10-02, TASK-016)
+
+**The rule that produced it.** TASK-015 made the harness bind a capture to the
+process it started, in one of two ways depending on whether the commit under
+capture can identify itself, and printed which one it used. Master Control
+accepted that on one condition (TASK-015's changelog, ruling on objection
+**O-5**): *the bundle manifest must stamp which binding a capture used, not
+only print it, so a consumer of a fixture can tell.* A fact about how an
+artifact was produced that reaches only the console of the run that produced
+it is the convention this ADR's *Everything fails closed* section exists to
+replace with an enforcement point.
+
+**The field.** Every stamp carries `identityBinding`, and it is required:
+
+| Wire value | When the harness stamps it |
+|---|---|
+| `"instance-id"` | the captured commit's source renders `instanceId` in `GET /`, and the answering process echoed this run's instance id and the commit under capture |
+| `"port-exclusion"` | the captured commit's source does not render it (`ref-1` and earlier), and the binding is the port proved free before the child was spawned, with the child alive |
+
+What each value **establishes, and what it does not**, is
+[ADR-0027 §3a](0027-browser-clients-cors-allowlist-and-instance-self-identification.md)'s
+to say and is not restated here: a second account of a control's reach is the
+copy that drifts. This amendment records only that the harness now writes down
+which of §3a's two modes a capture was made under.
+
+**Where it comes from.** `clofin.tools.capture.stack/start!` returns the
+binding `assert-same-process!` established at start-up (which gate applies is
+decided once, from the worktree, so it cannot change during a run), and
+`clofin.tools.capture/run-stamp` completes the stamp with it beside the schema
+version the stack reported. On the wire it sits after `schemaVersionApplied`
+and before `harness`, because key order is part of the contract — the block is
+rendered in that order.
+
+**It is enforced where every other field is.** The field is a row of
+`clofin.tools.capture.provenance/required`, so the one gate every writer calls
+first (`bundle/assert-provenance!`) refuses a stamp whose `identityBinding` is
+absent or anything but those two strings, and leaves no file. A run whose
+`start!` returned no binding produces a stamp without one, and is refused
+there, rather than a value being guessed.
+
+**The schema version moves to `clofin.capture/2`.** `schema-version`'s own
+docstring says it changes *when a consumer would have to change with it*, and
+this one must: a `/1` consumer neither checks nor renders the field. A `/2`
+bundle is refused by a consumer that knows only `/1`, and `clofin-trace`, once
+it reads `/2`, refuses a `/1` manifest naming the version — one capture per
+site, of one schema.
+
+**Verification, added.** `clofin.tools.capture-test`: the writer x
+required-field matrix gains the row through `provenance/required` itself —
+before its removal test existed, `every-required-field-is-exercised` failed
+naming `["identityBinding"]`, which is the negative control; every writer
+refuses `"self-report"`, the keyword `:instance-id` and a blank, and writes both
+real values; the field's position on the wire is asserted.
+`clofin.tools.capture-stack-test`: `start!` against a worktree whose source
+renders `instanceId` carries `:instance-id`, and against one whose source does
+not carries `:port-exclusion` — with the same responder on the port offering
+the right id in both cases, because the binding is read from the worktree and
+never from the answer.

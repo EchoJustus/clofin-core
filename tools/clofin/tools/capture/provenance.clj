@@ -307,8 +307,12 @@
   Changed when a consumer would have to change with it. `clofin-trace`'s
   `provenance-present` check refuses a bundle whose schema version it does not
   know, so a silently reshaped bundle fails there rather than rendering as
-  blanks."
-  "clofin.capture/1")
+  blanks.
+
+  `/2` (TASK-016) adds `identityBinding` to the stamp — a required field a `/1`
+  consumer does not know to check or to render, which is the case this
+  docstring says the version exists for."
+  "clofin.capture/2")
 
 (defn harness-provenance
   "Which commit of the harness produced this bundle, and whether it was clean.
@@ -387,7 +391,13 @@
    [[:schema-version-applied]        #(re-matches #"^\d{4}$" (str %))
     "the schema version the captured stack reported"]
    [[:harness :commit]               #(not (str/blank? (str %)))
-    "the harness commit"]])
+    "the harness commit"]
+   ;; TASK-015's ruling on objection O-5, carried to TASK-016: the run used to
+   ;; *print* which of the two bindings `clofin.tools.capture.stack` established
+   ;; and nothing on disk recorded it, so a reader of a fixture could not tell.
+   ;; What each value does and does not establish is ADR-0027 §3a's to say.
+   [[:identity-binding]              #{"instance-id" "port-exclusion"}
+    "how the capture established that the answering process was the one it started"]])
 
 (defn problems
   "Every reason `provenance` is not a stamp, as sentences. Empty means valid."

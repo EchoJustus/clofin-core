@@ -188,7 +188,9 @@
 
 (defn- complete-bundle
   []
-  (bundle-with (assoc (stamp (fake-git (answers))) :schema-version-applied "0011")))
+  (bundle-with (assoc (stamp (fake-git (answers)))
+                      :schema-version-applied "0011"
+                      :identity-binding "port-exclusion")))
 
 (defn- temp-path [name]
   (io/file (System/getProperty "java.io.tmpdir")
@@ -225,6 +227,7 @@
    ["releaseAudit" "sourceSha256"]
    ["capturedAt"]
    ["schemaVersionApplied"]
+   ["identityBinding"]
    ["harness" "commit"]])
 
 (deftest ac-2-the-harness-cannot-emit-an-unstamped-bundle
@@ -472,7 +475,9 @@
                                     :name "bundles/example.json" :sha256 "c"}]}))})
 
 (deftest ac-3-every-writer-refuses-an-incomplete-stamp-and-leaves-nothing-behind
-  (let [complete (assoc (stamp (fake-git (answers))) :schema-version-applied "0011")]
+  (let [complete (assoc (stamp (fake-git (answers)))
+                        :schema-version-applied "0011"
+                        :identity-binding "port-exclusion")]
     (testing "the positive case first, so the matrix below cannot pass by
               refusing everything"
       (doseq [[name* write!] writers]
@@ -508,6 +513,78 @@
       (is (= discovered (set (keys writers)))
           (str "clofin.tools.capture.bundle exposes " (pr-str (vec (sort discovered)))
                " and this namespace exercises " (pr-str (vec (sort (keys writers)))))))))
+
+;; ---------------------------------------------------------------------------
+;; How the capture bound to its process — stamped, not only printed (TASK-016)
+;; ---------------------------------------------------------------------------
+;;
+;; TASK-015's ruling on objection O-5 accepted the two bindings ADR-0027 §3a
+;; describes, on one condition: the bundle must *stamp* which one a capture
+;; used, so that a reader of a fixture can tell without the run's console. The
+;; field's absence is covered by the matrix above, which walks
+;; `provenance/required`; these cover its value, its place on the wire and the
+;; one function that puts it into the stamp.
+
+(deftest ac-1-every-writer-refuses-an-identity-binding-that-is-not-one-of-the-two
+  (let [complete (assoc (stamp (fake-git (answers)))
+                        :schema-version-applied "0011"
+                        :identity-binding "port-exclusion")]
+    (doseq [[name* write!] writers
+            [why value] [["a plausible wrong value" "self-report"]
+                         ["the keyword rather than its wire name" :instance-id]
+                         ["a blank" "   "]]]
+      (testing (str name* " with identityBinding " (pr-str value) " — " why)
+        (let [path (temp-path "artifact.json")]
+          (is (thrown-with-msg?
+               clojure.lang.ExceptionInfo #"identity-binding is missing or invalid"
+               (write! (assoc complete :identity-binding value) path)))
+          (is (not (.exists (io/file path)))
+              (str name* " refused and left a file behind")))))
+    (testing "and both real values are written by every writer, so the refusals
+              above cannot pass by refusing everything"
+      (doseq [[name* write!] writers
+              value ["instance-id" "port-exclusion"]]
+        (let [path (temp-path "artifact.json")]
+          (is (map? (write! (assoc complete :identity-binding value) path))
+              (str name* " must write a stamp bound by " value))
+          (is (= value (get-in (json/read-str (slurp path)) ["provenance" "identityBinding"])))
+          (.delete (io/file path)))))))
+
+(deftest ac-1-the-binding-sits-between-the-schema-version-and-the-harness
+  (testing "key order is part of the contract: the block is rendered in it"
+    (let [wire (bundle/provenance->wire
+                (assoc (stamp (fake-git (answers)))
+                       :schema-version-applied "0013"
+                       :identity-binding "instance-id"))
+          ks   (vec (keys wire))
+          at   #(.indexOf ^java.util.List ks %)]
+      (is (= "instance-id" (get wire "identityBinding")))
+      (is (= (inc (at "schemaVersionApplied")) (at "identityBinding")) (pr-str ks))
+      (is (= (inc (at "identityBinding")) (at "harness")) (pr-str ks))
+      (is (= "clofin.capture/2" (get wire "schemaVersion"))
+          "a consumer must change with this field, so the schema version does")
+      (testing "and it survives the round trip every writer validates through"
+        (is (= "instance-id" (:identity-binding (bundle/wire->internal wire))))
+        (is (empty? (bundle/stamp-problems wire)))))))
+
+(deftest ac-1-the-run-stamp-carries-what-start-established
+  (let [base (stamp (fake-git (answers)))]
+    (testing "the wire value is the keyword's name"
+      (is (= "instance-id"
+             (:identity-binding (capture/run-stamp base "0013" {:identity-binding :instance-id}))))
+      (is (= "port-exclusion"
+             (:identity-binding (capture/run-stamp base "0011" {:identity-binding :port-exclusion}))))
+      (is (= "0013" (:schema-version-applied (capture/run-stamp base "0013" {:identity-binding :instance-id})))))
+    (testing "a running stack that carries no binding produces no binding — and
+              the writers' one gate then refuses, rather than this function
+              choosing one"
+      (let [unbound (capture/run-stamp base "0013" {})
+            path    (temp-path "bundle.json")]
+        (is (nil? (:identity-binding unbound)))
+        (is (thrown-with-msg? clojure.lang.ExceptionInfo #"identity-binding is missing"
+                              (bundle/write! {:path path :bundle (bundle-with unbound)
+                                              :service-info service-info})))
+        (is (not (.exists (io/file path))))))))
 
 (deftest a-control-s-statement-carries-the-paragraph-that-scopes-it
   (testing "2C-007 was C-13's seven numbered guarantees being cut off after the
