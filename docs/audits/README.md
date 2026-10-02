@@ -12,6 +12,51 @@
 Append-only. A later change appends a new dated block; an existing block is
 never edited — the record of what was decided, and when, is the point.
 
+**2026-10-02 (second) — the published `ref-2` moved at release time;
+restoration ruled; the operator executes.** Minutes after the block below was
+synced, the operator published the pre-release (release id 401455890,
+`prerelease: true`, published 00:37:16Z) and, in doing so, the tag ref was
+re-created rather than reused. Verified against the remote:
+
+```
+$ git ls-remote --tags origin
+5c7b4badced5e807e1022fce44cbcad38c6d2095	refs/tags/ref-1
+c98fbeed779682353b75afefc02cfd814553fc6d	refs/tags/ref-2
+$ GET /git/ref/tags/ref-2      → object type "commit", c98fbee…
+$ GET /git/tags/420722fa…      → 200 (the annotated object survives, unreachable)
+```
+
+**No peeled line.** `ref-2` as published is now a lightweight tag at
+`c98fbee` — the merge of PR #34, the sync that recorded the verified tag — not
+the tag object `420722f` at `32dfcc9` that the block below verified. The
+release body is the mirror's text with every blank line between paragraphs
+removed and no trailing newline (the only differences), so `make
+check-release-annotation` reports `DRIFT ref-2`, and the `RELEASE AUDIT:`
+paragraph is no longer a paragraph the harness can bound. What limits the
+damage: `git diff 32dfcc9 c98fbee -- . ':!docs'` is empty — the two commits
+differ by six documents, the control-plane syncs of PRs #32–#34 and the mirror
+itself; CI ran on `c98fbee` (push run 36946409017) and passed; and nothing has
+consumed the tag — no capture, no trace refresh. **Ruling.** The immutability
+rule of 2026-08-12 stops a published artifact being rewritten to make a
+document true. This is its mirror image: the artifact the register recorded by
+SHA — `420722f` → `32dfcc9`, verified and synced to `main` — was overwritten by
+accident, and what replaced it contradicts itself: an annotation naming
+`32dfcc9` and CI run 34091727538, on a ref that points at `c98fbee`; a
+coverage paragraph that cannot be read as one. Leaving that published would
+honour the rule's letter against its reason. **The verified artifact is
+restored**: `refs/tags/ref-2` re-pointed at the surviving object `420722f` —
+the same SHAs, so every line recorded below stays true — the release deleted
+and re-created from the mirror's bytes through the API or `gh`, never a web
+form that collapses paragraphs. The proxy forbids each of those writes from
+Master Control's session; the operator executes, and the outcome — the
+ls-remote output with its peeled line, and `make check-release-annotation`
+passing for both tags — is recorded in the next block. Until then the living
+documents say the published ref is in this state, not the verified one.
+*Procedure, added:* a release is created against the tag that exists, never
+with "create new tag on publish"; and the check that would have caught this —
+`git ls-remote --tags origin` *after* publishing, looking for the peeled line
+— is the last step of tagging, not the first.
+
 **2026-10-02 — `ref-2` is tagged, annotated, and verified; the pre-release
 is pending.** The operator created the tag from the committed mirror and
 pushed it on 2026-10-01 (20:24 -0400). Verified by Master Control against the

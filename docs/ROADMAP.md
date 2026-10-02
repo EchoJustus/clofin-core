@@ -31,7 +31,7 @@ and this table is stale.
 | 8.2 | Cockpit — CORS allowlist, instance connect, seed bootstrap | [TASK-012](briefs/012-TASK-cockpit-connect-and-bootstrap.md) | ✅ `CLOSED` — PR #23 (`f174116`) + `clofin-cockpit` PR #2 (`90abb1d`) | green, both repositories |
 | 8.3 | Cockpit — operation flows, scheme play, evidence view | [TASK-013](briefs/013-TASK-cockpit-operations-and-scheme-simulation.md) | ✅ `CLOSED` — cockpit PR #3 (`7ee7e28`) + REQ-only core PR #25 (`b962d7f`); frozen core held | green, cockpit CI ×2 |
 | 8.4 | Cockpit — Actions scenario runner, PAT-free | [TASK-014](briefs/014-TASK-cockpit-scenario-runner.md) | ✅ `CLOSED` — cockpit PR #4 (`9283dbf`) + REQ-only core PR #27 (`ea428a3`); hosted run #1 against `ref-1` green, 27/27 steps | green, incl. the hosted scenario run |
-| ref-2 | Release remediation — `FEEDBACK-REL-ref-2` (2 B / 20 S / 1 C), then the annotated tag | [TASK-015](briefs/015-TASK-ref-2-release-remediation.md) | ✅ `CLOSED` — merged in PR #31 (`32dfcc9`); both blockers re-verified; `ref-2` is tagged on that commit (annotation mirror in `docs/releases/`) | green on `32dfcc9` (run 34091727538) |
+| ref-2 | Release remediation — `FEEDBACK-REL-ref-2` (2 B / 20 S / 1 C), then the annotated tag | [TASK-015](briefs/015-TASK-ref-2-release-remediation.md) | ✅ `CLOSED` — merged in PR #31 (`32dfcc9`); both blockers re-verified; `ref-2` tagged on that commit as `420722f` (annotated, verified 2026-10-02); the published ref moved at release time and its restoration is pending — register 2026-10-02 (second) | green on `32dfcc9` (run 34091727538) |
 | 7, 9 | Financial crime; programmable settlement | not yet briefed | 💭 later | — |
 
 **Controls now enforced on `main`.** As of 2026-08-04 the increment-3/4 stack is
@@ -86,9 +86,13 @@ verbatim. **Verified on the remote 2026-10-02:** `refs/tags/ref-2` →
 `refs/tags/ref-2^{}` → `32dfcc99025fa339478f7ecf91b42ded71d725c2`; the tag
 message is byte-identical to the mirror. Created and pushed by the operator
 from that file, because the proxy Master Control's session runs behind
-forbids tag pushes (the `ref-1` precedent). **The GitHub pre-release on
-`ref-2` is not yet published** — every `ref-<n>` is published as one, and
-`make check-release-annotation` reports `ref-2` unreachable until it is.
+forbids tag pushes (the `ref-1` precedent). **As published at the moment of
+writing, the ref has moved:** publishing the pre-release re-created `ref-2`
+as a lightweight tag at `c98fbee` (code-identical to `32dfcc9`; six documents
+differ) with the body's paragraph breaks collapsed, so
+`make check-release-annotation` reports drift. Restoration of the verified
+tag object `420722f` is ruled and pending the operator — audit register,
+decision of 2026-10-02 (second).
 
 **Visual layer — and what it displaces.** `ADR-0020`
 *(`docs/ADR/0020-two-repositories-and-the-generate-replay-rules.md`, merged to
