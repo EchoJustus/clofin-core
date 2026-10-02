@@ -1,6 +1,7 @@
 (ns clofin.tools.capture
-  "`make capture-trace` — run the three scenarios against a stack built from a
-  tagged commit and write one stamped bundle per scenario.
+  "`make capture-trace` — run every scenario in
+  `clofin.tools.capture.scenarios/all` against a stack built from a tagged
+  commit and write one stamped bundle per scenario.
 
   This is the harness [ADR-0020](../../../docs/ADR/0020-two-repositories-and-the-generate-replay-rules.md)
   names as the reason `clofin-trace` can sit outside release-audit scope
@@ -278,7 +279,7 @@
   (str "make capture-trace [CAPTURE_REF=<ref>] [CAPTURE_OUT=<dir>]\n"
        "clojure -M:capture [--ref <ref>] [--tag <tag>] [--out <dir>] [--port <n>]\n"
        "                   [--db-url <jdbc-url>] [--clojure <path>]\n\n"
-       "Runs the three replay scenarios against a stack built from <ref> and writes\n"
+       "Runs every replay scenario against a stack built from <ref> and writes\n"
        "one stamped bundle per scenario. Defaults: --ref ref-1, --out target/capture,\n"
        "--port 8099, --db-url jdbc:postgresql://localhost:5432/clofin_capture.\n\n"
        "The capture database is dropped and recreated on every run, so its name must\n"

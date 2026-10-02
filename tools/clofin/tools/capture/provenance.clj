@@ -416,7 +416,7 @@
   it opens a file, so a bundle that fails here leaves nothing on disk to be
   mistaken for output — the fail-closed half of AC-2 and standing lesson
   **L-13**. `context` names what was being written, because the operator
-  reading this needs to know which of three scenarios stopped."
+  reading this needs to know which scenario stopped."
   [provenance context]
   (let [found (problems provenance)]
     (when (seq found)
