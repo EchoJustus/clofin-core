@@ -23,6 +23,9 @@
             [clofin.tools.capture.bundle :as bundle]
             [clofin.tools.capture.provenance :as prov]
             [clofin.tools.capture.quotations :as quotations]
+            [clofin.tools.capture.scenarios :as scenarios]
+            [clofin.tools.capture.stack :as stack]
+            [clofin.tools.capture.store :as store]
             [clojure.data.json :as json]
             [clojure.java.io :as io]
             [clojure.string :as str]
@@ -587,6 +590,43 @@
                 (str name* " opened its file without asking the gate")))
           (is (= 1 @gate) name*)
           (is (not (.exists (io/file path))) name*))))))
+
+(deftest ac-1-a-capture-stamps-the-binding-its-start-established
+  (testing "through `capture!` itself, with every side effect stubbed: whatever
+            `start!` established is what every artifact of the run carries. A
+            capture that stamped a constant would pass every test that builds the
+            stamp by hand, and would be wrong exactly for `ref-1`"
+    (doseq [binding [:port-exclusion :instance-id]]
+      (let [base    (stamp (fake-git (answers)))
+            stamped (atom {})
+            writer  (fn [k] (fn [{:keys [provenance]}]
+                              (swap! stamped assoc k (:identity-binding provenance))
+                              {:path (name k) :sha256 "0"}))]
+        (with-redefs [prov/stamp                      (fn [_] base)
+                      stack/worktree!                 (fn [& _] "/nonexistent-worktree")
+                      stack/assert-formatter-matches! (fn [& _] :same)
+                      stack/assert-port-free!         (fn [& _] :free)
+                      store/reset-schema!             (fn [& _] "x_capture")
+                      stack/migrate!                  (fn [& _] :migrated)
+                      stack/start!                    (fn [_] {:process nil
+                                                               :base-url "http://127.0.0.1:1"
+                                                               :readyz "{}"
+                                                               :identity-binding binding})
+                      stack/assert-schema-matches!    (fn [& _] "0013")
+                      stack/assert-same-process!      (fn [_] {})
+                      stack/stop!                     (fn [_] :stopped)
+                      capture/capture-service-info    (fn [& _] service-info)
+                      store/connect                   (fn [_] (reify java.sql.Connection (close [_])))
+                      quotations/extract              (fn [& _] {})
+                      scenarios/all                   []
+                      bundle/write-fixture!           (writer :fixture)
+                      bundle/write-quotations!        (writer :quotations)
+                      bundle/write-manifest!          (writer :manifest)]
+          (capture/capture! {:ref "ref-1" :out (str (.getParentFile (temp-path "x")))
+                             :port 1 :clojure-bin "unused" :db {}}))
+        (is (= {:fixture (name binding) :quotations (name binding) :manifest (name binding)}
+               @stamped)
+            (str "start! established " binding))))))
 
 (deftest ac-1-the-run-stamp-carries-what-start-established
   (let [base (stamp (fake-git (answers)))]

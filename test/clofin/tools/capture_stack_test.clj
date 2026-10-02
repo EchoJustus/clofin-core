@@ -300,6 +300,7 @@
   (let [f (java.io.File/createTempFile "clofin-child" ".sh")]
     (spit f "#!/bin/sh\nexec sleep 30\n")
     (.setExecutable f true)
+    (.deleteOnExit f)
     (str f)))
 
 (defn- start-alive
@@ -347,8 +348,28 @@
   (testing "and a start that cannot establish either binding returns nothing to
             stamp: it throws, and destroys the child it started"
     (with-responder [server (info {"instanceId" "some-other-run"})]
-      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"reports instance id"
-                            (start-alive server (worktree! true)))))))
+      (let [spawned (atom nil)
+            real    @#'stack/process]
+        (with-redefs [stack/process (fn [opts] (reset! spawned (real opts)))]
+          (is (thrown-with-msg? clojure.lang.ExceptionInfo #"reports instance id"
+                                (start-alive server (worktree! true)))))
+        (is (some? @spawned) "non-vacuity: a child was spawned")
+        (is (.waitFor ^Process @spawned 5 java.util.concurrent.TimeUnit/SECONDS)
+            "start! refused and left the child it spawned running")))))
+
+(deftest a-worktree-the-harness-cannot-read-refuses-before-anything-is-spawned
+  (testing "which gate applies is decided before the child exists, so a refusal
+            there has no child to leave behind holding the port"
+    (with-responder [server (info {"instanceId" "run-under-test"})]
+      (let [spawned (atom 0)
+            no-src  (.toFile (java.nio.file.Files/createTempDirectory
+                              "clofin-no-src"
+                              (into-array java.nio.file.attribute.FileAttribute [])))]
+        (with-redefs [stack/process (fn [_] (swap! spawned inc)
+                                      (.start (ProcessBuilder. ["sleep" "30"])))]
+          (is (thrown-with-msg? clojure.lang.ExceptionInfo #"is not readable"
+                                (start-alive server no-src))))
+        (is (zero? @spawned) "start! spawned a child before deciding which gate applies")))))
 
 ;; ---------------------------------------------------------------------------
 ;; (e) liveness is re-checked, not checked once

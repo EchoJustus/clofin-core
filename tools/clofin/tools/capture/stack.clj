@@ -388,6 +388,11 @@
     (throw (ex-info "capture refuses: a capture run must carry an instance id."
                     {:worktree worktree})))
   (let [base-url (str "http://127.0.0.1:" port)
+        ;; Decided once, from the worktree, **before anything is spawned** — so
+        ;; a worktree the harness cannot read refuses with no child to leave
+        ;; behind, every later call gates the same way as this one, and the
+        ;; answer can never come from the thing being gated.
+        identifies? (self-identifies? worktree)
         p (process {:dir worktree
                     :command [clojure-bin "-M:run"]
                     :env (env-for db port {:instance-id instance-id
@@ -415,11 +420,7 @@
           (and res (= 200 (:status res)))
           (let [running {:process p :base-url base-url :readyz (:body res)
                          :instance-id instance-id :source-commit source-commit
-                         ;; Decided once, from the worktree, and carried — so
-                         ;; every later call gates the same way as this one and
-                         ;; the answer can never come from the thing being
-                         ;; gated.
-                         :self-identifies? (self-identifies? worktree)}]
+                         :self-identifies? identifies?}]
             (let [established (try
                                 (assert-same-process! running)
                                 (catch Exception e

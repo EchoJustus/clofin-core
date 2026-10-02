@@ -40,7 +40,8 @@
       (is (.isFile (io/file source)) (str id " names " source))))
   (testing "no two scenarios share an actor id: the capture database is shared, and an
             actor seeded twice is a seed that fails or a trail that is two scenarios'"
-    (let [ids (mapcat (comp vals :people) (filter :people scenarios/all))]
+    (let [ids (concat @#'scenarios/uat005-actors
+                      (mapcat (comp vals :people) (filter :people scenarios/all)))]
       (is (seq ids) "non-vacuity: the roster seeds people at all")
       (is (= (count ids) (count (set ids)))))))
 

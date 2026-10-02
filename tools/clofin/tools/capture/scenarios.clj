@@ -152,6 +152,12 @@
 (def ^:private sam   "44444444-4444-4444-4444-444444444444")
 (def ^:private rae   "55555555-5555-5555-5555-555555555555")
 (def ^:private tom   "66666666-6666-6666-6666-666666666666")
+(def ^:private nadia "33333333-3333-3333-3333-333333333333")
+
+(def ^:private uat005-actors
+  "Every actor the segregation scenario seeds. It names them directly rather
+  than through `people`, so the roster's distinctness test reads them here."
+  [priya wei nadia sam rae tom])
 
 (defn segregation-of-duties
   "UAT-005, replayed: the violations attempted, and the refusals that answer.
@@ -187,23 +193,23 @@
                             (str "insert into actor (id, organisation_id, display_name) values "
                                  "('%s','%s','Priya (maker)'),"
                                  "('%s','%s','Wei (checker)'),"
-                                 "('33333333-3333-3333-3333-333333333333','%s','Nadia (checker)'),"
+                                 "('%s','%s','Nadia (checker)'),"
                                  "('%s','%s','Sam (controller)'),"
                                  "('%s','%s','Rae (auditor)'),"
                                  "('%s','%s','Tom (second operator)'); "
                                  "insert into actor_role (actor_id, role) values "
                                  "('%s','operator'),('%s','approver'),"
-                                 "('33333333-3333-3333-3333-333333333333','approver'),"
+                                 "('%s','approver'),"
                                  "('%s','controller'),('%s','auditor'),('%s','operator'); "
                                  "insert into approver_limit (actor_id, currency, limit_minor) values "
                                  "('%s','SGD',500000),"
-                                 "('33333333-3333-3333-3333-333333333333','SGD',5000000); "
+                                 "('%s','SGD',5000000); "
                                  "insert into approval_threshold "
                                  "(organisation_id, currency, from_minor, approvals_required) "
                                  "values ('%s','SGD',0,1),('%s','SGD',100000,2);")
-                            priya org-id wei org-id org-id sam org-id rae org-id tom org-id
-                            priya wei sam rae tom
-                            wei
+                            priya org-id wei org-id nadia org-id sam org-id rae org-id tom org-id
+                            priya wei nadia sam rae tom
+                            wei nadia
                             org-id org-id)})
 
     (seed! ctx {:id "superuser-refused"
