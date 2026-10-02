@@ -12,6 +12,48 @@
 Append-only. A later change appends a new dated block; an existing block is
 never edited — the record of what was decided, and when, is the point.
 
+**2026-10-02 (third) — `ref-2` restored and published; the release is
+closed; the mirror check's assumption corrected.** The operator executed the
+ruling below within three hours: the release deleted, `refs/tags/ref-2`
+re-pointed at the surviving tag object with one `PATCH … force=true`, and the
+pre-release re-created with `gh release create ref-2 --verify-tag --prerelease
+--notes-file docs/releases/ref-2.annotation.txt`. Verified by Master Control
+against the remote after each step and again at the end:
+
+```
+$ git ls-remote --tags origin
+5c7b4badced5e807e1022fce44cbcad38c6d2095	refs/tags/ref-1
+420722fa9d43c930ba38d9d9c7125959b23f5ec2	refs/tags/ref-2
+32dfcc99025fa339478f7ecf91b42ded71d725c2	refs/tags/ref-2^{}
+$ GET /git/ref/tags/ref-2  → object type "tag", 420722fa…
+$ GET /releases/tags/ref-2 → id 401516365, prerelease true, draft false,
+                             published 2026-10-02T03:18:52Z
+```
+
+**As published, `ref-2` is**: the tag object `420722f` — the one the first
+block of this date verified, so every SHA recorded there stays true — pointing
+at `32dfcc9`, the remediation descendant of the candidate `c97a4f2`; a GitHub
+pre-release whose body is the mirror's bytes (line endings aside: the
+operator's checkout converts to CRLF, which the checker already normalises).
+The interval during which the published ref pointed elsewhere ran from
+00:31Z to about 03:10Z; nothing consumed the tag in it. **One more thing was
+found and fixed on the way.** `make check-release-annotation` reported
+`DRIFT ref-2` over an empty last line: its comment said the API body "does not
+carry" a trailing newline — true of a body typed into the web form, which
+strips trailing whitespace (`ref-1`), false of one sent from a file, which
+keeps the file's final newline — so a correct mirror failed against a correct
+release. A universal stated over one of the two ways a release is made,
+discovered the first time the other way was used (L-14, in the checker's own
+comment). The checker now compares modulo trailing blank lines, with every
+line of content still byte-compared; negative controls run before the change
+was committed: a changed word fails, an added line fails, trailing blank
+lines alone pass. It rides the sync that carries this block, with the
+publishing procedure written into `docs/releases/README.md` so the next
+release is cut by the steps that worked, in the order they worked. **With
+that, `ref-2` is released**: the first `ref-<n>` cut on a complete audit, as
+an annotated tag verified by its peeled line, with the canonical disclaimer
+in its annotation. The register row and the ROADMAP say so.
+
 **2026-10-02 (second) — the published `ref-2` moved at release time;
 restoration ruled; the operator executes.** Minutes after the block below was
 synced, the operator published the pre-release (release id 401455890,
