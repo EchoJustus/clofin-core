@@ -38,7 +38,7 @@ is a justification, not a decision.
 | [0025](0025-two-audit-terms-for-changes-the-trail-did-not-carry.md) | Two audit terms for changes the trail did not carry — a restated batch status, and a rejected adjustment | Accepted |
 | [0026](0026-three-repositories-and-the-cockpits-role-boundary.md) | Three repositories, and the cockpit's role boundary | Accepted |
 | [0027](0027-browser-clients-cors-allowlist-and-instance-self-identification.md) | Browser clients — a default-closed CORS allowlist, and instance self-identification | Accepted |
-| [0028](0028-satellite-clients-integrate-through-core-owned-contracts.md) | Satellite clients integrate through core-owned JSON contracts; screening, idempotent creation and simulated chain confirmations are core transitions | Proposed |
+| [0028](0028-satellite-clients-integrate-through-core-owned-contracts.md) | Satellite clients integrate through core-owned JSON contracts; screening, idempotent creation and simulated chain confirmations are core transitions | Accepted |
 
 ## Conventions
 

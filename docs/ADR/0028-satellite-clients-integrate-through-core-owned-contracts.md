@@ -1,6 +1,6 @@
 # ADR-0028: Satellite clients integrate through core-owned JSON contracts; screening, idempotent creation and simulated chain confirmations are core transitions
 
-- **Status:** Proposed — eight rulings requested of the operator (D3–D10 below); becomes *Accepted* when they are made, and the briefs it names are written after that, not before
+- **Status:** Accepted — proposed 2026-10-03 with eight rulings requested; ruled by the operator the same day: D3, D4, D8, D9, D10 accepted as proposed; D5, D6, D7 accepted with the amendments recorded in each section (the *Rulings* section carries the operator's text)
 - **Date:** 2026-10-03
 - **Deciders:** Master Control (proposal); the operator (rulings); the Principal Architect seat at the next release audit (`ref-3`, Sol tier — this ADR and every increment it produces change enforcement code in the authorisation, settlement and financial-crime domains)
 - **Supersedes / Superseded by:** — (extends ADR-0026's role boundary to further client repositories; amends nothing)
@@ -84,51 +84,47 @@ says is scaffolding.
 
 Core integrates the satellites **as clients of the real API, in core's own
 language, through transitions core already defines or owns**. Each requested
-contract is reconciled below; where reconciliation is a choice rather than a
-fact, it is numbered as a ruling the operator makes, with Master Control's
-recommendation stated. The satellites' EDN shapes are satisfied by the
+contract is reconciled below. The satellites' EDN shapes are satisfied by the
 satellites' own transport adapters (`CoreTransport`, `CorePosting`, the fc
 interceptor's future adapter), which translate to and from the JSON contracts
-below using the mapping tables in this ADR. Core publishes the contracts, the
-mapping tables, and the tests that prove the atomic behaviour the handover's
-§6 asks for; it does not publish, reference or depend on the satellites'
-internals, three of which are proprietary.
+published in *Contracts, published* using the mapping tables there. Core
+publishes the contracts, the mapping tables, and the tests that prove the
+atomic behaviour the handover's §6 asks for; it does not publish, reference or
+depend on the satellites' internals, three of which are proprietary.
 
-### D3 — Wire format: JSON at core, EDN at the satellites (recommended: JSON only)
+### D3 — Wire format: JSON at core, EDN at the satellites (accepted)
 
 Core keeps one representation. The satellite transports serialise their EDN
 to the JSON shapes `api/openapi.yaml` declares and decode core's JSON
-responses into their EDN envelopes. Keyword-valued fields on the satellite
-side (`:payment/awaiting-screening`, `:erc20/transfer`, `:finalized`) are
-string enums at core and the mapping is in the tables below. The satellites'
-`X-Clofin-Contract-Version` header is accepted and ignored: core's contract is
-versioned by the OpenAPI document and the release tag, and a header that
-disagrees with a URL would be a second copy.
+responses into their EDN envelopes; those adapters are explicit and tested on
+the satellites' side. Keyword-valued fields on the satellite side
+(`:payment/awaiting-screening`, `:erc20/transfer`, `:finalized`) are string
+enums at core and the mapping is in the tables below. The satellites'
+`X-Clofin-Contract-Version` header is accepted and ignored; **that is not
+version negotiation and must not be described as such on either side** —
+core's contract is versioned by the OpenAPI document and the release tag, and
+a header that disagrees with a URL would be a second copy.
 
-*The alternative the operator may rule instead:* an `application/edn` codec in
-core's ingress middleware, decoding with `clojure.edn/read-string` under
-`{:readers {} :default (fn [tag _] (refuse tag))}` into the same string-keyed
-map the JSON codec produces, with responses encoded per `Accept`. One handler,
-two codecs; the idempotency digest is computed over the decoded map today, so
-it is representation-independent already. Master Control recommends against
-it for `ref-3`: the contract test, the capture harness, the cockpit's recorded
-responses and the trace fixtures all speak JSON, and every example the
-contract carries would need an EDN twin maintained by hand.
+*The alternative not taken:* an `application/edn` codec in core's ingress
+middleware. Rejected for `ref-3` because the contract test, the capture
+harness, the cockpit's recorded responses and the trace fixtures all speak
+JSON, and every example the contract carries would need an EDN twin maintained
+by hand.
 
-### D4 — State names: no new states; a mapping table
+### D4 — State names: no new states; a mapping table (accepted)
 
 | Satellite name | Core state or event | Note |
 |---|---|---|
 | `:payment/awaiting-screening` (creation acknowledgment) | `draft` | created, not yet submitted; screening has not run |
 | `:payment/release-for-processing` (the proposed transition) | the `submit` event, `draft → pending-approval`, gated by C-07 | performed by the maker, not by the screening client — see D5 |
 | `:payment/ready-for-processing` | `pending-approval` | cleared screening; awaits maker–checker approval, then release into a batch |
-| `:expected-payment-state :payment/ready-for-processing` on a chain confirmation | **`released`** | a confirmation applies to an instruction in a submitted batch; the satellite flow omits approval and release, which core does not skip |
+| `:expected-payment-state :payment/ready-for-processing` on a chain confirmation | **`released`**, in the settlement batch core resolves for the instruction | a confirmation applies to an instruction in a submitted batch; the satellite flow omits approval and release, which core does not skip |
 | creation ack `202` / replay `200` with `:replayed?` | `201` on both; `Idempotent-Replayed: true` on the replay | the adapter derives `:replayed?` from the header |
 
 Core answers with core's names. An adapter that needs the satellite's names
 maps them; core never emits a state it does not have.
 
-### D5 — Screening (C-07, increment 7): core screens; a client's result is evidence, never authorisation
+### D5 — Screening (C-07, increment 7): core screens; a client's result is evidence, never authorisation (accepted, amended)
 
 Core performs screening itself at `submit`, against a **versioned synthetic
 list it holds**, with deterministic rules — the C-07 design. The fc
@@ -138,37 +134,43 @@ satellite's `apply-screening-result!` is reconciled as:
 POST /payment-instructions/{id}/screening-results          (Idempotency-Key required)
 ```
 
-which **records an externally produced screening result as evidence** bound
-to the instruction and to a list version core holds, and which **does not
-transition** anything. Core then performs its own screening against the same
-list version and compares; `submit` consults core's decision, not the
-client's. The seven preconditions the satellite enumerates map onto core
-checks that already exist or that increment 7 builds:
+which **records an externally produced screening result as evidence** — with
+**either valid outcome, `clear` or `hit`** — bound to the instruction's
+content digest and to a list version core holds; core **recomputes** the
+result against that list version and stores both the submitted and the
+recomputed outcome with whether they agree. The call **transitions nothing**.
+`submit` consults core's own decision, made at `submit` time against core's
+accepted list, and not the client's; a hit — recorded by a client or found by
+core — leaves the instruction in `draft`, opens a case, and `submit` answers
+`409 screening-hit` until the case is dispositioned.
 
-| Satellite precondition | Core check | Refusal |
-|---|---|---|
-| `:instruction-exists` | the id resolves within the caller's organisation | `404` |
-| `:instruction-content-matches` | the submitted `instructionDigest` equals core's canonical digest of the stored instruction | `422 instruction-digest-mismatch` |
-| `:expected-prior-state-matches` | status is `draft` at the time of the write, read `FOR UPDATE` (L-8) | `409` with the lifecycle's own refusal |
-| `:screening-result-is-clear` | `outcome` is `clear` and `matchedEntries` is exactly `[]` | `422` |
-| `:risk-list-version-accepted` | `listVersion` names a list core holds and has not retired | `422 list-version-not-accepted` |
-| `:screening-result-verified` | core recomputes the result against that list and it equals the submitted one, entries included | `422 screening-result-mismatch` |
-| `:core-authorizes-transition` | the caller holds `screening/record`; C-07's own decision at `submit` is core's, and a hit found by core blocks `submit` regardless of what was recorded | `403` / `409 screening-hit` |
+The satellite's seven preconditions map onto two different moments, and the
+table says which:
 
-A hit — recorded or found — leaves the instruction in `draft`, opens a case
-(increment 7's case management), and `submit` answers `409 screening-hit`
-until the case is dispositioned. The response to a successful record is `201`
-with a `ScreeningResult` resource carrying `listVersion`, `outcome`,
-`matchedEntries` (whole entries, in list order), `coreOutcome` (core's own
-recomputation), `instructionDigest` and `recordedBy`. The satellite's three
-response envelopes (`:applied`, `:rejected`, `:error`) are the adapter's
-rendering of `201`, `4xx` problem documents and transport failure; the
-"transition id" the satellite asks for is the audit event id core returns in
-`Location`-adjacent fields on every write. A clear result against an empty
-list is accepted only if core holds that empty list under that version, which
-core will not: list versions are loaded by seed, not by clients.
+| Satellite precondition | Where core checks it | Core check | Refusal |
+|---|---|---|---|
+| `:instruction-exists` | recording | the id resolves within the caller's organisation | `404` |
+| `:instruction-content-matches` | recording | `instructionDigest` equals core's canonical digest of the stored instruction's immutable fields | `422 instruction-digest-mismatch` |
+| `:expected-prior-state-matches` | recording | status is `draft` when the row is read `FOR UPDATE` (L-8); evidence against a submitted instruction is refused | `409` with the lifecycle's own refusal |
+| `:risk-list-version-accepted` | recording | `listVersion` names a list core holds and has not retired | `422 list-version-not-accepted` |
+| `:screening-result-verified` | recording | the submitted outcome and entries equal core's recomputation against that list — a disagreement is **recorded and refused**, not silently overwritten | `422 screening-result-mismatch` |
+| `:screening-result-is-clear` | **`submit`** | core's own decision for this instruction, against the list core accepts at that moment, is `clear` | `409 screening-hit` |
+| `:core-authorizes-transition` | recording and `submit` | the recorder holds `screening/record`; the submitter is the creator (C-01) and C-07's gate is core's | `403` / `409` |
 
-### D6 — Payment creation and lookup: the existing endpoint, with three small additions
+**What a `201` means, exactly.** The response is a `ScreeningResult` resource
+(*Contracts, published*) with an `auditEventId`. It means *evidence recorded*
+and nothing else: **no payment-state change has occurred, and neither the
+`201` nor the audit event id may be translated into the satellite's `:applied`
+transition acknowledgment**. The satellite's response contract is revised
+accordingly: its success envelope means *evidence recorded, state unchanged*;
+the only acknowledgment of a transition is the `PaymentInstruction` returned
+by `submit`, with `status: pending-approval`. The satellite's `:rejected` and
+`:error` envelopes are its rendering of core's `4xx` problem documents and of
+transport failure. Lists are loaded by seed, never by clients, so a clear
+result against an empty list is accepted only if core holds that empty list
+under that version, which it will not.
+
+### D6 — Payment creation and lookup: the existing endpoint, with three small additions (accepted, amended)
 
 `POST /payment-instructions` is the endpoint; there is no `/v1/payments`. The
 satellite's `PaymentInstruction` maps as follows, and the adapter owns the
@@ -176,18 +178,28 @@ mapping:
 
 | Satellite field | Core field | Rule |
 |---|---|---|
-| `:instruction-id` (client-chosen) | **`clientReference`** — new, optional, string ≤ 128, unique per organisation | a second instruction with the same reference and different content is `409 client-reference-conflict`; the same reference under the same idempotency key is the replay. Core still issues the instruction's `id`. |
-| `:amount 123.4500M` + `:currency` | `amount: {currency, minorUnits}` | converted at the currency's registry scale; a decimal with more scale than the currency carries is **refused by the adapter before sending**, and by core (`422`) if sent as minor units that do not match — core never rounds |
+| `:instruction-id` (client-chosen) | **`clientReference`** — new, optional, string 1–128, unique per organisation | see the reference rules below; core still issues the instruction's `id` |
+| `:amount 123.4500M` + `:currency` | `amount: {currency, minorUnits}` | **exact conversion in the adapter, before submission**: `amount × 10^scale` must be an integer in `int64` — excess scale (`123.4500` for a scale-2 currency when the trailing digits are not zero) and overflow are **refused before sending**; core cannot recover precision an adapter discarded. Core refuses `minorUnits` outside its schema and never rounds |
 | `:originator {:party-id …}` | `debtorAccountId` | core's debtor is a ledger account the organisation owns; the adapter holds the party → account mapping as configuration. `:name` and `:country` of the originator are the organisation's and are not per-instruction fields |
-| `:beneficiary {:party-id :name :country}` | `creditorAccount`, `creditorName`, **`creditorCountry`** — new, optional, ISO 3166-1 alpha-2 | `creditorCountry` exists so a screening rule can name it (D5); it is the only new instruction field |
-| — | `valueDate`, `purposeCode` | required by core and absent from the satellite shape: **the kit's `create-payment` action gains both as explicit arguments**; the adapter does not default them |
+| `:beneficiary {:party-id :name :country}` | `creditorAccount`, `creditorName`, **`creditorCountry`** — new, optional, ISO 3166-1 alpha-2 | `creditorCountry` exists so a screening rule can name it (D5); it is the only new instruction field besides `clientReference` |
+| — | `valueDate`, `purposeCode` | required by core and absent from the satellite shape: **they are arguments of `clofin-agent`'s `create-payment` action contract**, not of the generic kit, and the adapter does not default them |
 | `Idempotency-Key` UUID v4 | `Idempotency-Key` | identical semantics (ADR-0013) |
+
+**`clientReference` rules.** Within an organisation: the same reference under
+the **same** idempotency key with identical content is the replay; the same
+reference under **any** key with different content is `409
+client-reference-conflict`; the same reference with identical content under a
+**different** key is `409 client-reference-exists`, whose problem document
+names the existing `instructionId` — **core never creates a second
+instruction for a reference it holds**. A lost key is therefore resolved by
+the reference, and a replaced key cannot create another instruction.
 
 Core's answers, as today: `201` + `PaymentInstruction` (`status: draft`);
 replay `201` + the same body + `Idempotent-Replayed: true`; `400` validation,
-`401`/`403` principal, `409` key bound to a different digest, `422` refusals.
-The satellite's status-code table is the adapter's; `429`, `500`, `503` and
-`504` are transport-level and never carry a core problem document.
+`401`/`403` principal, `409` key bound to a different digest or the two
+reference conflicts, `422` refusals. The satellite's status-code table is the
+adapter's; `429`, `500`, `503` and `504` are transport-level and never carry a
+core problem document.
 
 **The lookup**, new:
 
@@ -198,11 +210,17 @@ GET /payment-instructions/by-idempotency-key/{key}       (permission payment/rea
 answers `200` with the stored original response (status and body, as replay
 would return it) plus the instruction's current `status`, scoped to the
 caller's organisation; `404` when no key is bound there. It reads the same
-table the write path binds in its transaction, so a `404` is strongly
-consistent: there is no cache and no eventual anything. It resolves a timed-out
-`POST` the way the handover asks; retention is the existing named debt.
+table the write path binds in its transaction, with no cache, so a `404` is
+strongly consistent **as of that read: it means no committed binding existed
+at that instant, and it does not prove that a `POST` still in flight cannot
+commit afterwards.** The client keeps its original key after a `404`,
+re-reads before any decision to resubmit, and resubmits — if at all — under
+the **same** key, which turns a late commit into a replay rather than a second
+instruction. A test races the lookup against an in-flight creation and
+asserts `404` then `200` on one key with one instruction (*Verification*).
+Retention is the existing named debt.
 
-### D7 — Chain confirmations (increment 9, simulation only): a third simulated scheme behind the one settlement door
+### D7 — Chain confirmations (increment 9, simulation only): a third simulated scheme behind the one settlement door (accepted, amended)
 
 A chain confirmation is a scheme response. Core gains a simulated scheme
 **`SIM-EVM`** beside `SIM-RTGS` and `SIM-ACH` (the check constraint and
@@ -211,108 +229,303 @@ covers both), a synthetic token registry (`tokenContract → currency, decimals`
 loaded by seed, and one new operation:
 
 ```
-POST /settlement-batches/{id}/chain-confirmations        (Idempotency-Key required)
+POST /chain-confirmations        (Idempotency-Key required; permission settlement/confirm)
 ```
 
-that validates the event exactly as the gateway's schema states it (closed
-maps; lowercase hex; `eip155:` chain ids as canonical decimals; `uint64` and
-`uint256` bounds; `amountBaseUnits` as a canonical decimal string), **recomputes
-canonical digest v1** from the event and refuses a client digest that differs
-(`422 digest-mismatch`), resolves the instruction by `instructionId` within
-the batch, converts base units to minor units through the token registry
-without rounding, and then **delegates to the same posting path
-`recordSchemeResponse` uses** — kind `settled` for a finalized transfer, kind
-`returned` with reason `reorged` for a reversal — so there is one producer of
-settlement postings (L-21), one replay identity, one receipt rule (L-11) and
-one conflict rule (L-12). The reference is the event identity rendered as
+Organisation-scoped and keyed by core's `instructionId`, so the gateway needs
+no batch id: core resolves the instruction, requires `released`, resolves the
+batch it was released in, validates the event exactly as the gateway's schema
+states it (closed objects; lowercase hex; `eip155:` chain ids as canonical
+decimals; `uint64` and `uint256` bounds; `amountBaseUnits` as a canonical
+decimal string), **recomputes canonical digest v1** from the event and refuses
+a client digest that differs (`422 digest-mismatch`), checks that the event's
+`instructionId` equals the instruction's `clientReference` (`422
+payment-binding-mismatch`), converts base units to minor units through the
+token registry without rounding (`422 transfer-mismatch` when the amount is not
+the instruction's), and then **delegates to the same posting path
+`recordSchemeResponse` uses** — kind `settled` for a finalized transfer — so
+there is one producer of settlement postings (L-21), one receipt rule (L-11)
+and one conflict rule (L-12). The reference is the event identity rendered as
 `eip155:<chain>/<txhash>/<logIndex>`.
 
-Mapping of the gateway's result vocabulary:
+**Event uniqueness, durably and atomically.** The scheme-response replay tuple
+`(batch, instruction, kind, reference)` does not by itself stop the same
+on-chain event from being posted against a second instruction or a second
+batch. A table `chain_confirmation` binds, under a **unique constraint over
+`(organisation_id, chain_id, transaction_hash, log_index)`**, the event
+identity to its `instruction_id`, `settlement_batch_id`, `scheme_response_id`,
+`canonical_digest` and the full canonical event, **inserted in the same
+transaction as the scheme response and its posting**. Arrivals: same identity,
+same digest, same instruction → the stored response, `replayed: true`; same
+identity, different digest → `409 identity-digest-conflict` carrying
+`existingCanonicalDigest`; same identity, same digest, **different
+instruction or batch** → `409 event-bound-elsewhere` naming the existing
+`instructionId`. The organisation is the simulation scope: an event identity
+is unique within an organisation, and the chain id is part of the identity.
+Nothing is posted on any `409`.
 
-| Gateway `:status` | Core answer |
-|---|---|
-| `:posted` | `200` + the scheme-response resource with `journalEntryId` (the posting id), `eventIdentity`, `canonicalDigest`, `instructionId` echoed |
-| `:duplicate` | the stored response of the first arrival, `replayed: true` |
-| `:conflict :identity-digest-conflict` | `409`, with `existingCanonicalDigest` in the problem document; nothing posted |
-| `:pending :awaiting-*` | **not a core state**: an event whose `finality.status` is not `finalized` is refused `422 not-finalized` and retried later by the gateway; core holds no pending confirmations |
-| `:rejected` reasons | `404 payment-not-found`; `409` lifecycle (`payment-state-not-ready`, i.e. not `released`); `422 payment-binding-mismatch`, `unsupported-chain`, `unsupported-token`, `transfer-mismatch`; `403 authorization-denied`; `invalid-chain-proof` — see finality below |
-| `:unavailable` | transport-level `503` from the server, never a problem document core composed |
+**Reorg semantics, v1.** Core's `return` transition applies to a `released`
+instruction only: a reversal event arriving **before** settlement is kind
+`returned` with reason `reorged` and moves `released → returned`, which is
+terminal (ADR-0019). **A reversal arriving after `settled` is refused, `409
+settled-is-terminal`**: `settled` is terminal, the existing return transition
+does not and cannot reverse a settled posting, and this ADR defines no
+compensation operation. If one is ever needed it is an append-only operation
+ruled separately — a reversing journal entry with its own audit event, never a
+mutation of the posted one.
 
-**Finality policy.** Core verifies nothing on any chain: it has no RPC, no
-connectivity, and the constraint forbids both. A confirmation is trusted
-exactly as a `SIM-RTGS` response is trusted today — it is what the caller
-sent, and the caller is a seeded actor holding `settlement/confirm`. The
-gateway's verifier output (`sourceId`, `attestationId`) is **recorded** on the
-scheme response as provenance and rendered in the evidence pack; it is not
-re-verified by core, and the documents say so. **Supported chain ids are
-synthetic or local only** — `eip155:31337` and a `sim:` prefix are the first
-two; `eip155:1` and every other public network id answer `422
-unsupported-chain` by policy, and a test pins the refusal, so that no ledger
-entry can ever be posted on the strength of a real-network transfer. The
-handover's request that core "independently verify chain ID, receipt, topic,
-block hash, finality and reorg policy" is therefore declined as written: the
-only policy core can honestly hold is that it does not look, and the only
-chains it accepts are ones on which no real funds move.
+**Chain schema and allow-list.** The gateway's v1 schema accepts `eip155:`
+identifiers only, and so does core: the pinned allow-list is **`eip155:31337`**
+(a local development chain) and nothing else; a `sim:` prefix is not
+introduced by this ADR and would be a negotiated schema change on both sides.
+`eip155:1` and every other public network id answer `422 unsupported-chain`
+by policy; a test pins the refusal and a negative control proves that widening
+the allow-list fails the policy test.
+
+**Finality and provenance.** Core verifies nothing on any chain: it has no
+RPC, no connectivity, and the constraint forbids both. A confirmation is
+trusted exactly as a `SIM-RTGS` response is trusted today — it is what the
+caller sent, and the caller is a seeded actor holding `settlement/confirm`.
+The gateway's verifier output (`sourceId`, `attestationId`) is **recorded** on
+the confirmation as provenance and rendered in the evidence pack; it is not
+re-verified by core. **Neither side may describe any of this as verified
+real-network settlement**: it is simulation provenance on a local chain, and
+the documents on both sides say so in those words. An event whose
+`finality.status` is not `finalized` is refused `422 not-finalized` and
+retried by the gateway later; core holds no pending confirmations.
 
 **Canonical digest v1** is implemented in core as `clofin.canonical.edn-v1`:
 the 37-byte domain prefix, the type bytes, the key ordering by encoded key
-bytes, depth 16, 65,536-byte ceiling, SHA-256; the event's keyword-valued
-fields are reconstructed from JSON by the schema (only `event/type` and
-`finality.status` are keywords). The three golden vectors the gateway
-publishes are the namespace's tests; a property test asserts that map
-insertion order and integer spelling do not change the digest and that any
-semantic change does.
+bytes, depth 16, the 65,536-byte ceiling, SHA-256; the event's EDN form is
+reconstructed from JSON by the schema (*Contracts, published* gives the key
+and keyword mapping). The three golden vectors the gateway publishes are the
+namespace's tests; a property test asserts that map insertion order and
+integer spelling do not change the digest and that any semantic change does.
 
-### D8 — Authentication and roles: service actors, honestly described
+### D8 — Authentication and roles: service actors, honestly described (accepted)
 
 Two roles join the five: **`screening-service`** holding `screening/record`
 and `payment/read`; **`settlement-feed`** holding `settlement/confirm`,
 `settlement/read` and `payment/read`. The agent acts as an `operator`. All
 three authenticate as every caller does today — `X-Actor-Id` naming a seeded
-actor — and the adapters hold that id as configuration, not as a credential,
-because it is not one. Core's documents, the satellites' READMEs and this ADR
-say in the same words that the transport is **not authenticated in a sense
-that resists an adversary**; the identity-provider integration remains the
-deferred item (COMPLIANCE §4) that would make it so. The ingress keeps its
-existing body bound (`max-body-bytes` in `clofin.http.middleware`) and safe
-JSON decoding; the new endpoints inherit both.
+actor — and the adapters hold that id as **configured identity, not a
+credential**, because it is not one. Core's documents, the satellites' READMEs
+and this ADR say in the same words that the transport is **not authenticated
+in a sense that resists an adversary**; the identity-provider integration
+remains the deferred item (COMPLIANCE §4) that would make it so. The ingress
+keeps its existing body bound (`max-body-bytes` in `clofin.http.middleware`)
+and safe JSON decoding; the new endpoints inherit both.
 
-### D9 — The kit: no core interface, and the word "confidence" never reaches core
+### D9 — The kit: no core interface, and the word "confidence" never reaches core (accepted)
 
 `cloagent-kit` dispatches application-owned executors; its `:confidence` and
 `:action-type` are the application's concern. Core has no endpoint for it and
 gains none; an executor that creates a payment is an `operator` calling
 `POST /payment-instructions` through the agent's transport, and nothing it
-sends carries model confidence. The handover already states that schema
-validity and confidence confer no authorisation; core's answer is that it
-cannot see either.
+sends carries model confidence. Confidence is never a core authorisation
+input.
 
-### D10 — Sequencing, scope and audit tier
+### D10 — Sequencing, scope and audit tier (accepted)
 
 | Brief | Increment | Delivers |
 |---|---|---|
-| TASK-017 | 7 (financial crime) | C-07: screening lists (versioned, seeded), rules, the gate at `submit`, cases and disposition, `creditorCountry`, `POST …/screening-results`, the `screening-service` role, audit vocabulary (`screening.recorded`, `screening.hit`, `case.opened`, `case.dispositioned`) |
-| TASK-018 | 3 (completion) | `clientReference`, `GET …/by-idempotency-key/{key}`, the lookup's permission and tests; small enough to precede TASK-017 |
-| TASK-019 | 9 (first slice) | `SIM-EVM`, the token registry, `POST …/chain-confirmations`, `clofin.canonical.edn-v1` with golden vectors, the `settlement-feed` role, the synthetic-chain policy and its pinned refusal of public ids |
+| TASK-018 | 3 (completion) — **first** | `clientReference` and its three rules, `creditorCountry`, `GET …/by-idempotency-key/{key}`, the lookup race test |
+| TASK-017 | 7 (financial crime) | C-07: screening lists (versioned, seeded), rules, the gate at `submit`, cases and disposition, `POST …/screening-results`, the `screening-service` role, audit vocabulary |
+| TASK-019 | 9 (first slice) | `SIM-EVM`, the token registry, `chain_confirmation`, `POST /chain-confirmations`, `clofin.canonical.edn-v1` with golden vectors, the `settlement-feed` role, the `eip155:31337` allow-list and its pinned refusals, `settlementBatchId` on the instruction resource |
 | TASK-020 | — | UAT-007 corrections (already routed from TASK-016) |
 
 All three code briefs change enforcement code in the authorisation, settlement
 or financial-crime domains: the release that carries them, `ref-3`, is audited
-at the **Sol** tier, full whole-repo (the 2026-08-05 rule). `clofin-trace`
-and `clofin-cockpit` are not changed by any of this; a capture at `ref-3` and
-a cockpit flow for screening are their own briefs under their own owner's
-authorisation.
+at the **Sol** tier, full whole-repo (the 2026-08-05 rule). The test
+identifiers in *Verification* are executable names, and **the release waits
+on their actual results**, in the REQs and in Master Control's reproduction,
+not on their existence. `clofin-trace` and `clofin-cockpit` are not changed by
+any of this; a capture at `ref-3` and a cockpit flow for screening are their
+own briefs under their own owner's authorisation.
+
+## Contracts, published
+
+OpenAPI fragments as the briefs will add them to `api/openapi.yaml`. Every
+object is closed (`additionalProperties: false`); every enum is a copy the
+contract test discovers.
+
+**Instruction additions** (`CreatePaymentInstructionRequest` and
+`PaymentInstruction`):
+
+```yaml
+clientReference:    { type: string, minLength: 1, maxLength: 128, pattern: '^[\x21-\x7E]+$' }  # printable ASCII, no spaces
+creditorCountry:    { type: string, pattern: '^[A-Z]{2}$' }                                      # ISO 3166-1 alpha-2, syntax only
+settlementBatchId:  { type: string, format: uuid }   # PaymentInstruction only; present from `released` onward
+```
+
+**Screening** (TASK-017):
+
+```yaml
+ScreeningRule:
+  required: [field, operator, value]
+  properties:
+    field:    { type: string, enum: [creditor-name, creditor-account, creditor-country] }
+    operator: { type: string, enum: [exact] }
+    value:    { type: string, minLength: 1 }
+ScreeningEntry:
+  required: [id, rules]
+  properties:
+    id:    { type: string, minLength: 1 }
+    rules: { type: array, minItems: 1, items: { $ref: '#/components/schemas/ScreeningRule' } }
+ScreeningList:                       # read-only resource; loaded by seed, never by clients
+  required: [version, entries, loadedAt]
+  properties:
+    version:  { type: string, minLength: 1, maxLength: 128 }
+    entries:  { type: array, items: { $ref: '#/components/schemas/ScreeningEntry' } }
+    loadedAt: { type: string, format: date-time }
+ScreeningResultRequest:              # POST /payment-instructions/{id}/screening-results
+  required: [organisationId, listVersion, outcome, matchedEntries, instructionDigest]
+  properties:
+    organisationId:    { type: string, format: uuid }
+    listVersion:       { type: string, minLength: 1, maxLength: 128 }
+    outcome:           { type: string, enum: [clear, hit] }
+    matchedEntries:    { type: array, items: { $ref: '#/components/schemas/ScreeningEntry' } }  # empty iff outcome is clear
+    instructionDigest: { type: string, pattern: '^[0-9a-f]{64}$' }   # core's canonical digest of the stored instruction's immutable fields
+    screenedAt:        { type: string, format: date-time }
+ScreeningResult:                     # 201
+  required: [id, organisationId, instructionId, listVersion, outcome, matchedEntries,
+             coreOutcome, coreMatchedEntries, agrees, instructionDigest, recordedBy, recordedAt, auditEventId]
+  properties:
+    coreOutcome: { type: string, enum: [clear, hit] }   # core's recomputation; agrees = (outcome, matchedEntries) equal
+    # … the remaining properties as named, with the types of their request counterparts
+```
+
+Satellite rule-field mapping: `beneficiary-name → creditor-name`,
+`beneficiary-party-id → creditor-account`, `beneficiary-country →
+creditor-country`. `originator-*` rules have no per-instruction field in core;
+a list carrying one is refused `422 unsupported-rule-field` at load, so the
+adapter refuses it before sending.
+
+**Idempotency lookup** (TASK-018):
+
+```yaml
+IdempotencyKeyLookup:                # GET /payment-instructions/by-idempotency-key/{key}
+  required: [idempotencyKey, instructionId, boundAt, originalStatus, originalBody, currentStatus]
+  properties:
+    idempotencyKey: { type: string, format: uuid }
+    instructionId:  { type: string, format: uuid }
+    boundAt:        { type: string, format: date-time }
+    originalStatus: { type: integer }                                  # the stored HTTP status, 201
+    originalBody:   { $ref: '#/components/schemas/PaymentInstruction' } # as stored at creation
+    currentStatus:  { $ref: '#/components/schemas/PaymentStatus' }
+```
+
+**Chain confirmations** (TASK-019):
+
+```yaml
+ChainTransferEvent:                  # the gateway's normalized event, in JSON
+  required: [eventVersion, eventType, instructionId, chainId, transaction, block, finality, transfer]
+  properties:
+    eventVersion:  { type: integer, enum: [1] }
+    eventType:     { type: string, enum: [erc20/transfer] }
+    instructionId: { type: string, minLength: 1, maxLength: 128 }     # the satellite reference = clientReference
+    chainId:       { type: string, pattern: '^eip155:(0|[1-9][0-9]{0,77})$' }
+    transaction:   { required: [hash, logIndex], properties: { hash: { pattern: '^0x[0-9a-f]{64}$' }, logIndex: { type: integer, minimum: 0 } } }
+    block:         { required: [hash, number],   properties: { hash: { pattern: '^0x[0-9a-f]{64}$' }, number:   { type: integer, minimum: 0 } } }
+    finality:      { required: [status, confirmations], properties: { status: { enum: [finalized] }, confirmations: { type: integer, minimum: 1 } } }
+    transfer:
+      required: [tokenContract, fromAddress, toAddress, amountBaseUnits]
+      properties:
+        tokenContract:   { pattern: '^0x[0-9a-f]{40}$' }
+        fromAddress:     { pattern: '^0x[0-9a-f]{40}$' }
+        toAddress:       { pattern: '^0x[0-9a-f]{40}$' }
+        amountBaseUnits: { type: string, pattern: '^(0|[1-9][0-9]*)$' }
+CanonicalDigest:
+  required: [algorithm, version, value]
+  properties:
+    algorithm: { enum: [sha-256] }
+    version:   { type: integer, enum: [1] }
+    value:     { type: string, pattern: '^[0-9a-f]{64}$' }
+ChainConfirmationRequest:            # POST /chain-confirmations
+  required: [organisationId, instructionId, event, canonicalDigest, provenance]
+  properties:
+    organisationId:  { type: string, format: uuid }
+    instructionId:   { type: string, format: uuid }                   # core's id
+    event:           { $ref: '#/components/schemas/ChainTransferEvent' }
+    canonicalDigest: { $ref: '#/components/schemas/CanonicalDigest' }
+    provenance:
+      required: [authentication, sourceId, attestationId]
+      properties:
+        authentication: { enum: [verified] }                          # `unverified` is refused: 422 provenance-unverified
+        sourceId:       { type: string, minLength: 1, maxLength: 128 }
+        attestationId:  { type: string, minLength: 1, maxLength: 256 }
+ChainConfirmation:                   # 200 (replay: the same body, replayed: true)
+  required: [id, organisationId, instructionId, settlementBatchId, schemeResponseId, journalEntryId,
+             kind, eventIdentity, canonicalDigest, provenance, replayed, recordedAt, simulated]
+  properties:
+    kind:          { enum: [settled, returned] }
+    eventIdentity: { required: [chainId, transactionHash, logIndex] }
+    simulated:     { type: boolean, enum: [true] }
+```
+
+**Digest reconstruction** (how core rebuilds the gateway's EDN event from the
+JSON to recompute v1; the only keywords are the three named):
+
+| JSON key | EDN key | Value |
+|---|---|---|
+| `eventVersion` | `:event/version` | integer |
+| `eventType` | `:event/type` | keyword `:erc20/transfer` |
+| `instructionId`, `chainId` | `:instruction-id`, `:chain-id` | string |
+| `transaction.hash`, `transaction.logIndex` | `:transaction {:hash :log-index}` | string, integer |
+| `block.hash`, `block.number` | `:block {:hash :number}` | string, integer |
+| `finality.status`, `finality.confirmations` | `:finality {:status :confirmations}` | keyword `:finalized`, integer |
+| `transfer.tokenContract` … `amountBaseUnits` | `:transfer {:token-contract :from-address :to-address :amount-base-units}` | strings |
+
+**Identity mapping** across the boundary:
+
+| Satellite holds | Core field | Where it is learned |
+|---|---|---|
+| its `instruction-id` | `clientReference` | sent on creation; echoed on the instruction |
+| — | `id` (the instruction's uuid) | the creation response, kept with the prepared request |
+| — | `settlementBatchId` | on the instruction resource from `released`; the gateway never needs it |
+| the gateway event's `instruction-id` | must equal the instruction's `clientReference` | checked at `POST /chain-confirmations` |
+
+## Rulings (the operator, 2026-10-03)
+
+Recorded verbatim in substance. D3, D4, D8, D9 and D10 accepted as proposed,
+with: an ignored version header is not version negotiation (D3); creation maps
+to `draft`, screening does not bypass approval or release, and a chain
+confirmation requires `released` and the appropriate batch (D4); `X-Actor-Id`
+is configured identity, not a credential, on both sides (D8); the kit has no
+core interface and confidence never becomes an authorisation input (D9);
+TASK-018 first, the control-bearing release under a Sol-tier whole-repository
+audit, executable test identifiers and actual results before release (D10).
+D5 amended: both evidence outcomes supported, recomputed and compared; the
+transition exclusively core's; a `201` receipt or audit-event id is not
+`:applied`; the satellite's success envelope means evidence recorded with no
+state change. D6 amended: `valueDate` and `purposeCode` in `clofin-agent`'s
+action-specific contract; exact conversion with excess scale and overflow
+refused before submission; same reference and identical content under a
+different key returns the existing instruction or an explicit conflict, never
+a second instruction; a strongly consistent `404` proves only that no
+committed binding existed at that read, the original key is preserved, and
+the race is tested. D7 amended: durable, atomic uniqueness of
+`(chain-id, transaction-hash, log-index)` bound to instruction and canonical
+data with an explicit organisation scope, cross-instruction and cross-batch
+conflict tests, one posting path; post-settlement reorg refused in v1 with no
+claim that `return` reverses a settled posting; the allow-list is
+`eip155:31337`, no `sim:` prefix without a negotiated schema change, public
+networks refused with a mandatory negative control; simulation provenance
+recorded without chain verification and never described as verified
+real-network settlement. Core, trace and cockpit unchanged by the review.
 
 ## Alternatives considered
 
 | Option | Why it was rejected |
 |---|---|
-| `application/edn` as a second representation at core | Every contract example, error shape and recorded fixture would need an EDN twin maintained by hand — the L-6/L-14/L-16 class. Left to the operator as the alternative under D3. |
+| `application/edn` as a second representation at core | Every contract example, error shape and recorded fixture would need an EDN twin maintained by hand — the L-6/L-14/L-16 class. |
 | New states `awaiting-screening` and `ready-for-processing` in the lifecycle table | They name what `draft` and `pending-approval` already mean; a second name for one state is a copy that drifts, and the diagrams, the contract enum, the check constraint and the state×event walk would all gain members for no new behaviour. |
 | Core trusts a client's `:clear` and transitions on it | Inverts C-07 — *no instruction can be released without a completed screening decision* means core's decision. A client result is evidence; core re-screens against the same list version. |
-| A chain-confirmation path separate from scheme responses | A second producer of settlement postings, a second replay identity and a second receipt rule — the 2C-009 shape (L-21). One door, one posting path. |
-| Accepting `eip155:1` and other public chain ids | A posting on the strength of a real-network transfer would make the disclaimer false. Refused by policy and pinned by a test. |
+| A chain-confirmation path separate from scheme responses | A second producer of settlement postings, a second receipt rule — the 2C-009 shape (L-21). One door, one posting path; the event-identity table adds uniqueness, not a second path. |
+| Keying chain confirmations by batch id | The gateway's event carries no batch; core resolves the batch from the released instruction, which it alone knows. |
+| Accepting `eip155:1` and other public chain ids, or a `sim:` prefix now | A posting on the strength of a real-network transfer would make the disclaimer false; refused by policy and pinned by a test. A new prefix is a schema change both sides must negotiate. |
 | Core verifying chain data itself | Requires connectivity the constraint forbids, and a trust decision about a chain nobody simulated. Core records the gateway's provenance and does not look. |
+| A compensation operation for post-settlement reorgs in v1 | `settled` is terminal and `return` does not reverse a posting; an append-only compensation is a separate ruling, not a side effect of this one. |
 | Satellites simulating ledger entries locally | ADR-0026: a client owns no truth. The handover forbids it too. |
 | Calling the transport "authenticated" because the satellite adds mTLS or signatures on its side | Core's authentication is scaffolding; a claim on one side of a boundary the other side cannot honour is an overstatement (L-14). |
 
@@ -327,52 +540,62 @@ authorisation.
 - C-07 is built as designed, and the fc satellite becomes a pre-screening
   client that can refuse early rather than a component core must trust.
 - Chain confirmations reuse the receipt, replay and conflict rules three
-  audits have already tested, and the synthetic-chain policy keeps the
-  disclaimer true by construction.
+  audits have already tested, gain a durable event-identity binding, and the
+  local-chain-only policy keeps the disclaimer true by construction.
 
 **Negative / accepted cost**
 
-- The satellites' adapters carry the EDN↔JSON mapping and the party → account
-  configuration; the kit's `create-payment` action grows two arguments.
+- The satellites' adapters carry the EDN↔JSON mapping, the exact decimal
+  conversion and the party → account configuration; `clofin-agent`'s
+  `create-payment` action grows two arguments.
 - A "pending" confirmation does not exist in core; the gateway must retry a
-  not-yet-finalized event rather than park it.
+  not-yet-finalized event rather than park it. A post-settlement reorg is
+  refused in v1.
 - `ref-3` is a Sol-tier whole-repo audit, after three control-bearing
   increments.
 
 **Risks and how they are mitigated**
 
-- *The mapping tables drift from the contract.* Each table in this ADR names
-  core fields that the contract test and the conformance test exercise; a
-  renamed field fails those before it fails a satellite.
+- *The mapping tables drift from the contract.* Each table names core fields
+  that the contract test and the conformance test exercise; a renamed field
+  fails those before it fails a satellite.
 - *A satellite describes the integration as more than it is.* Core's documents
-  carry the authentication sentence and the synthetic-chain policy; the
+  carry the authentication sentence and the local-chain policy; the
   satellites' READMEs are asked to quote, not paraphrase (ADR-0020 rule 3
   applied across the boundary).
 - *Two digests of one event disagree.* Core recomputes v1 and refuses a
   mismatch before it reads anything else from the event.
+- *A `404` is read as proof of absence.* The lookup's contract says what it
+  proves, the client keeps its key, and the race test exists.
 
 ## Verification
 
-Each row of the handover's §6 table has a test in core, named here so the
-briefs inherit them:
+Each row of the handover's §6 table has an executable test in core, named as
+`namespace/deftest`; the briefs inherit these names, and the release waits on
+their results.
 
-| Scenario | Test, in core |
+| Scenario | Test |
 |---|---|
-| Invalid or unauthenticated caller | existing principal tests; the two new roles in `authz/model-test`'s both-directions permission walk |
-| Same logical payment retried after a timeout | `ac-…-the-lookup-returns-the-stored-response-and-current-status` in `api/payments-api-test`; a `404` only when no key is bound |
-| Concurrent equivalent submissions | the existing two-connection latch test over `execute-once!` (one effect, one replay) — extended to assert one `clientReference` row |
-| Same key, different instruction data | existing `409` test; plus `clientReference` reuse with different content → `409`, no new row |
-| Screening hit | `submit` answers `409 screening-hit`; no `payment.submitted` event; a case row exists |
-| Clear with stale list or mismatched instruction | `422 list-version-not-accepted` / `422 instruction-digest-mismatch`; the instruction unchanged |
-| Screening race against another transition | two-connection latch test: `amend` and `screening-result` on one instruction serialise on the `FOR UPDATE` read; at most one wins (L-8) |
-| Identical chain event delivered repeatedly, and after restart | the replay-key unique constraint; the stored response returned on the second pool after the first is closed (`recon/concurrency-test`'s shape) |
-| Same identity, inconsistent content | `409` with `existingCanonicalDigest`; journal entry count unchanged |
-| Finality, binding or amount not verifiable | `422 not-finalized` / `payment-binding-mismatch` / `transfer-mismatch`; nothing posted |
-| Chain reorganisation | kind `returned`, reason `reorged`: `released → returned`, a reversing entry, no row updated (the append-only triggers' raw-SQL tests) |
-| Wrong response contract | the conformance test over every new operation (status declared, required members present, enum values declared) |
-| Core failure or ambiguous outcome | the lookup endpoint; and `unit-of-work-test`'s matrix extended to the screening and confirmation services (L-13) |
-| Public chain ids refused | `unsupported-chain` for `eip155:1`, pinned; a negative control that widening the allowed set fails the policy test |
-| Canonical digest v1 | the three golden vectors; a property test over ordering and spelling invariance |
+| Invalid or unauthenticated caller | `clofin.authz.model-test/every-permission-the-router-requires-is-granted-and-every-grant-is-required` (both directions, the two new roles included); `clofin.api.payments-api-test/a-006-…` family for principal refusals |
+| Same logical payment retried after a timeout | `clofin.api.payments-api-test/ac-18-1-the-lookup-returns-the-stored-response-and-current-status`; `…/ac-18-2-the-lookup-answers-404-only-when-no-key-is-bound` |
+| The lookup raced against an in-flight creation | `clofin.api.payments-api-test/ac-18-3-a-404-during-an-in-flight-creation-becomes-200-on-the-same-key-with-one-instruction` (two connections, a latch between the key binding and the commit) |
+| Concurrent equivalent submissions | the existing `clofin.api.payments-api-test/one-key-two-concurrent-submissions-one-effect-one-replay`, extended to assert one `clientReference` row |
+| Same key, different instruction data | the existing `409` test; `…/ac-18-4-a-reused-client-reference-with-different-content-is-409-and-creates-nothing` |
+| Same reference, identical content, different key | `…/ac-18-5-a-reused-client-reference-under-a-new-key-answers-409-naming-the-existing-instruction` |
+| Screening hit | `clofin.api.screening-api-test/ac-17-1-submit-answers-409-screening-hit-and-emits-no-payment-submitted-event`; `…/ac-17-2-a-hit-opens-a-case-in-the-same-transaction` |
+| Clear with stale list or mismatched instruction | `…/ac-17-3-an-unaccepted-list-version-is-422`; `…/ac-17-4-an-instruction-digest-mismatch-is-422-and-changes-nothing` |
+| Client result disagrees with core's recomputation | `…/ac-17-5-a-result-core-cannot-reproduce-is-422-screening-result-mismatch-and-is-recorded-as-refused` |
+| Evidence is not a transition | `…/ac-17-6-a-201-screening-result-leaves-status-draft-and-emits-no-transition-event` |
+| Screening race against another transition | `clofin.recon.concurrency-test`'s shape, new namespace `clofin.screening.concurrency-test/ac-17-7-amend-and-screening-result-serialise-on-the-instruction-row` |
+| Identical chain event delivered repeatedly, and after restart | `clofin.api.chain-confirmations-api-test/ac-19-1-the-second-delivery-replays-the-first-response`; `…/ac-19-2-the-replay-survives-a-new-connection-pool` |
+| Same identity, inconsistent content | `…/ac-19-3-a-different-digest-under-one-identity-is-409-and-posts-nothing` |
+| Same identity bound to another instruction or batch | `…/ac-19-4-an-identity-already-bound-elsewhere-is-409-event-bound-elsewhere` (cross-instruction and cross-batch cases) |
+| Finality, binding or amount not verifiable | `…/ac-19-5-not-finalized-is-422`; `…/ac-19-6-a-client-reference-that-is-not-the-instructions-is-422`; `…/ac-19-7-an-amount-that-is-not-the-instructions-is-422` |
+| Chain reorganisation | `…/ac-19-8-a-reversal-before-settlement-returns-the-instruction`; `…/ac-19-9-a-reversal-after-settlement-is-409-settled-is-terminal-and-mutates-nothing` |
+| Public chain ids refused | `…/ac-19-10-eip155-1-is-422-unsupported-chain`; negative control `clofin.settlement.chain-policy-test/widening-the-allow-list-fails-this-test` |
+| Wrong response contract | `clofin.api.conformance-test` over every new operation (status declared, required members present, enum values declared) |
+| Core failure or ambiguous outcome | the lookup; `clofin.audit.unit-of-work-test/every-audit-composing-service-is-covered-here` extended to the screening and confirmation services (L-13) |
+| Canonical digest v1 | `clofin.canonical.edn-v1-test/the-three-golden-vectors`; `…/insertion-order-and-integer-spelling-do-not-change-the-digest`; `…/every-semantic-change-changes-the-digest` |
 
 Mechanically, every guard above lands in `make verify` or `make test-it`; the
 partial-set sweep's discovered sets (schemes, roles, permissions, audit
