@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | **Increment** | 5v.4 (the visual layer, fourth increment) |
-| **Status** | `IN PROGRESS` — dispatched 2026-10-02 |
+| **Status** | `CLOSED` — `clofin-trace` PR #4 (`0752637`) + `clofin-core` PR #38 (`fa5e790`), merged 2026-10-03 in the brief's order; eleven objections ruled below; the walkthrough replays `ref-2` |
 | **Depends on** | `ref-2` released ✅ (tag object `420722f` → `32dfcc9`, pre-release 401516365); TASK-015 ✅ (the harness that binds a capture to its own process) |
 | **Blocks** | — (increment 7 does not wait on this; the cockpit does not either) |
 | **Requirements** | D5; ADR-0020 rules 1–3; ADR-0022; ADR-0027 §3a; the condition carried from 015-REQ O-5 |
