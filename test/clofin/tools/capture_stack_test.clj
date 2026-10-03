@@ -21,7 +21,9 @@
   is established is narrower and is what a stamp's consumers actually need —
   that the process which answered is the one this run spawned, from a worktree
   verified clean at that commit."
-  (:require [clofin.tools.capture.stack :as stack]
+  (:require [clofin.tools.capture :as capture]
+            [clofin.tools.capture.bundle :as bundle]
+            [clofin.tools.capture.stack :as stack]
             [clojure.data.json :as json]
             [clojure.java.io :as io]
             [clojure.java.shell :as shell]
@@ -284,6 +286,90 @@
           (is (true? (boolean (stack/self-identifies? moved))))))
       (is (true? (boolean (stack/self-identifies? ".")))
           "this tree renders instanceId (ADR-0027)"))))
+
+;; ---------------------------------------------------------------------------
+;; What start! established is carried, so that it can be stamped (TASK-016)
+;; ---------------------------------------------------------------------------
+
+(defn- sleeping-child
+  "An executable standing in for the `clojure` CLI: it ignores `-M:run` and
+  stays alive, so `start!` gets past the liveness check and reaches the
+  identity gate — which is the part under test. The responder on the port is
+  what answers; this child only has to be the process the run started."
+  []
+  (let [f (java.io.File/createTempFile "clofin-child" ".sh")]
+    (spit f "#!/bin/sh\nexec sleep 30\n")
+    (.setExecutable f true)
+    (.deleteOnExit f)
+    (str f)))
+
+(defn- start-alive
+  [server worktree]
+  (stack/start! {:worktree (str worktree)
+                 :db {:url "jdbc:postgresql://127.0.0.1:1/nothing"
+                      :user "nobody" :password "nothing"}
+                 :port (port server)
+                 :clojure-bin (sleeping-child)
+                 :log-file nil
+                 :timeout-seconds 10
+                 :instance-id "run-under-test"
+                 :source-commit commit}))
+
+(defn- stamped
+  "What a capture run started this way would stamp: `capture!`'s own stamp
+  completion, read back off the wire shape every artifact is written in."
+  [running]
+  (get (bundle/provenance->wire (capture/run-stamp {} "0013" running)) "identityBinding"))
+
+(deftest ac-1-start-carries-the-binding-it-established
+  (testing "one responder for both cases, echoing the run's instance id and the
+            commit: which binding applies is read from the worktree, never from
+            the answer, so only the worktree differs below"
+    (with-responder [server (info {"instanceId" "run-under-test"})]
+      (testing "a worktree whose GET / renders instanceId binds by instance id"
+        (doseq [worktree [(worktree! true)
+                          ;; This tree's own source — src/ is identical to
+                          ;; ref-2's, the first tag whose GET / renders it.
+                          (System/getProperty "user.dir")]]
+          (let [running (start-alive server worktree)]
+            (try
+              (is (= :instance-id (:identity-binding running)) (str worktree))
+              (is (= "instance-id" (stamped running))
+                  "and it reaches the stamp every artifact carries")
+              (finally (stack/stop! running))))))
+      (testing "a worktree whose source does not render it binds by port
+                exclusion — even though the responder offers the right id"
+        (let [running (start-alive server (worktree! false))]
+          (try
+            (is (= :port-exclusion (:identity-binding running)))
+            (is (= "port-exclusion" (stamped running)))
+            (finally (stack/stop! running)))))))
+
+  (testing "and a start that cannot establish either binding returns nothing to
+            stamp: it throws, and destroys the child it started"
+    (with-responder [server (info {"instanceId" "some-other-run"})]
+      (let [spawned (atom nil)
+            real    @#'stack/process]
+        (with-redefs [stack/process (fn [opts] (reset! spawned (real opts)))]
+          (is (thrown-with-msg? clojure.lang.ExceptionInfo #"reports instance id"
+                                (start-alive server (worktree! true)))))
+        (is (some? @spawned) "non-vacuity: a child was spawned")
+        (is (.waitFor ^Process @spawned 5 java.util.concurrent.TimeUnit/SECONDS)
+            "start! refused and left the child it spawned running")))))
+
+(deftest a-worktree-the-harness-cannot-read-refuses-before-anything-is-spawned
+  (testing "which gate applies is decided before the child exists, so a refusal
+            there has no child to leave behind holding the port"
+    (with-responder [server (info {"instanceId" "run-under-test"})]
+      (let [spawned (atom 0)
+            no-src  (.toFile (java.nio.file.Files/createTempDirectory
+                              "clofin-no-src"
+                              (into-array java.nio.file.attribute.FileAttribute [])))]
+        (with-redefs [stack/process (fn [_] (swap! spawned inc)
+                                      (.start (ProcessBuilder. ["sleep" "30"])))]
+          (is (thrown-with-msg? clojure.lang.ExceptionInfo #"is not readable"
+                                (start-alive server no-src))))
+        (is (zero? @spawned) "start! spawned a child before deciding which gate applies")))))
 
 ;; ---------------------------------------------------------------------------
 ;; (e) liveness is re-checked, not checked once

@@ -23,6 +23,9 @@
             [clofin.tools.capture.bundle :as bundle]
             [clofin.tools.capture.provenance :as prov]
             [clofin.tools.capture.quotations :as quotations]
+            [clofin.tools.capture.scenarios :as scenarios]
+            [clofin.tools.capture.stack :as stack]
+            [clofin.tools.capture.store :as store]
             [clojure.data.json :as json]
             [clojure.java.io :as io]
             [clojure.string :as str]
@@ -188,7 +191,9 @@
 
 (defn- complete-bundle
   []
-  (bundle-with (assoc (stamp (fake-git (answers))) :schema-version-applied "0011")))
+  (bundle-with (assoc (stamp (fake-git (answers)))
+                      :schema-version-applied "0011"
+                      :identity-binding "port-exclusion")))
 
 (defn- temp-path [name]
   (io/file (System/getProperty "java.io.tmpdir")
@@ -225,6 +230,7 @@
    ["releaseAudit" "sourceSha256"]
    ["capturedAt"]
    ["schemaVersionApplied"]
+   ["identityBinding"]
    ["harness" "commit"]])
 
 (deftest ac-2-the-harness-cannot-emit-an-unstamped-bundle
@@ -472,7 +478,9 @@
                                     :name "bundles/example.json" :sha256 "c"}]}))})
 
 (deftest ac-3-every-writer-refuses-an-incomplete-stamp-and-leaves-nothing-behind
-  (let [complete (assoc (stamp (fake-git (answers))) :schema-version-applied "0011")]
+  (let [complete (assoc (stamp (fake-git (answers)))
+                        :schema-version-applied "0011"
+                        :identity-binding "port-exclusion")]
     (testing "the positive case first, so the matrix below cannot pass by
               refusing everything"
       (doseq [[name* write!] writers]
@@ -508,6 +516,136 @@
       (is (= discovered (set (keys writers)))
           (str "clofin.tools.capture.bundle exposes " (pr-str (vec (sort discovered)))
                " and this namespace exercises " (pr-str (vec (sort (keys writers)))))))))
+
+;; ---------------------------------------------------------------------------
+;; How the capture bound to its process — stamped, not only printed (TASK-016)
+;; ---------------------------------------------------------------------------
+;;
+;; TASK-015's ruling on objection O-5 accepted the two bindings ADR-0027 §3a
+;; describes, on one condition: the bundle must *stamp* which one a capture
+;; used, so that a reader of a fixture can tell without the run's console. The
+;; field's absence is covered by the matrix above, which walks
+;; `provenance/required`; these cover its value, its place on the wire and the
+;; one function that puts it into the stamp.
+
+(deftest ac-1-every-writer-refuses-an-identity-binding-that-is-not-one-of-the-two
+  (let [complete (assoc (stamp (fake-git (answers)))
+                        :schema-version-applied "0011"
+                        :identity-binding "port-exclusion")]
+    (doseq [[name* write!] writers
+            [why value] [["a plausible wrong value" "self-report"]
+                         ["the keyword rather than its wire name" :instance-id]
+                         ["a blank" "   "]]]
+      (testing (str name* " with identityBinding " (pr-str value) " — " why)
+        (let [path (temp-path "artifact.json")]
+          (is (thrown-with-msg?
+               clojure.lang.ExceptionInfo #"identity-binding is missing or invalid"
+               (write! (assoc complete :identity-binding value) path)))
+          (is (not (.exists (io/file path)))
+              (str name* " refused and left a file behind")))))
+    (testing "and both real values are written by every writer, so the refusals
+              above cannot pass by refusing everything"
+      (doseq [[name* write!] writers
+              value ["instance-id" "port-exclusion"]]
+        (let [path (temp-path "artifact.json")]
+          (is (map? (write! (assoc complete :identity-binding value) path))
+              (str name* " must write a stamp bound by " value))
+          (is (= value (get-in (json/read-str (slurp path)) ["provenance" "identityBinding"])))
+          (.delete (io/file path)))))))
+
+(deftest ac-1-the-binding-sits-between-the-schema-version-and-the-harness
+  (testing "the order is fixed, as the brief specifies: the binding beside the
+            schema version, which is the other fact only the running stack supplies"
+    (let [wire (bundle/provenance->wire
+                (assoc (stamp (fake-git (answers)))
+                       :schema-version-applied "0013"
+                       :identity-binding "instance-id"))
+          ks   (vec (keys wire))
+          at   #(.indexOf ^java.util.List ks %)]
+      (is (= "instance-id" (get wire "identityBinding")))
+      (is (= (inc (at "schemaVersionApplied")) (at "identityBinding")) (pr-str ks))
+      (is (= (inc (at "identityBinding")) (at "harness")) (pr-str ks))
+      (is (= "clofin.capture/2" (get wire "schemaVersion"))
+          "a consumer must change with this field, so the schema version does")
+      (testing "and it survives the round trip every writer validates through"
+        (is (= "instance-id" (:identity-binding (bundle/wire->internal wire))))
+        (is (empty? (bundle/stamp-problems wire)))))))
+
+(deftest every-writer-calls-the-one-gate-first
+  (testing "ADR-0022 says every writer refuses through `assert-provenance!` before
+            it opens a file. Asserted per writer — `write!` reached the same
+            definition by another route until TASK-016, and a sentence naming
+            one gate for four writers is only true if each calls it (L-17)"
+    (let [complete (assoc (stamp (fake-git (answers)))
+                          :schema-version-applied "0011"
+                          :identity-binding "port-exclusion")]
+      (doseq [[name* write!] writers]
+        (let [path (temp-path "artifact.json")
+              gate (atom 0)]
+          (with-redefs [bundle/assert-provenance!
+                        (fn [_ _ _] (swap! gate inc)
+                          (throw (ex-info "the gate" {:sentinel true})))]
+            (is (thrown-with-msg? clojure.lang.ExceptionInfo #"the gate"
+                                  (write! complete path))
+                (str name* " opened its file without asking the gate")))
+          (is (= 1 @gate) name*)
+          (is (not (.exists (io/file path))) name*))))))
+
+(deftest ac-1-a-capture-stamps-the-binding-its-start-established
+  (testing "through `capture!` itself, with every side effect stubbed: whatever
+            `start!` established is what every artifact of the run carries. A
+            capture that stamped a constant would pass every test that builds the
+            stamp by hand, and would be wrong exactly for `ref-1`"
+    (doseq [binding [:port-exclusion :instance-id]]
+      (let [base    (stamp (fake-git (answers)))
+            stamped (atom {})
+            writer  (fn [k] (fn [{:keys [provenance]}]
+                              (swap! stamped assoc k (:identity-binding provenance))
+                              {:path (name k) :sha256 "0"}))]
+        (with-redefs [prov/stamp                      (fn [_] base)
+                      stack/worktree!                 (fn [& _] "/nonexistent-worktree")
+                      stack/assert-formatter-matches! (fn [& _] :same)
+                      stack/assert-port-free!         (fn [& _] :free)
+                      store/reset-schema!             (fn [& _] "x_capture")
+                      stack/migrate!                  (fn [& _] :migrated)
+                      stack/start!                    (fn [_] {:process nil
+                                                               :base-url "http://127.0.0.1:1"
+                                                               :readyz "{}"
+                                                               :identity-binding binding})
+                      stack/assert-schema-matches!    (fn [& _] "0013")
+                      stack/assert-same-process!      (fn [_] {})
+                      stack/stop!                     (fn [_] :stopped)
+                      capture/capture-service-info    (fn [& _] service-info)
+                      store/connect                   (fn [_] (reify java.sql.Connection (close [_])))
+                      quotations/extract              (fn [& _] {})
+                      scenarios/all                   []
+                      bundle/write-fixture!           (writer :fixture)
+                      bundle/write-quotations!        (writer :quotations)
+                      bundle/write-manifest!          (writer :manifest)]
+          (capture/capture! {:ref "ref-1" :out (str (.getParentFile (temp-path "x")))
+                             :port 1 :clojure-bin "unused" :db {}}))
+        (is (= {:fixture (name binding) :quotations (name binding) :manifest (name binding)}
+               @stamped)
+            (str "start! established " binding))))))
+
+(deftest ac-1-the-run-stamp-carries-what-start-established
+  (let [base (stamp (fake-git (answers)))]
+    (testing "the wire value is the keyword's name"
+      (is (= "instance-id"
+             (:identity-binding (capture/run-stamp base "0013" {:identity-binding :instance-id}))))
+      (is (= "port-exclusion"
+             (:identity-binding (capture/run-stamp base "0011" {:identity-binding :port-exclusion}))))
+      (is (= "0013" (:schema-version-applied (capture/run-stamp base "0013" {:identity-binding :instance-id})))))
+    (testing "a running stack that carries no binding produces no binding — and
+              the writers' one gate then refuses, rather than this function
+              choosing one"
+      (let [unbound (capture/run-stamp base "0013" {})
+            path    (temp-path "bundle.json")]
+        (is (nil? (:identity-binding unbound)))
+        (is (thrown-with-msg? clojure.lang.ExceptionInfo #"identity-binding is missing"
+                              (bundle/write! {:path path :bundle (bundle-with unbound)
+                                              :service-info service-info})))
+        (is (not (.exists (io/file path))))))))
 
 (deftest a-control-s-statement-carries-the-paragraph-that-scopes-it
   (testing "2C-007 was C-13's seven numbered guarantees being cut off after the

@@ -63,7 +63,11 @@
   Key order is fixed and the tag, SHA and coverage sit together, because the
   object is also the thing `clofin-trace` renders in one block: a SHA shown
   without its coverage invites the reader to supply the missing word, and the
-  word they supply is \"audited\"."
+  word they supply is \"audited\".
+
+  `identityBinding` sits after `schemaVersionApplied` and before `harness`
+  (TASK-016): it is a fact about the captured run, like the schema version the
+  stack reported, and not about the harness that ran it."
   [p]
   (array-map
    "schemaVersion"        prov/schema-version
@@ -81,6 +85,7 @@
                            "sourceSha256" (get-in p [:release-audit :source-sha256]))
    "capturedAt"           (:captured-at p)
    "schemaVersionApplied" (:schema-version-applied p)
+   "identityBinding"      (:identity-binding p)
    "harness"              (array-map
                            "commit" (get-in p [:harness :commit])
                            "dirty"  (boolean (get-in p [:harness :dirty?])))))
@@ -108,6 +113,7 @@
                             :source-sha256 (get-in p ["releaseAudit" "sourceSha256"])}
    :captured-at            (get p "capturedAt")
    :schema-version-applied (get p "schemaVersionApplied")
+   :identity-binding       (get p "identityBinding")
    :harness                {:commit (get-in p ["harness" "commit"])}})
 
 (defn stamp-problems
@@ -381,8 +387,13 @@
   "Validate, then write. There is no other way to produce a bundle file.
 
   Returns `{:path :sha256}`. Throws — leaving nothing behind — when the bundle
-  is not fully stamped."
+  is not fully stamped.
+
+  The stamp is refused through `assert-provenance!` first, as every other
+  writer's is, so that \"the one gate every writer calls first\" (ADR-0022) is
+  a sentence about the code; the bundle-level problems follow."
   [{:keys [path bundle service-info]}]
+  (assert-provenance! (get bundle "provenance") "bundle" path)
   (let [found (problems bundle service-info)]
     (when (seq found)
       (throw (ex-info (str "capture refuses to write " path

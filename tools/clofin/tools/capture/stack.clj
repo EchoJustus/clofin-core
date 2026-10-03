@@ -363,9 +363,16 @@
 (defn start!
   "Start the service from the worktree and wait until it is ready.
 
-  Returns `{:process :base-url :readyz :instance-id :source-commit}`. A stack
-  that never becomes ready is a stopped run with the log named, not a capture
-  against a half-started service.
+  Returns `{:process :base-url :readyz :instance-id :source-commit
+  :self-identifies? :identity-binding}`. A stack that never becomes ready is a
+  stopped run with the log named, not a capture against a half-started service.
+
+  `:identity-binding` is what `assert-same-process!` established at start-up —
+  `:instance-id` or `:port-exclusion` — carried so that `clofin.tools.capture`
+  can **stamp** it rather than only print it (TASK-015's ruling on objection
+  **O-5**, discharged by TASK-016). It cannot change during the run: the gate
+  is chosen once, from the worktree, and every later re-check uses the same
+  one.
 
   **Liveness is asked before any `200` is looked at.** That order is the
   finding: the previous version accepted a success on `/readyz` and only asked
@@ -381,6 +388,11 @@
     (throw (ex-info "capture refuses: a capture run must carry an instance id."
                     {:worktree worktree})))
   (let [base-url (str "http://127.0.0.1:" port)
+        ;; Decided once, from the worktree, **before anything is spawned** — so
+        ;; a worktree the harness cannot read refuses with no child to leave
+        ;; behind, every later call gates the same way as this one, and the
+        ;; answer can never come from the thing being gated.
+        identifies? (self-identifies? worktree)
         p (process {:dir worktree
                     :command [clojure-bin "-M:run"]
                     :env (env-for db port {:instance-id instance-id
@@ -408,17 +420,13 @@
           (and res (= 200 (:status res)))
           (let [running {:process p :base-url base-url :readyz (:body res)
                          :instance-id instance-id :source-commit source-commit
-                         ;; Decided once, from the worktree, and carried — so
-                         ;; every later call gates the same way as this one and
-                         ;; the answer can never come from the thing being
-                         ;; gated.
-                         :self-identifies? (self-identifies? worktree)}]
-            (try
-              (assert-same-process! running)
-              (catch Exception e
-                (.destroy p)
-                (throw e)))
-            running)
+                         :self-identifies? identifies?}]
+            (let [established (try
+                                (assert-same-process! running)
+                                (catch Exception e
+                                  (.destroy p)
+                                  (throw e)))]
+              (assoc running :identity-binding (:identity-established-by established))))
 
           (> (System/currentTimeMillis) deadline)
           (do (.destroy p)

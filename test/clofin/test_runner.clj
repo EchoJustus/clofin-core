@@ -66,6 +66,9 @@
     ;; port and not to a schema version. Needs no service — the stranger on the
     ;; port is a local HttpServer.
     clofin.tools.capture-stack-test
+    ;; The scenario roster, and how a replayed step decides that the refusal
+    ;; it recorded is the refusal its script is about (TASK-016).
+    clofin.tools.capture-scenarios-test
     ;; 2B-007 and 2B-008: the canonical scope sentence has one home, and every
     ;; surface restating it is compared with that home rather than trusted.
     clofin.tools.disclaimer-test])

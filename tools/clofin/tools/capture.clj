@@ -1,6 +1,7 @@
 (ns clofin.tools.capture
-  "`make capture-trace` — run the three scenarios against a stack built from a
-  tagged commit and write one stamped bundle per scenario.
+  "`make capture-trace` — run every scenario in
+  `clofin.tools.capture.scenarios/all` against a stack built from a tagged
+  commit and write one stamped bundle per scenario.
 
   This is the harness [ADR-0020](../../../docs/ADR/0020-two-repositories-and-the-generate-replay-rules.md)
   names as the reason `clofin-trace` can sit outside release-audit scope
@@ -23,10 +24,12 @@
      commit's own service — which must echo that instance id and the commit
      under capture before the run continues, **on every commit whose `GET /`
      can report them**. `ref-1` and earlier cannot; there the binding is the
-     port having been proved free before the child was spawned, and the run
-     says which of the two it used. See `clofin.tools.capture.stack` for why
-     the SHA is established rather than discovered, and for what the echoed
-     identity does and does not prove.
+     port having been proved free before the child was spawned. Which of the
+     two it used is **stamped** into every artifact as `identityBinding`, not
+     only printed (TASK-016, discharging TASK-015's ruling on objection O-5).
+     See `clofin.tools.capture.stack` for why the SHA is established rather
+     than discovered, and ADR-0027 §3a for what each binding does and does
+     not establish.
   4. Captures `GET /` as a fixture — the scope statement, byte for byte,
      never transcribed.
   5. Runs each scenario, recording every request and response, then reads the
@@ -179,6 +182,23 @@
 ;; The run
 ;; ---------------------------------------------------------------------------
 
+(defn run-stamp
+  "The stamp every artifact of this run carries: the artifact-resolved
+  `base-stamp`, completed with the two facts only the running stack can supply.
+
+  `applied` is the schema version the stack reported and the commit's migration
+  index agreed with; `:identity-binding` is how `clofin.tools.capture.stack`
+  established that the process answering is the one this run started —
+  `\"instance-id\"` or `\"port-exclusion\"`, the keyword's name. A `running`
+  map that carries no binding produces a stamp without one, and every writer
+  then refuses it through the one gate they all call first
+  (`bundle/assert-provenance!`) rather than this function guessing which
+  binding it might have been."
+  [base-stamp applied running]
+  (assoc base-stamp
+         :schema-version-applied applied
+         :identity-binding (some-> (:identity-binding running) name)))
+
 (defn capture!
   "Everything, in order, cleaning up the stack whatever happens."
   [{:keys [ref tag out port clojure-bin db]}]
@@ -210,7 +230,7 @@
                                  :instance-id instance-id :source-commit commit})]
       (try
         (let [applied (stack/assert-schema-matches! (:readyz running) worktree)
-              stamp   (assoc base-stamp :schema-version-applied applied)
+              stamp   (run-stamp base-stamp applied running)
               base    (:base-url running)
               info    (capture-service-info base instance-id)]
           (with-open [conn (store/connect db)]
@@ -260,7 +280,7 @@
   (str "make capture-trace [CAPTURE_REF=<ref>] [CAPTURE_OUT=<dir>]\n"
        "clojure -M:capture [--ref <ref>] [--tag <tag>] [--out <dir>] [--port <n>]\n"
        "                   [--db-url <jdbc-url>] [--clojure <path>]\n\n"
-       "Runs the three replay scenarios against a stack built from <ref> and writes\n"
+       "Runs every replay scenario against a stack built from <ref> and writes\n"
        "one stamped bundle per scenario. Defaults: --ref ref-1, --out target/capture,\n"
        "--port 8099, --db-url jdbc:postgresql://localhost:5432/clofin_capture.\n\n"
        "The capture database is dropped and recreated on every run, so its name must\n"
