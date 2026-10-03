@@ -32,7 +32,7 @@ and this table is stale.
 | 8.3 | Cockpit — operation flows, scheme play, evidence view | [TASK-013](briefs/013-TASK-cockpit-operations-and-scheme-simulation.md) | ✅ `CLOSED` — cockpit PR #3 (`7ee7e28`) + REQ-only core PR #25 (`b962d7f`); frozen core held | green, cockpit CI ×2 |
 | 8.4 | Cockpit — Actions scenario runner, PAT-free | [TASK-014](briefs/014-TASK-cockpit-scenario-runner.md) | ✅ `CLOSED` — cockpit PR #4 (`9283dbf`) + REQ-only core PR #27 (`ea428a3`); hosted run #1 against `ref-1` green, 27/27 steps | green, incl. the hosted scenario run |
 | ref-2 | Release remediation — `FEEDBACK-REL-ref-2` (2 B / 20 S / 1 C), then the annotated tag | [TASK-015](briefs/015-TASK-ref-2-release-remediation.md) | ✅ `CLOSED` — merged in PR #31 (`32dfcc9`); both blockers re-verified; **`ref-2` released** — annotated tag `420722f` → `32dfcc9`, pre-release 401516365, mirror check OK (2026-10-02) | green on `32dfcc9` (run 34091727538) |
-| 5v.4 | Trace at `ref-2` — the capture stamps its identity binding; a fourth, reconciliation scenario | [TASK-016](briefs/016-TASK-trace-refresh-at-ref-2.md) | 🔨 `IN PROGRESS` — dispatched 2026-10-02 | — |
+| 5v.4 | Trace at `ref-2` — the capture stamps its identity binding; a fourth, reconciliation scenario | [TASK-016](briefs/016-TASK-trace-refresh-at-ref-2.md) | ✅ `CLOSED` — `clofin-trace` PR #4 (`0752637`) + `clofin-core` PR #38 (`fa5e790`); **live at <https://echojustus.github.io/clofin-trace/>**, replaying `ref-2` (`COMPLETE`, `annotated`, `instance-id`) | green, both repositories, incl. Pages run 37081282071 |
 | 7, 9 | Financial crime; programmable settlement | not yet briefed | 💭 later | — |
 
 **Controls now enforced on `main`.** As of 2026-08-04 the increment-3/4 stack is
