@@ -705,7 +705,7 @@ ERROR:  new row for relation "actor_role" violates check constraint "role_known"
 ERROR:  new row for relation "screening_result" violates check constraint "screening_result_refusal_needs_reason"
 ```
 
-The script is `scratchpad/preflight/0015.sql` in Master Control's session;
+The script is [`preflight/0015-task-017.sql`](preflight/0015-task-017.sql);
 the REQ re-runs every refusal through `clofin.screening.repository-test`.
 
 ## Definition of done

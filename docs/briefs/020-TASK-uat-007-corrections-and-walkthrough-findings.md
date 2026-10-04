@@ -321,7 +321,8 @@ ERROR:  Table reconciliation_statement is append-only: … never by truncate
 ```
 
 Every refusal is the one the corrected script will state. `psql` substitutes
-nothing: the script's note (A-1 item 6) exists because of this.
+nothing: the script's note (A-1 item 6) exists because of this. The script is
+[`preflight/uat-007-task-020.sql`](preflight/uat-007-task-020.sql).
 
 ## Definition of done
 

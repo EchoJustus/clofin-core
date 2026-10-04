@@ -488,8 +488,10 @@ And the positive controls that bound the rules: a second organisation inserted
 in the same transaction accepted `agent-ref-0001` beside the first (the index
 is organisation-scoped); `insert into idempotency_key (…, operation_id) values
 (…, 'createPaymentInstruction')` → `INSERT 0 1`, read back as
-`preflight-key-018 | createPaymentInstruction`. The script is
-`scratchpad/preflight/0014.sql` in Master Control's session; the REQ re-runs
+`preflight-key-018 | createPaymentInstruction`. The scripts are
+[`preflight/0014-task-018.sql`](preflight/0014-task-018.sql) and
+[`preflight/0014-task-018-negative-controls.sql`](preflight/0014-task-018-negative-controls.sql);
+the REQ re-runs
 every refusal above through `clofin.payments.repository-test` on the migrated
 test database.
 
