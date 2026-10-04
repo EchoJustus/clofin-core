@@ -407,7 +407,7 @@ adapter refuses it before sending.
 IdempotencyKeyLookup:                # GET /payment-instructions/by-idempotency-key/{key}
   required: [idempotencyKey, instructionId, boundAt, originalStatus, originalBody, currentStatus]
   properties:
-    idempotencyKey: { type: string, format: uuid }
+    idempotencyKey: { type: string, format: uuid }                    # corrected 2026-10-04 (TASK-018): published as { type: string, minLength: 1, maxLength: 255 } — the key the service accepts is any non-blank string without control characters, not only a UUID
     instructionId:  { type: string, format: uuid }
     boundAt:        { type: string, format: date-time }
     originalStatus: { type: integer }                                  # the stored HTTP status, 201
@@ -579,7 +579,7 @@ their results.
 | Invalid or unauthenticated caller | `clofin.authz.model-test/every-permission-the-router-requires-is-granted-and-every-grant-is-required` (both directions, the two new roles included); `clofin.api.payments-api-test/a-006-…` family for principal refusals |
 | Same logical payment retried after a timeout | `clofin.api.payments-api-test/ac-18-1-the-lookup-returns-the-stored-response-and-current-status`; `…/ac-18-2-the-lookup-answers-404-only-when-no-key-is-bound` |
 | The lookup raced against an in-flight creation | `clofin.api.payments-api-test/ac-18-3-a-404-during-an-in-flight-creation-becomes-200-on-the-same-key-with-one-instruction` (two connections, a latch between the key binding and the commit) |
-| Concurrent equivalent submissions | the existing `clofin.api.payments-api-test/one-key-two-concurrent-submissions-one-effect-one-replay`, extended to assert one `clientReference` row |
+| Concurrent equivalent submissions | the existing `clofin.api.payments-api-test/ac-9-two-concurrent-requests-with-one-key-produce-exactly-one-effect`, extended to assert one `clientReference` row *(corrected 2026-10-04, TASK-018: this row named `one-key-two-concurrent-submissions-one-effect-one-replay`, which never existed; the test it meant is the one named here)* |
 | Same key, different instruction data | the existing `409` test; `…/ac-18-4-a-reused-client-reference-with-different-content-is-409-and-creates-nothing` |
 | Same reference, identical content, different key | `…/ac-18-5-a-reused-client-reference-under-a-new-key-answers-409-naming-the-existing-instruction` |
 | Screening hit | `clofin.api.screening-api-test/ac-17-1-submit-answers-409-screening-hit-and-emits-no-payment-submitted-event`; `…/ac-17-2-a-hit-opens-a-case-in-the-same-transaction` |

@@ -713,6 +713,38 @@ paths:
         that is submitted and approved on its own merits. Retrying anything that
         is not returned is `409`. The two members are mutually exclusive.
 
+        **A `clientReference` names at most one instruction per organisation**
+        (ADR-0028 D6). A client that keeps its own identifier for a payment
+        sends it here, and within the organisation:
+
+        1. the same reference under the **same** `Idempotency-Key` with
+           identical content is the ordinary replay — `201` and
+           `Idempotent-Replayed: true`;
+        2. the same reference under **any** key with different content is `409`
+           with `errors.reason` = `client-reference-conflict`;
+        3. the same reference with identical content under a **different** key
+           is `409` with `errors.reason` = `client-reference-exists`.
+
+        Both refusals name the existing instruction in `errors.instructionId`,
+        persist nothing and do not consume the key: core never creates a second
+        instruction for a reference it holds, so a lost key is resolved by the
+        reference. "Identical content" is equality of `debtorAccountId`,
+        `creditorName`, `creditorAccount`, `creditorCountry`, `amount`,
+        `valueDate`, `purposeCode`, `reversesId` and `retriesId` with the
+        existing instruction **as it is now** — one amended since its creation
+        answers rule 2. Concurrent creations carrying one reference are decided
+        by a unique index, and the one that loses is answered by the same rule.
+        The same reference in another organisation is a different reference.
+
+        **The order the answers are decided in:** authentication, the body's
+        parse and the refusal of members a caller may not set (`createdBy`)
+        come first; then the `Idempotency-Key` — its row is claimed before the
+        creation runs, so the same key with a different body is the key's own
+        `409` (`errors.header` = `Idempotency-Key`) whatever the reference says;
+        then every field, all named at once (`422`); then the reference
+        (`409`); then the rules that need the database — the link target's
+        lifecycle (`409`), the debtor account (`422`).
+
         *Not implemented:* a limit on the total reversed across several
         reversals of one instruction (PR-044). Nothing here stops a second
         reversal being raised against the same settled instruction.
@@ -754,7 +786,43 @@ paths:
         "403":
           $ref: "#/components/responses/Forbidden"
         "409":
-          $ref: "#/components/responses/IdempotencyConflict"
+          description: |
+            One of the conflicts below, in the order they are decided; nothing
+            was persisted under any of them.
+
+            - The `Idempotency-Key` has already been used for a **different**
+              request. `errors.header` is `Idempotency-Key`. Decided before the
+              creation runs, because the key row is claimed first. Not a
+              failure to fix by retrying: resend the original request unchanged,
+              or send the changed one under a new key.
+            - `errors.reason` = `client-reference-conflict`: this organisation
+              already holds an instruction under this `clientReference`, with
+              different content.
+            - `errors.reason` = `client-reference-exists`: it holds one with
+              identical content, created under a different key.
+
+            - The lifecycle refuses the link: `reversesId` names an instruction
+              that is not `settled`, or `retriesId` one that is not `returned`.
+              The problem names the state and the event refused.
+
+            The two reference reasons are `ClientReferenceRefusalReason`, and
+            each names the existing instruction in `errors.instructionId`. No
+            refusal here consumes the key: a corrected request under the same
+            key executes normally.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+              examples:
+                clientReferenceExists:
+                  summary: The reference already names an instruction with this content
+                  value:
+                    type: "https://clofin.dev/problems/conflict"
+                    title: "Conflicting state"
+                    status: 409
+                    errors:
+                      reason: client-reference-exists
+                      instructionId: "0000aaaa-0000-4000-8000-00000000a018"
         "422":
           description: |
             Understood, and cannot be carried out: one or more fields were
@@ -814,6 +882,104 @@ paths:
         "403":
           $ref: "#/components/responses/Forbidden"
 
+  /payment-instructions/by-idempotency-key/{key}:
+    get:
+      tags: [Payments]
+      operationId: lookupPaymentInstructionByIdempotencyKey
+      summary: What an idempotency key is bound to, and the instruction's status now
+      description: |
+        For a client that lost the answer to a creation (ADR-0028 D6). Answers
+        with the response the creation stored — status and body, exactly as a
+        replay would serve them — and the instruction's `status` now, read in
+        the same request. Scoped to the caller's organisation.
+
+        It reads the key table the write path binds inside the creating
+        transaction, with no cache, so its answers mean exactly this:
+
+        - **`200`** — a committed creation bound this key.
+        - **`404`**, `errors.reason` = `no-binding` — **no committed binding
+          existed at the instant of this read.** It does not prove that a
+          creation still in flight cannot commit afterwards: that creation's key
+          row is invisible until it does. Keep the original key, read again
+          before deciding, and resubmit, if at all, under the **same** key —
+          which turns a late commit into a replay rather than a second
+          instruction.
+        - **`409`**, `errors.reason` = `key-bound-to-another-operation` — the
+          key is taken, but not by a creation; `errors.operationId` names the
+          operation that bound it. A key row written before keys recorded their
+          operation answers this too, with `errors.operationId` null — never
+          `404`, which would tell a client to resubmit under a key that is taken.
+
+        The key is a path segment: percent-encode it (RFC 3986). **Not every key
+        the `Idempotency-Key` header accepts can be looked up here**, and the
+        ones that cannot are refused rather than answered `404`:
+
+        - **Only printable ASCII.** A key with any other character is `400` from
+          the service: the transport reads a header's non-ASCII octets one
+          character per octet, which no decoding of a path can be relied on to
+          reproduce, so a lookup could only ever have reported such a key
+          unbound.
+        - **Not `/`, `%` or `\`, and not the keys `.` or `..`.** The HTTP
+          transport refuses an encoded `/` (`%2F`), `%` (`%25`) or `\` (`%5C`),
+          and a segment that is wholly `%2E` or `%2E%2E`, with its own `400`
+          before the service sees the request — that `400` is the transport's,
+          not a problem document — and a client that removes dot segments
+          (RFC 3986 §5.2.4) turns an unencoded `.` or `..` into a different path.
+
+        Any other printable-ASCII key — a space and `+` included, percent-encoded
+        — is looked up exactly as the header carried it. A client that means to
+        use this lookup chooses its keys accordingly; a UUID, the obvious choice,
+        qualifies. A key the header could never have bound — blank once trimmed,
+        over 255 characters, or containing a control character — is `400` from
+        the service too.
+
+        Retention of keys is the existing named debt: the lookup reads whatever
+        rows exist.
+      parameters:
+        - name: key
+          in: path
+          required: true
+          description: |
+            The `Idempotency-Key` the creation was sent with, percent-encoded as
+            a path segment.
+          schema: { type: string, minLength: 1, maxLength: 255 }
+        - $ref: "#/components/parameters/OrganisationId"
+        - $ref: "#/components/parameters/ActorId"
+      responses:
+        "200":
+          description: The creation this key is bound to, and the instruction's status now
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IdempotencyKeyLookup"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          description: |
+            `errors.reason` = `no-binding`, and `detail` carries the sentence the
+            answer stands on: *No committed binding existed at the instant of
+            this read; a creation still in flight may still commit — keep the
+            original key, read again before deciding, and resubmit, if at all,
+            under the same key.*
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: |
+            `errors.reason` = `key-bound-to-another-operation`, and
+            `errors.operationId` the `operationId` that bound the key — or null
+            for a row written before keys recorded their operation. The codes are
+            `IdempotencyKeyLookupRefusalReason`.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+
   /payment-instructions/{id}:
     get:
       tags: [Payments]
@@ -872,9 +1038,14 @@ paths:
         it amends nothing, and a `PATCH` naming a matching one answers `200`.
 
         The members that are neither amendable nor a tenant assertion are
-        `id`, `status`, `createdBy`, `createdAt`, `reversesId` and `retriesId`;
-        naming one of those is `422` rather than being silently ignored — a
-        caller that sent it believes it changed something.
+        `id`, `status`, `createdBy`, `createdAt`, `reversesId`, `retriesId` and
+        `clientReference`; naming one of those is `422` rather than being
+        silently ignored — a caller that sent it believes it changed something.
+        `clientReference` is refused with its own reason — *is set when the
+        instruction is created and cannot be amended* — and the database refuses
+        a change to it from any writer, including adding one to an instruction
+        created without it. `creditorCountry` is amendable, like the other
+        beneficiary members.
 
         This paragraph listed `organisationId` among the `422` members until
         2026-09-06, which was false: the release audit's single authorised
@@ -2570,20 +2741,6 @@ components:
         application/problem+json:
           schema:
             $ref: "#/components/schemas/Problem"
-    IdempotencyConflict:
-      description: |
-        The `Idempotency-Key` has already been used for a **different** request
-        body. Nothing was executed.
-
-        This is not a failure to fix by retrying. Either resend the original
-        request unchanged, or — if the change was intended — send it under a new
-        key. Returning the stored response instead would tell a caller that an
-        amount it never sent had been accepted; executing would be the second
-        payment the key exists to prevent.
-      content:
-        application/problem+json:
-          schema:
-            $ref: "#/components/schemas/Problem"
 
   schemas:
     CurrencyCode:
@@ -3055,6 +3212,27 @@ components:
             Set when the instruction is created and never afterwards. A `PATCH`
             naming it is `422`, and the database refuses a change to the column
             from any writer.
+        clientReference:
+          type: string
+          minLength: 1
+          maxLength: 128
+          pattern: '^[\x21-\x7E]+$'
+          description: |
+            Present only when the creating client sent one: the identifier it
+            keeps for this payment, exactly as sent — printable ASCII, no spaces.
+            At most one instruction per organisation carries a given reference.
+            Set when the instruction is created and never afterwards (ADR-0028
+            D6).
+          examples: ["agent-ref-0001"]
+        creditorCountry:
+          type: string
+          pattern: "^[A-Z]{2}$"
+          description: |
+            Present only when known: the beneficiary's country as an ISO 3166-1
+            alpha-2 **shape** — two uppercase letters. Syntax only; no list of
+            countries is consulted, because the field is synthetic and a
+            membership check would make it look like a real-world validation.
+          examples: ["SG"]
         retriedByIds:
           type: array
           description: |
@@ -3145,6 +3323,23 @@ components:
             Mutually exclusive with `reversesId`: a payment succeeds a settled
             one or replaces a returned one, never both, and sending both is
             `422` naming both members.
+        clientReference:
+          type: string
+          minLength: 1
+          maxLength: 128
+          pattern: '^[\x21-\x7E]+$'
+          description: |
+            Optional. The identifier the client keeps for this payment:
+            printable ASCII, no spaces, 1–128 characters, stored exactly as sent
+            — a trailing space is refused, not removed. Unique per organisation;
+            see the operation for the three rules a repeated reference follows.
+            It cannot be amended or added later.
+        creditorCountry:
+          type: string
+          pattern: "^[A-Z]{2}$"
+          description: |
+            Optional. The beneficiary's country as an ISO 3166-1 alpha-2 shape:
+            two uppercase letters, syntax only. `sg` is refused, not upper-cased.
 
     AmendPaymentInstructionRequest:
       type: object
@@ -3173,6 +3368,13 @@ components:
         valueDate: { type: string, format: date }
         purposeCode:
           $ref: "#/components/schemas/PurposeCode"
+        creditorCountry:
+          type: string
+          pattern: "^[A-Z]{2}$"
+          description: |
+            The beneficiary's country, two uppercase letters, syntax only.
+            `clientReference` is deliberately absent: it is set at creation and
+            a `PATCH` naming it is `422`.
 
     PaymentInstructionActionRequest:
       type: object
@@ -3184,6 +3386,69 @@ components:
       additionalProperties: false
       properties:
         organisationId: { type: string, format: uuid }
+
+    IdempotencyKeyLookup:
+      type: object
+      description: |
+        What a creation's `Idempotency-Key` is bound to (ADR-0028 D6):
+        `originalStatus` and `originalBody` are the response the creation
+        stored, as a replay would serve it, and `currentStatus` is the
+        instruction's status at the time of the read.
+      required: [idempotencyKey, instructionId, boundAt, originalStatus,
+                 originalBody, currentStatus]
+      additionalProperties: false
+      properties:
+        idempotencyKey:
+          type: string
+          minLength: 1
+          maxLength: 255
+          description: |
+            The key, as the service accepts it on the `Idempotency-Key` header:
+            any non-blank string without control characters. Not constrained
+            to a UUID — ADR-0028's fragment said `format: uuid`, which is
+            narrower than what the service binds (corrected there, 2026-10-04).
+        instructionId: { type: string, format: uuid }
+        boundAt:
+          type: string
+          format: date-time
+          description: When the key row was written — the creating transaction's time.
+        originalStatus:
+          type: integer
+          description: The HTTP status the creation stored, `201`.
+        originalBody:
+          $ref: "#/components/schemas/PaymentInstruction"
+        currentStatus:
+          $ref: "#/components/schemas/PaymentStatus"
+
+    ClientReferenceRefusalReason:
+      type: string
+      description: |
+        Why a creation was refused for its `clientReference`, under
+        `errors.reason` on the create operation's `409`. Each comes with
+        `errors.instructionId`, the instruction the reference already names.
+
+        - `client-reference-conflict` — the existing instruction's content, as
+          it is now, differs from this request.
+        - `client-reference-exists` — its content is identical, and it was
+          created under a different `Idempotency-Key`.
+      enum:
+        - client-reference-conflict
+        - client-reference-exists
+
+    IdempotencyKeyLookupRefusalReason:
+      type: string
+      description: |
+        Why the idempotency-key lookup did not answer with a binding, under
+        `errors.reason`.
+
+        - `no-binding` — `404`: no committed binding existed at the instant of
+          the read. A creation still in flight may still commit.
+        - `key-bound-to-another-operation` — `409`: the key is taken by an
+          operation the lookup does not serve, named in `errors.operationId`
+          (null for a row written before keys recorded their operation).
+      enum:
+        - no-binding
+        - key-bound-to-another-operation
 
     PaymentInstructionList:
       type: object

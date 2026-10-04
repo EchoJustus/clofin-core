@@ -38,6 +38,7 @@
   operation added without a walk here fails rather than passing unnoticed —
   which is the whole of standing lesson **L-17**, applied to this file itself."
   (:require [clofin.contract-test :as contract]
+            [clofin.db.core :as db]
             [clofin.idempotency :as idempotency]
             [clofin.routes :as routes]
             [clofin.system :as system]
@@ -176,12 +177,15 @@
                             (json/read-str (:body response))))))
 
 (defn- call
-  "One request, recorded against the operation it exercises."
+  "One request, recorded against the operation it exercises — with the
+  `Idempotency-Key` it carried, so every key row the walk leaves can be checked
+  against the operation that sent it (AC-18-9)."
   [operation-id method uri & opts]
   (let [response (apply request! method uri opts)]
     (swap! recorded conj {:operation-id operation-id
                           :status (:status response)
                           :body (:json response)
+                          :idempotency-key (:idempotency-key (apply hash-map opts))
                           :where (str (name method) " " uri)})
     response))
 
@@ -272,22 +276,46 @@
               :query (str q "&from=" (:from (period)) "&to=" (:to (period)))))
 
       ;; --- payments -------------------------------------------------------
-      (let [raise (fn [amount]
+      (let [creation-key (str (random-uuid))
+            raise (fn [amount & {:as extra}]
                     (get-in (call "createPaymentInstruction" :post "/payment-instructions"
-                                  :actor maker :idempotency-key (str (random-uuid))
-                                  :body {"organisationId" (str org)
-                                         "debtorAccountId" funds
-                                         "creditorName" "Pacific Rim Logistics Pte Ltd"
-                                         "creditorAccount" "SG-SYNTH-88012340"
-                                         "amount" {"currency" "SGD" "minorUnits" amount}
-                                         "valueDate" value-date
-                                         "purposeCode" "SUPP"})
+                                  :actor maker
+                                  :idempotency-key (or (get extra "key") (str (random-uuid)))
+                                  :body (merge {"organisationId" (str org)
+                                                "debtorAccountId" funds
+                                                "creditorName" "Pacific Rim Logistics Pte Ltd"
+                                                "creditorAccount" "SG-SYNTH-88012340"
+                                                "amount" {"currency" "SGD" "minorUnits" amount}
+                                                "valueDate" value-date
+                                                "purposeCode" "SUPP"}
+                                               (dissoc extra "key")))
                             [:json "id"]))
-            settled (raise 125000)
+            ;; The first carries both TASK-018 members, so `PaymentInstruction`
+            ;; is validated with them present everywhere it is returned — the
+            ;; creation, the read, the list, the lookup's `originalBody`.
+            settled (raise 125000 "key" creation-key
+                           "clientReference" "agent-ref-conformance-0001"
+                           "creditorCountry" "SG")
             returned (raise 110000)
             cancelled (raise 130000)
             withdrawn (raise 140000)]
         (call "listPaymentInstructions" :get "/payment-instructions" :actor maker :query q)
+        ;; --- the lookup (TASK-018): its 200, its 404 and its 409 -----------
+        (call "lookupPaymentInstructionByIdempotencyKey" :get
+              (str "/payment-instructions/by-idempotency-key/" creation-key)
+              :actor maker :query q)
+        (call "lookupPaymentInstructionByIdempotencyKey" :get
+              (str "/payment-instructions/by-idempotency-key/" (random-uuid))
+              :actor maker :query q)
+        ;; A reference already held, under a new key: the create's 409.
+        (call "createPaymentInstruction" :post "/payment-instructions"
+              :actor maker :idempotency-key (str (random-uuid))
+              :body {"organisationId" (str org) "debtorAccountId" funds
+                     "creditorName" "Pacific Rim Logistics Pte Ltd"
+                     "creditorAccount" "SG-SYNTH-88012340"
+                     "amount" {"currency" "SGD" "minorUnits" 125000}
+                     "valueDate" value-date "purposeCode" "SUPP"
+                     "clientReference" "agent-ref-conformance-0001" "creditorCountry" "SG"})
         (call "getPaymentInstruction" :get (str "/payment-instructions/" settled)
               :actor maker :query q)
         (call "amendPaymentInstruction" :patch (str "/payment-instructions/" settled)
@@ -297,10 +325,16 @@
               :actor maker :idempotency-key (str (random-uuid))
               :body {"organisationId" (str org) "reason" "Raised against the wrong invoice"})
 
-        (doseq [id [settled returned withdrawn]]
-          (call "submitPaymentInstruction" :post (str "/payment-instructions/" id "/submission")
-                :actor maker :idempotency-key (str (random-uuid))
-                :body {"organisationId" (str org)}))
+        (let [submission-keys (zipmap [settled returned withdrawn]
+                                      (repeatedly #(str (random-uuid))))]
+          (doseq [id [settled returned withdrawn]]
+            (call "submitPaymentInstruction" :post (str "/payment-instructions/" id "/submission")
+                  :actor maker :idempotency-key (get submission-keys id)
+                  :body {"organisationId" (str org)}))
+          ;; A key bound by a submission: the lookup's 409.
+          (call "lookupPaymentInstructionByIdempotencyKey" :get
+                (str "/payment-instructions/by-idempotency-key/" (get submission-keys settled))
+                :actor maker :query q))
         (call "getApprovalQueue" :get "/approvals/queue" :actor checker :query q)
         (doseq [id [settled returned]]
           (call "approvePaymentInstruction" :post (str "/payment-instructions/" id "/approvals")
@@ -415,6 +449,10 @@
                          "reference" (str "SIM-RTN-NO-REASON-" batch)}))))))
   nil)
 
+(def ^:private bound-keys
+  "Every `idempotency_key` row the walk left, captured the moment it finished."
+  (atom nil))
+
 (def ^:private walked
   "The walk, run exactly once however many tests deref it.
 
@@ -422,7 +460,12 @@
   `ac-15-…` builds an organisation of its own, and test order is not defined,
   so an emptiness check let that setup masquerade as the corpus and every
   operation read as unexercised."
-  (delay (reset! recorded []) (walk!) @recorded))
+  (delay (reset! recorded [])
+         (walk!)
+         ;; The key table as the walk left it, read before any other test's
+         ;; fixture cleans it — AC-18-9 asserts over this snapshot.
+         (reset! bound-keys (db/query tdb/*pool* ["select key, operation_id from idempotency_key"]))
+         @recorded))
 
 (defn- corpus [] @walked)
 
@@ -616,6 +659,49 @@
               :when (some #(= "#/components/parameters/IdempotencyKey" (get % "$ref"))
                           (get operation "parameters"))]
           (get operation "operationId"))))
+
+(deftest ac-18-10-the-walk-drives-the-lookup-to-every-answer-it-declares
+  (testing "the lookup's 200, its 404 and its 409, and the creation's reference
+            409 — each validated against the contract by the three dimensions
+            above, which only happens if the walk provokes it"
+    (let [statuses (group-by :operation-id (corpus))]
+      (doseq [[operation-id expected] [["lookupPaymentInstructionByIdempotencyKey" #{200 404 409}]
+                                       ["createPaymentInstruction" #{201 409}]]]
+        (is (= expected (into #{} (map :status) (get statuses operation-id)))
+            (str operation-id " observed " (pr-str (mapv :status (get statuses operation-id))))))
+      (testing "and the 409s are the reasons the contract enumerates"
+        (is (= #{"key-bound-to-another-operation" "no-binding"}
+               (into #{} (keep #(get-in % [:body "errors" "reason"]))
+                     (get statuses "lookupPaymentInstructionByIdempotencyKey"))))
+        (is (= #{"client-reference-exists"}
+               (into #{} (keep #(get-in % [:body "errors" "reason"]))
+                     (get statuses "createPaymentInstruction"))))))))
+
+(deftest every-bound-key-names-the-operation-that-bound-it
+  (testing "AC-18-9. Every key row the walk left names the operation that claimed
+            it — non-null, an operationId the route table has, and exactly the
+            operation the walk sent that key to — and across the walk the
+            distinct set is exactly the six the contract marks as taking the
+            header. Discovered, not listed: the six come from the contract"
+    (corpus)
+    (let [rows @bound-keys
+          route-ops (set (map :operation-id (routes/routes {:config {:environment :test}
+                                                            :pool ::stub})))
+          sent-to (into {} (keep (fn [{:keys [idempotency-key operation-id]}]
+                                   (when idempotency-key [idempotency-key operation-id])))
+                        (corpus))
+          distinct-ops (into (sorted-set) (map :operation-id) rows)]
+      (is (< 6 (count rows)) "non-vacuity: the walk bound keys")
+      (doseq [{:keys [key operation-id]} rows]
+        (is (some? operation-id) (str "key " key " has no operation"))
+        (is (contains? route-ops operation-id)
+            (str "key " key " names " (pr-str operation-id) ", which no route has"))
+        (is (= (get sent-to key) operation-id)
+            (str "key " key " was sent to " (get sent-to key) " and records "
+                 (pr-str operation-id))))
+      (is (= (operations-the-contract-marks) distinct-ops)
+          (str "the walk's key rows name " (pr-str (vec distinct-ops))
+               "; the contract marks " (pr-str (vec (operations-the-contract-marks))))))))
 
 (deftest ac-15-the-key-is-required-by-exactly-the-six-operations-that-say-so
   (let [declared (operations-the-contract-marks)

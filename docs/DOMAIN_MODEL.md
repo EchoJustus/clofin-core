@@ -112,10 +112,18 @@ See [ADR-0003](ADR/0003-money-as-integer-minor-units.md).
 | `reverses-id` | ✅ Set on an instruction raised to reverse a settled one. |
 | `retries-id` | ✅ Set on an instruction raised to **retry** a returned one, and never afterwards — the database refuses a change to it. The reference ADR-0019 deferred and [ADR-0024](ADR/0024-a-retry-names-the-returned-payment-it-replaces.md) built. It relates the two records and confers nothing: the retry is submitted and approved on its own merits, and carries no value rule against the original, because correcting a beneficiary or an amount is the ordinary reason to retry. Mutually exclusive with `reverses-id`. |
 | `retried-by-ids` | ✅ The other end, **derived at read time** from the retries themselves rather than stored, so the two ends cannot disagree. A list: the link carries no uniqueness rule (ADR-0024), and the ordinary case has one member. |
+| `client-reference` | ✅ Optional. The identifier the creating client keeps for this payment ([ADR-0028](ADR/0028-satellite-clients-integrate-through-core-owned-contracts.md) D6): printable ASCII without spaces, 1–128 characters, stored exactly as sent. **At most one instruction per organisation carries a given reference** — the same reference under a new key is `409` naming the existing instruction (`client-reference-exists` for identical content, `client-reference-conflict` otherwise), never a second instruction; a partial unique index arbitrates concurrent creations. Set at creation and never afterwards — not amendable, and the database refuses a change from any writer, including adding one later. In the audited projection when present. |
+| `creditor-country` | ✅ Optional. The beneficiary's country as an ISO 3166-1 alpha-2 **shape** — two uppercase letters, syntax only; no list of countries is consulted, because the field is synthetic. Amendable while `draft`, like the other beneficiary fields, and in the audited projection when present. It exists so a screening rule can name it (ADR-0028 D5). |
 | `screening-outcome` | 📋 Reference to the screening decision that permitted approval. Increment 7. |
 
-**IdempotencyKey** ✅ — `(organisation-id, key)`, with the digest of the request
-and the response it produced.
+**IdempotencyKey** ✅ — `(organisation-id, key)`, with the digest of the request,
+the response it produced, and — from migration `0014` — the `operationId` that
+bound it. The last is what lets `GET /payment-instructions/by-idempotency-key/{key}`
+describe a creation's binding and refuse every other by name: a key bound by a
+submission stores a payment instruction body too, so the body alone cannot tell
+them apart. A row written before `0014` has no operation and is refused as
+"bound to an operation the lookup does not serve", never reported as absent
+([ADR-0028](ADR/0028-satellite-clients-integrate-through-core-owned-contracts.md) D6).
 
 Modelled as a **record of its own** rather than as a field on the instruction,
 because the key protects every mutating **payment and approval** operation — a

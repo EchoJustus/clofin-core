@@ -60,6 +60,23 @@
   #{"createPaymentInstruction" "amendPaymentInstruction" "submitPaymentInstruction"
     "cancelPaymentInstruction" "approvePaymentInstruction" "withdrawApproval"})
 
+(defn- key-shape!
+  "The rules a key obeys once it is known to be present: at most
+  `max-key-length` characters and no control characters. `where` names the key
+  in the message and `data` in the error's detail, so the header and the path
+  segment that names a key are refused in their own words by one set of rules.
+
+  Control characters are rejected rather than stripped. Stripping would make
+  two different keys compare equal, which is a collision in the one field whose
+  whole job is telling requests apart."
+  [key where data]
+  (when (> (count key) max-key-length)
+    (err/invalid! (str where " must be at most " max-key-length " characters")
+                  (assoc data :max-length max-key-length)))
+  (when (some (fn [c] (Character/isISOControl (char c))) key)
+    (err/invalid! (str where " must not contain control characters") data))
+  key)
+
 (defn read-key
   "Validate and normalise a caller-supplied idempotency key.
 
@@ -87,14 +104,38 @@
           " — and on no other operation")
      {:header "Idempotency-Key"
       :required-on (vec (sort protected-operations))}))
-  (let [key (str/trim value)]
-    (when (> (count key) max-key-length)
-      (err/invalid! (str "Header 'Idempotency-Key' must be at most " max-key-length
-                         " characters")
-                    {:header "Idempotency-Key" :max-length max-key-length}))
-    (when (some (fn [c] (Character/isISOControl (char c))) key)
-      (err/invalid! "Header 'Idempotency-Key' must not contain control characters"
-                    {:header "Idempotency-Key"}))
+  (key-shape! (str/trim value) "Header 'Idempotency-Key'" {:header "Idempotency-Key"}))
+
+(defn read-path-key
+  "A key named in a path segment — `GET /payment-instructions/by-idempotency-key/{key}`
+  — under **the same rules as `read-key`**: non-blank, trimmed, at most
+  `max-key-length` characters, no control characters (ADR-0028 D6). The same
+  rules because the lookup must refuse a key the header could never have bound
+  rather than answer `404` for it — a `404` there tells a client the key is
+  unbound.
+
+  `value` is the segment **already percent-decoded** by the caller; a path
+  delivers it encoded, and the key the header bound is the decoded string.
+
+  **Printable ASCII only** — one rule more than `read-key`, and it exists so
+  that no answer from the lookup is a false `404`. The transport reads a
+  header's octets beyond ASCII one character per octet (`é` sent as UTF-8
+  arrives as `Ã©`), which no percent-decoding of a path can be relied on to
+  reproduce; a lookup that decoded the path as UTF-8 would compare a different
+  string and report the key unbound. Such a key is refused here, `400`, naming
+  the limit. Not every printable-ASCII key arrives either: the transport
+  refuses an encoded `/`, `%` or `\\`, or a whole segment of `%2E` or
+  `%2E%2E`, before any handler runs — which the contract states and
+  `clofin.system-test` asserts against the real server."
+  [value]
+  (when-not (and (string? value) (not (str/blank? value)))
+    (err/invalid! "Path segment 'key' must be a non-blank idempotency key"
+                  {:parameter "key"}))
+  (let [key (key-shape! (str/trim value) "Path segment 'key'" {:parameter "key"})]
+    (when (some (fn [c] (not (<= 0x20 (int c) 0x7E))) key)
+      (err/invalid! (str "Path segment 'key' must be printable ASCII: a key with any other "
+                         "character cannot be looked up by path")
+                    {:parameter "key"}))
     key))
 
 ;; ---------------------------------------------------------------------------

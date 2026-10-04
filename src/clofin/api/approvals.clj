@@ -53,12 +53,16 @@
                 "body"   (or (:json-body request) {})}))
 
 (defn- idempotently
-  [pool request organisation-id effect]
+  "As `clofin.api.payments`'s: at most once per `Idempotency-Key`, with the key
+  row recording `operation-id` — the route's `operationId`, so a later lookup of
+  the key can tell an approval's binding from a creation's (ADR-0028 D6)."
+  [pool request organisation-id operation-id effect]
   (idem-store/execute-once!
    pool
    {:organisation-id organisation-id
     :key             (idem/read-key (get-in request [:headers idempotency-header]))
-    :digest          (request-digest request)}
+    :digest          (request-digest request)
+    :operation-id    operation-id}
    effect))
 
 (defn- respond
@@ -121,7 +125,7 @@
           id (wire/read-uuid (get-in request [:path-params :id]) "id")
           outcome
           (idempotently
-           pool request organisation-id
+           pool request organisation-id "approvePaymentInstruction"
            (fn [tx]
              (let [{:keys [approval instruction decision]}
                    (approvals/decide! tx {:organisation-id organisation-id
@@ -161,7 +165,7 @@
           approval-id (wire/read-uuid (get-in request [:path-params :approvalId]) "approvalId")
           outcome
           (idempotently
-           pool request organisation-id
+           pool request organisation-id "withdrawApproval"
            (fn [tx]
              (let [{:keys [approval instruction]}
                    (approvals/withdraw! tx {:organisation-id organisation-id

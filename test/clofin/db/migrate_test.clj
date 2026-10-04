@@ -77,3 +77,16 @@
       (doseq [m (migrate/available)]
         (is (not (str/blank? (:sql m))))
         (is (= 64 (count (:checksum m))) "SHA-256 hex digest")))))
+
+(deftest ac-18-0-the-index-reaches-0014
+  (testing "TASK-018's migration is the fourteenth entry, appended after 0013 —
+            asserted by position rather than by total, so a later migration
+            appends without editing this"
+    (let [available (migrate/available)]
+      (is (<= 14 (count available)))
+      (is (= ["0013" "0014"] (mapv :version (subvec (vec available) 12 14))))
+      (is (= "0014-client-reference-and-idempotency-lookup.sql"
+             (:filename (nth available 13)))))
+    (testing "and it is applied on the migrated test database"
+      (migrate/migrate! tdb/*pool*)
+      (is (contains? (set (map :version (:applied (migrate/status tdb/*pool*)))) "0014")))))

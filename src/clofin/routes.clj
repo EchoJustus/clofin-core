@@ -94,6 +94,15 @@
     :handler (payments/index pool)
     :summary "List an organisation's payment instructions"}
 
+   ;; Before `/payment-instructions/:id`, though nothing depends on it: the two
+   ;; differ in segment count, and `clofin.http.router-test` asserts that no
+   ;; two routes in this table with one method can match one path, so table
+   ;; order never decides a dispatch (ADR-0028 D6).
+   {:method :get :path "/payment-instructions/by-idempotency-key/:key"
+    :operation-id "lookupPaymentInstructionByIdempotencyKey"
+    :handler (payments/lookup-by-key pool)
+    :summary "What an idempotency key is bound to, and the instruction's status now"}
+
    {:method :get :path "/payment-instructions/:id" :operation-id "getPaymentInstruction"
     :handler (payments/show pool)
     :summary "Retrieve a payment instruction"}

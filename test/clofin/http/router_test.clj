@@ -1,5 +1,7 @@
 (ns clofin.http.router-test
   (:require [clofin.http.router :as router]
+            [clofin.routes :as routes]
+            [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]))
 
 (defn- echo [name] (fn [request] {:status 200 :body {:handler name :params (:path-params request)}}))
@@ -72,3 +74,73 @@
       (is (= "getAccount" (:operation-id @captured)))
       (is (nil? (:segments @captured)))
       (is (nil? (:handler @captured))))))
+
+;; ---------------------------------------------------------------------------
+;; TASK-018 — table order never decides a dispatch
+;;
+;; The router has **no** literal-over-parameter precedence: of the routes whose
+;; method and path match, the first in table order wins. TASK-018's brief
+;; assumed the opposite. Rather than add a precedence rule, this asserts the
+;; property that makes order irrelevant for the table CloFin actually serves:
+;; no two of its routes with one method can match one path. Then where
+;; `/payment-instructions/by-idempotency-key/:key` sits in the table cannot
+;; matter, and neither can the position of any route added after it.
+;; ---------------------------------------------------------------------------
+
+(defn- segments [path] (vec (remove str/blank? (str/split path #"/"))))
+
+(defn- can-both-match?
+  "True when some request path matches both route paths: same segment count,
+  and at every position a parameter on either side or equal literals."
+  [a b]
+  (let [sa (segments a) sb (segments b)]
+    (and (= (count sa) (count sb))
+         (every? (fn [[x y]] (or (str/starts-with? x ":") (str/starts-with? y ":") (= x y)))
+                 (map vector sa sb)))))
+
+(defn- ambiguous-pairs [table]
+  (for [[i a] (map-indexed vector table)
+        [j b] (map-indexed vector table)
+        :when (< i j)
+        :when (= (:method a) (:method b))
+        :when (can-both-match? (:path a) (:path b))]
+    [(:method a) (:path a) (:path b)]))
+
+(def ^:private served (routes/routes {:config {:environment :test} :pool ::stub}))
+
+(deftest ac-18-no-two-served-routes-with-one-method-can-match-one-path
+  (is (< 30 (count served)) "the discovery found the route table (non-vacuity)")
+  (is (empty? (ambiguous-pairs served))
+      (str "these same-method routes can match one path, so table order decides "
+           "between them: " (pr-str (vec (ambiguous-pairs served)))))
+  (testing "the checker sees an ambiguity when there is one (the negative control)"
+    (is (= [[:get "/payment-instructions/by-idempotency-key/:key"
+             "/payment-instructions/:id/:anything"]]
+           (vec (ambiguous-pairs
+                 (conj (vec (filter #(= "/payment-instructions/by-idempotency-key/:key" (:path %))
+                                    served))
+                       {:method :get :path "/payment-instructions/:id/:anything"})))))))
+
+(deftest ac-18-the-lookup-and-the-instruction-read-dispatch-the-same-in-either-order
+  (let [dispatch (fn [table uri]
+                   (get-in (router/match (router/compile-routes table) :get uri)
+                           [:route :operation-id]))]
+    (doseq [table [served (vec (reverse served))]]
+      (is (= "lookupPaymentInstructionByIdempotencyKey"
+             (dispatch table "/payment-instructions/by-idempotency-key/k-1")))
+      (is (= "getPaymentInstruction"
+             (dispatch table "/payment-instructions/00000000-0000-4000-8000-000000000018")))
+      (testing "a key that spells a sub-resource is still a key on GET"
+        (is (= "lookupPaymentInstructionByIdempotencyKey"
+               (dispatch table "/payment-instructions/by-idempotency-key/submission")))))))
+
+(deftest first-match-wins-is-the-routers-actual-rule
+  (testing "documented by a test rather than assumed: with two same-method routes
+            that can both match, the earlier one is chosen — which is why the
+            served table is held to having none"
+    (let [h (fn [table] (get-in (router/match (router/compile-routes table) :get "/x/literal")
+                                [:route :path]))]
+      (is (= "/x/:p" (h [{:method :get :path "/x/:p" :handler identity}
+                         {:method :get :path "/x/literal" :handler identity}])))
+      (is (= "/x/literal" (h [{:method :get :path "/x/literal" :handler identity}
+                              {:method :get :path "/x/:p" :handler identity}]))))))

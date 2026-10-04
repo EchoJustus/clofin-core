@@ -87,6 +87,7 @@
     clofin.ledger.repository-test
     clofin.ledger.service-test
     clofin.payments.repository-test
+    clofin.idempotency.repository-test
     clofin.api.ledger-api-test
     clofin.authz.repository-test
     clofin.api.payments-api-test
