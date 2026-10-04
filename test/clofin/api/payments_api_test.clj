@@ -1121,13 +1121,15 @@
         (is (= "no-binding" (get-in json ["errors" "reason"])))))))
 
 (deftest ac-18-1-a-key-with-reserved-characters-is-looked-up-percent-encoded
-  (testing "the header can bind any non-blank key of up to 255 characters, so the
-            lookup must be able to name one containing a space, a slash, a plus
-            or a percent sign — sent percent-encoded, compared decoded"
+  (testing "a key containing a space or a plus — both of which the real transport
+            carries in a path — is sent percent-encoded and compared decoded.
+            (An encoded `/` or `%` is refused by the transport before any handler
+            runs; `clofin.system-test` asserts that against the real server, and
+            the contract says so.)"
     (let [f (setup)
-          k "client key/2026+01%"
+          k "client key 2026+01"
           creation (call :post "/payment-instructions" {:body (instruction-body f) :idempotency-key k})
-          {:keys [status json]} (lookup "client%20key%2F2026+01%25")]
+          {:keys [status json]} (lookup "client%20key%202026+01")]
       (is (= 201 (:status creation)))
       (is (= 200 status) (pr-str json))
       (is (= k (get json "idempotencyKey")))

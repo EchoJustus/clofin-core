@@ -110,12 +110,15 @@
   "A key named in a path segment — `GET /payment-instructions/by-idempotency-key/{key}`
   — under **the same rules as `read-key`**: non-blank, trimmed, at most
   `max-key-length` characters, no control characters (ADR-0028 D6). The same
-  rules because the lookup must be able to name every key the header can bind,
-  and must refuse a key the header could never have bound rather than answer
-  `404` for it — a `404` there tells a client the key is unbound.
+  rules because the lookup must refuse a key the header could never have bound
+  rather than answer `404` for it — a `404` there tells a client the key is
+  unbound.
 
   `value` is the segment **already percent-decoded** by the caller; a path
-  delivers it encoded, and the key the header bound is the decoded string."
+  delivers it encoded, and the key the header bound is the decoded string. Not
+  every key the header accepts can arrive this way: the HTTP transport refuses
+  an encoded `/` or `%` in a path before any handler runs, which the contract
+  states and `clofin.system-test` asserts against the real server."
   [value]
   (when-not (and (string? value) (not (str/blank? value)))
     (err/invalid! "Path segment 'key' must be a non-blank idempotency key"

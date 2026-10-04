@@ -70,7 +70,12 @@
   segment. A handler whose parameter is free text rather than a UUID decodes
   it here, once, after routing. `+` is a literal `+` in a path, not a space —
   the form-encoding rule `URLDecoder` applies is the wrong one, so `+` is
-  protected from it. A malformed escape is a `400` naming the parameter."
+  protected from it. A malformed escape is a `400` naming the parameter.
+
+  Behind the real server, an encoded `/` (`%2F`) or `%` (`%25`) never gets
+  this far: Jetty's default URI compliance refuses either in a path with its
+  own `400`. Decoding them here is still right for any caller that does reach
+  this function; it is not a promise the transport carries them."
   [value field]
   (when-not (string? value) (missing! field))
   (try

@@ -904,10 +904,16 @@ paths:
           `404`, which would tell a client to resubmit under a key that is taken.
 
         The key is a path segment: percent-encode it (RFC 3986), and it is
-        decoded as UTF-8 before it is compared, so a key containing `/`, a space,
-        `+` or `%` is looked up as the `Idempotency-Key` header carried it. A key
-        that header could never have bound — blank once trimmed, over 255
-        characters, or containing a control character — is `400`.
+        decoded as UTF-8 before it is compared, so a key containing a space or
+        `+` is looked up as the `Idempotency-Key` header carried it. **A key
+        containing `/` or `%` cannot be looked up here:** the HTTP transport
+        refuses an encoded `/` (`%2F`) or `%` (`%25`) in any path with a `400`
+        before the service sees the request — and that `400` is the transport's,
+        not a problem document. The header accepts such keys, so a client that
+        means to use this lookup chooses keys without them; a UUID, the obvious
+        choice, has neither. A key the header could never have bound — blank
+        once trimmed, over 255 characters, or containing a control character —
+        is `400` from the service.
 
         Retention of keys is the existing named debt: the lookup reads whatever
         rows exist.

@@ -81,6 +81,27 @@
           (is (nil? (get headers "server")))
           (is (nil? (get headers "x-powered-by"))))))))
 
+(deftest ac-18-1-the-transport-carries-some-encoded-keys-to-the-lookup-and-refuses-others
+  (testing "the lookup's contract says a key containing a space or `+` reaches the
+            service and one containing `/` or `%` does not. Asserted against the
+            real server, because the refusal is Jetty's and no handler-level test
+            can see it: a statement about the transport needs the transport"
+    (with-system
+      (fn [_system port]
+        (doseq [path ["/payment-instructions/by-idempotency-key/a%20b"
+                      "/payment-instructions/by-idempotency-key/a+b"]]
+          (let [{:keys [status headers]} (GET port path)]
+            (is (= 401 status) (str path " must reach the handler, which asks for an actor"))
+            (is (str/starts-with? (str (get headers "content-type")) "application/problem+json")
+                (str path " is answered by the service"))))
+        (doseq [path ["/payment-instructions/by-idempotency-key/a%2Fb"
+                      "/payment-instructions/by-idempotency-key/100%25"]]
+          (let [{:keys [status headers]} (GET port path)]
+            (is (= 400 status) path)
+            (is (not (str/starts-with? (str (get headers "content-type")) "application/problem+json"))
+                (str path " is refused by the transport, before the service — the contract "
+                     "says so; if this starts reaching the handler, the contract is stale"))))))))
+
 (deftest the-service-migrates-before-it-listens
   (testing "a request never arrives at a service whose schema is not yet in place"
     (with-system
