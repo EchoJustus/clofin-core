@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | **Increment** | 6 (its acceptance script), 5v (the capture harness) |
-| **Status** | `READY` |
+| **Status** | `IN PROGRESS` — dispatched 2026-10-04 |
 | **Depends on** | nothing — may run in parallel with TASK-018 (the two share `api/openapi.yaml` in different regions and nothing else; whichever lands second rebases) |
 | **Blocks** | the next trace capture (at `ref-3`), which replays the corrected script |
 | **Requirements** | PR-050…PR-054 (UAT-007's); standing lessons L-17, L-20; the rulings on 016-REQ O-2, O-3, O-4, O-6, O-7, O-9, O-10 and the four findings routed from its §8 |
@@ -321,7 +321,8 @@ ERROR:  Table reconciliation_statement is append-only: … never by truncate
 ```
 
 Every refusal is the one the corrected script will state. `psql` substitutes
-nothing: the script's note (A-1 item 6) exists because of this.
+nothing: the script's note (A-1 item 6) exists because of this. The script is
+[`preflight/uat-007-task-020.sql`](preflight/uat-007-task-020.sql).
 
 ## Definition of done
 
