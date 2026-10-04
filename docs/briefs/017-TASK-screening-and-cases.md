@@ -768,5 +768,13 @@ the REQ re-runs every refusal through `clofin.screening.repository-test`.
   row are updated by Master Control on `meta` when this brief closes;
   `check-doc-consistency.sh` rule 2 tolerates a brief `IN PROGRESS` beside a
   💭 heading on `main`'s snapshot.
+- **`creditorCountry`, once set, cannot be cleared through `PATCH`** — a JSON
+  `null` is read as an absent member, as for every member (018-REQ O-8 ii). A
+  `creditor-country` rule therefore matches the stored value; do not build a
+  clearing path here, and do not read "absent" as "cleared".
+- **Pin before you project.** The two screening projections are new, so no
+  existing digest moves; `screeningDigest` is not an audit digest and has its
+  own golden test (A-3). If anything here touches `instruction-fields`, pin a
+  golden instruction digest from `main` first (018-REQ O-3).
 - **L-9.** If a self-review is still running when you write the REQ, say so
   in the REQ and do not call the work complete until it is not.

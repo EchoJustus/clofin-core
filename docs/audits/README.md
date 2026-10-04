@@ -12,6 +12,30 @@
 Append-only. A later change appends a new dated block; an existing block is
 never edited — the record of what was decided, and when, is the point.
 
+**2026-10-04 — TASK-018 delivered in a day and merged by the operator before
+the rulings; verified on `main` after the fact; the rule stands.** The Worker
+opened PR #42 at 10:07Z with a REQ carrying seven objections and an
+adversarial review in flight, reported the review complete at 10:28Z (six
+findings, none blocking, all fixed in `255a0a6`) and CI green on `9141697` at
+10:31Z; the operator merged at 15:44Z. No written override preceded the
+merge. The 2026-09-07 rule was set after PR #31 was merged the same way;
+this is the second instance. **What Master Control did about it:** verified
+the merged tree rather than the branch — `make verify` 559 / 3,548 and the
+integration suite migrated from nothing to `0014`, both 0 failures, in a
+detached worktree at `6536ef5`; confirmed the merge touched no control-plane
+file; ruled the eight objections in the brief's changelog (four of them brief
+defects of Master Control's own, O-1 the exact kind the 2026-09-07 template
+amendment forbids — a claim about current behaviour with no command behind
+it; O-2 ruled for the narrowed lookup as published; O-5 adopted into the
+template). **The rule is unchanged**: a Worker's PR is merged by Master
+Control after the objections are ruled and CI is green on the branch, or
+after a written override that accepts verification moving onto `main`. The
+operator is asked to confirm this one as that override, in writing, and to
+leave the next merges to the sequence — not because the outcome was bad
+(it was not), but because a merge before rulings makes every ruling a
+ruling about `main`, and a defect found there is remediated under a new
+brief rather than refused at the door.
+
 **2026-10-03 — ADR-0028 accepted and merged; the four briefs it calls for are
 written; a changelog Master Control claimed and had not committed is
 restored.** The satellite handover was answered as ADR-0028 (PR #40, merged

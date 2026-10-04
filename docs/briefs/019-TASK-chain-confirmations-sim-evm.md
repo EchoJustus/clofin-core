@@ -487,8 +487,11 @@ keep them verbatim. The API tests live in
   **two cases** — the same identity and digest against a second instruction
   in the same batch, and against an instruction in a second batch → `409`
   naming the bound `instructionId`; nothing posted. Negative control: drop
-  `chain_confirmation_identity_key` in a scratch transaction and the second
-  instruction settles — the whole finding, shown once.
+  `chain_confirmation_identity_key` **on the test database** (not in a
+  transaction — the race spans connections that could not see it and would
+  block on it, 018-REQ O-5), run, see the second instruction settle — the whole
+  finding, shown once — delete the mutated run's rows and recreate the key with
+  the migration's own DDL; verify it is present afterwards.
 - **AC-19-5 (A-4, A-5)** `ac-19-5-not-finalized-is-422`: `finality.status`
   anything but `finalized` (a plausible `safe`) → `422`; nothing written.
 - **AC-19-6** `ac-19-6-a-client-reference-that-is-not-the-instructions-is-422`:
@@ -497,7 +500,8 @@ keep them verbatim. The API tests live in
 - **AC-19-7** `ac-19-7-an-amount-that-is-not-the-instructions-is-422`: the
   three conversion cases above; a token contract not in the registry →
   `422 unsupported-token`; a token whose currency is not the instruction's
-  (seed one in the test, in a scratch transaction) → `transfer-mismatch`.
+  (inserted on the test database for the test and removed after it) →
+  `transfer-mismatch`.
 - **AC-19-8 (A-5)** `ac-19-8-a-reversal-before-settlement-returns-the-instruction`:
   kind `returned` on a released, unanswered item → `200`, the instruction
   `returned`, the mirror entry posted, the item's `outcomeReason` `reorged`,
@@ -728,5 +732,10 @@ REQ re-runs every refusal through `clofin.settlement.repository-test`.
   dependency paragraph if a namespace crosses a context; the UAT README row.
 - **The ROADMAP is not yours.** Increment 9's heading is updated by Master
   Control on `meta` when this brief closes.
+- **Pin before you project.** `chain-confirmation-subject` is a new
+  projection, so no existing digest can move; if you touch
+  `instruction-fields` for `settlementBatchId` (do not — it is derived at read
+  time, not stored), pin a golden instruction digest from `main` first
+  (018-REQ O-3).
 - **L-9.** If a self-review is still running when you write the REQ, say so
   in the REQ and do not call the work complete until it is not.
