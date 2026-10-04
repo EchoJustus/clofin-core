@@ -115,15 +115,28 @@
   unbound.
 
   `value` is the segment **already percent-decoded** by the caller; a path
-  delivers it encoded, and the key the header bound is the decoded string. Not
-  every key the header accepts can arrive this way: the HTTP transport refuses
-  an encoded `/` or `%` in a path before any handler runs, which the contract
-  states and `clofin.system-test` asserts against the real server."
+  delivers it encoded, and the key the header bound is the decoded string.
+
+  **Printable ASCII only** — one rule more than `read-key`, and it exists so
+  that no answer from the lookup is a false `404`. The transport reads a
+  header's octets beyond ASCII one character per octet (`é` sent as UTF-8
+  arrives as `Ã©`), which no percent-decoding of a path can be relied on to
+  reproduce; a lookup that decoded the path as UTF-8 would compare a different
+  string and report the key unbound. Such a key is refused here, `400`, naming
+  the limit. Not every printable-ASCII key arrives either: the transport
+  refuses an encoded `/`, `%` or `\\`, or a whole segment of `%2E` or
+  `%2E%2E`, before any handler runs — which the contract states and
+  `clofin.system-test` asserts against the real server."
   [value]
   (when-not (and (string? value) (not (str/blank? value)))
     (err/invalid! "Path segment 'key' must be a non-blank idempotency key"
                   {:parameter "key"}))
-  (key-shape! (str/trim value) "Path segment 'key'" {:parameter "key"}))
+  (let [key (key-shape! (str/trim value) "Path segment 'key'" {:parameter "key"})]
+    (when (some (fn [c] (not (<= 0x20 (int c) 0x7E))) key)
+      (err/invalid! (str "Path segment 'key' must be printable ASCII: a key with any other "
+                         "character cannot be looked up by path")
+                    {:parameter "key"}))
+    key))
 
 ;; ---------------------------------------------------------------------------
 ;; Canonical serialisation

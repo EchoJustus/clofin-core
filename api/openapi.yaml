@@ -736,12 +736,14 @@ paths:
         by a unique index, and the one that loses is answered by the same rule.
         The same reference in another organisation is a different reference.
 
-        **The order the answers are decided in:** the `Idempotency-Key` first —
-        the key row is claimed before anything else runs, so the same key with a
-        different body is the key's own `409` (`errors.header` =
-        `Idempotency-Key`) whatever the reference says; then every field, all
-        named at once (`422`); then the reference (`409`); then the rules that
-        need the database.
+        **The order the answers are decided in:** authentication, the body's
+        parse and the refusal of members a caller may not set (`createdBy`)
+        come first; then the `Idempotency-Key` — its row is claimed before the
+        creation runs, so the same key with a different body is the key's own
+        `409` (`errors.header` = `Idempotency-Key`) whatever the reference says;
+        then every field, all named at once (`422`); then the reference
+        (`409`); then the rules that need the database — the link target's
+        lifecycle (`409`), the debtor account (`422`).
 
         *Not implemented:* a limit on the total reversed across several
         reversals of one instruction (PR-044). Nothing here stops a second
@@ -785,11 +787,12 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "409":
           description: |
-            One of three conflicts, and nothing was persisted under any of them.
+            One of the conflicts below, in the order they are decided; nothing
+            was persisted under any of them.
 
             - The `Idempotency-Key` has already been used for a **different**
-              request. `errors.header` is `Idempotency-Key`. Decided first,
-              because the key row is claimed before anything else runs. Not a
+              request. `errors.header` is `Idempotency-Key`. Decided before the
+              creation runs, because the key row is claimed first. Not a
               failure to fix by retrying: resend the original request unchanged,
               or send the changed one under a new key.
             - `errors.reason` = `client-reference-conflict`: this organisation
@@ -798,9 +801,13 @@ paths:
             - `errors.reason` = `client-reference-exists`: it holds one with
               identical content, created under a different key.
 
+            - The lifecycle refuses the link: `reversesId` names an instruction
+              that is not `settled`, or `retriesId` one that is not `returned`.
+              The problem names the state and the event refused.
+
             The two reference reasons are `ClientReferenceRefusalReason`, and
-            each names the existing instruction in `errors.instructionId`. The
-            key is not consumed by either: a corrected request under the same
+            each names the existing instruction in `errors.instructionId`. No
+            refusal here consumes the key: a corrected request under the same
             key executes normally.
           content:
             application/problem+json:
@@ -903,17 +910,28 @@ paths:
           operation answers this too, with `errors.operationId` null — never
           `404`, which would tell a client to resubmit under a key that is taken.
 
-        The key is a path segment: percent-encode it (RFC 3986), and it is
-        decoded as UTF-8 before it is compared, so a key containing a space or
-        `+` is looked up as the `Idempotency-Key` header carried it. **A key
-        containing `/` or `%` cannot be looked up here:** the HTTP transport
-        refuses an encoded `/` (`%2F`) or `%` (`%25`) in any path with a `400`
-        before the service sees the request — and that `400` is the transport's,
-        not a problem document. The header accepts such keys, so a client that
-        means to use this lookup chooses keys without them; a UUID, the obvious
-        choice, has neither. A key the header could never have bound — blank
-        once trimmed, over 255 characters, or containing a control character —
-        is `400` from the service.
+        The key is a path segment: percent-encode it (RFC 3986). **Not every key
+        the `Idempotency-Key` header accepts can be looked up here**, and the
+        ones that cannot are refused rather than answered `404`:
+
+        - **Only printable ASCII.** A key with any other character is `400` from
+          the service: the transport reads a header's non-ASCII octets one
+          character per octet, which no decoding of a path can be relied on to
+          reproduce, so a lookup could only ever have reported such a key
+          unbound.
+        - **Not `/`, `%` or `\`, and not the keys `.` or `..`.** The HTTP
+          transport refuses an encoded `/` (`%2F`), `%` (`%25`) or `\` (`%5C`),
+          and a segment that is wholly `%2E` or `%2E%2E`, with its own `400`
+          before the service sees the request — that `400` is the transport's,
+          not a problem document — and a client that removes dot segments
+          (RFC 3986 §5.2.4) turns an unencoded `.` or `..` into a different path.
+
+        Any other printable-ASCII key — a space and `+` included, percent-encoded
+        — is looked up exactly as the header carried it. A client that means to
+        use this lookup chooses its keys accordingly; a UUID, the obvious choice,
+        qualifies. A key the header could never have bound — blank once trimmed,
+        over 255 characters, or containing a control character — is `400` from
+        the service too.
 
         Retention of keys is the existing named debt: the lookup reads whatever
         rows exist.

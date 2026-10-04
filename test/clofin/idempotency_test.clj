@@ -178,6 +178,13 @@
                          (catch Exception t (ex-message t)))]
         (is (str/includes? message "Path segment 'key'") message)
         (is (not (str/includes? message "Header")) message)))
+    (testing "printable ASCII only: the transport reads a header's non-ASCII octets
+              one character per octet, so a path key with any other character
+              could only ever be reported unbound — refused instead (review
+              finding 1)"
+      (doseq [bad ["caf\u00e9-1" "caf\u00c3\u00a9-1" "\u20ac"]]
+        (is (= :validation (error-type #(idem/read-path-key bad))) (pr-str bad)))
+      (is (= " ~" (subs (idem/read-path-key "a ~") 1)) "the printable range's ends pass"))
     (testing "and the header's own refusal is unchanged"
       (let [message (try (idem/read-key (str "a" (char 0) "b"))
                          (catch Exception t (ex-message t)))]

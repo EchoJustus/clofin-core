@@ -83,7 +83,8 @@
 
 (deftest ac-18-1-the-transport-carries-some-encoded-keys-to-the-lookup-and-refuses-others
   (testing "the lookup's contract says a key containing a space or `+` reaches the
-            service and one containing `/` or `%` does not. Asserted against the
+            service and one containing `/`, `%` or `\\`, or the key `.` or `..`
+            encoded, does not. Asserted against the
             real server, because the refusal is Jetty's and no handler-level test
             can see it: a statement about the transport needs the transport"
     (with-system
@@ -95,7 +96,11 @@
             (is (str/starts-with? (str (get headers "content-type")) "application/problem+json")
                 (str path " is answered by the service"))))
         (doseq [path ["/payment-instructions/by-idempotency-key/a%2Fb"
-                      "/payment-instructions/by-idempotency-key/100%25"]]
+                      "/payment-instructions/by-idempotency-key/100%25"
+                      ;; review finding 2: three more the contract now names
+                      "/payment-instructions/by-idempotency-key/a%5Cb"
+                      "/payment-instructions/by-idempotency-key/%2E"
+                      "/payment-instructions/by-idempotency-key/%2E%2E"]]
           (let [{:keys [status headers]} (GET port path)]
             (is (= 400 status) path)
             (is (not (str/starts-with? (str (get headers "content-type")) "application/problem+json"))

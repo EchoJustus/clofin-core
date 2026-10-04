@@ -1044,15 +1044,24 @@
   (:state (db/query-one tdb/*pool* ["select state from pg_stat_activity where pid = ?" (int pid)])))
 
 (defn- await-lock-wait!
-  "Block until some backend in this database is waiting on a lock — the loser
-  of a race parked on a key or an index — and return how many are. Returns 0
-  after ten seconds, which the caller asserts against."
-  []
+  "Block until a backend in this database is waiting on a lock **while running
+  a statement matching `statement`** (an `ilike` pattern over
+  `pg_stat_activity.query`), and return how many are. Returns 0 after ten
+  seconds, which the caller asserts against.
+
+  The statement is named, not just the wait: the adversarial review found that
+  \"some backend is waiting on some lock\" was satisfied by a loser parked on
+  the debtor account's row lock while the test said it was parked on the
+  reference index. Which lock a loser waits on is the interleaving a race test
+  claims, so the test now says which one and checks it."
+  [statement]
   (loop [n 0]
     (let [waiting (:count (db/query-one tdb/*pool*
                                         ["select count(*) as count from pg_stat_activity
                                            where datname = current_database()
-                                             and wait_event_type = 'Lock'"]))]
+                                             and wait_event_type = 'Lock'
+                                             and query ilike ?"
+                                         statement]))]
       (if (or (pos? waiting) (> n 500))
         waiting
         (do (Thread/sleep 20) (recur (inc n)))))))
@@ -1139,7 +1148,21 @@
       (is (= 400 (:status (lookup (apply str (repeat 256 "k"))))))
       (is (= 400 (:status (lookup "a%00b"))) "a control character")
       (is (= 400 (:status (lookup "a%zzb"))) "malformed percent-encoding")
-      (is (some? f)))))
+      (is (some? f))))
+  (testing "and a non-ASCII key is a 400 even when the header bound it — the
+            transport read the header's octets as ISO-8859-1, so `café-1` was
+            bound as `cafÃ©-1`, and a UTF-8 decoding of the path would have
+            answered a false 404 (review finding 1)"
+    (let [f (setup)
+          _ (db/execute! tdb/*pool* ["insert into idempotency_key
+                                        (organisation_id, key, request_digest, response_status,
+                                         response_body, operation_id)
+                                      values (?, ?, ?, ?, ?, ?)"
+                                     (org-uuid f) "caf\u00c3\u00a9-1" "d" 201 "{}"
+                                     "createPaymentInstruction"])
+          {:keys [status json]} (lookup "caf%C3%A9-1")]
+      (is (= 400 status) (pr-str json))
+      (is (str/includes? (get json "detail") "printable ASCII")))))
 
 (deftest ac-18-2-the-lookup-answers-404-only-when-no-key-is-bound
   (let [f (setup)]
@@ -1219,7 +1242,8 @@
               flight: the resubmission waits on A's key row rather than creating"
       (let [resubmitted (future (call h :post "/payment-instructions"
                                       {:body body :idempotency-key k}))]
-        (is (pos? (await-lock-wait!)) "the resubmission is parked on A's key row")
+        (is (pos? (await-lock-wait! "%insert into idempotency_key%"))
+            "the resubmission is parked on A's key row — its claiming insert waits")
         (is (not (realized? resubmitted)))
 
         (.countDown ^CountDownLatch release)
@@ -1319,16 +1343,25 @@
 (deftest ac-18-4-a-race-loser-with-different-content-answers-client-reference-conflict
   (testing "standing lesson L-18: the loser of the race on the unique index re-enters
             the serial path's decision — so different content is a conflict even
-            when the reference was arbitrated by the index rather than the pre-check"
+            when the reference was arbitrated by the index rather than the pre-check.
+            B draws on a **second** debtor account, so it contends with A on
+            nothing but the reference: its pre-check misses A's uncommitted row,
+            its own account lock is free, and its insert parks on A's
+            uncommitted entry in payment_instruction_client_reference_key"
     (let [f (setup)
           h (handler)
+          other-account (tdb/insert-account! tdb/*pool*
+                                             {:id (random-uuid) :organisation-id (org-uuid f)
+                                              :code (str "1110-CLIENT-FUNDS-" (rand-int 1000000))})
           body (instruction-body f "clientReference" "agent-ref-race-2")
           {:keys [outcome inserted release]} (hold-a-creation-open! f (key!) body)]
       (await-latch inserted)
       (let [loser (future (call h :post "/payment-instructions"
-                                {:body (assoc body "amount" {"currency" "SGD" "minorUnits" 999})
+                                {:body (assoc body "debtorAccountId" (str other-account))
                                  :idempotency-key (key!)}))]
-        (is (pos? (await-lock-wait!)) "the loser passed the pre-check and is parked on the index")
+        (is (pos? (await-lock-wait! "%insert into payment_instruction%"))
+            "the loser passed the pre-check and its insert is parked on the index")
+        (is (not (realized? loser)))
         (.countDown ^CountDownLatch release)
         (let [winner @outcome
               {:keys [status json]} (deref loser 30000 :timed-out)]
@@ -1339,6 +1372,21 @@
                  (get json "errors")))
           (is (= 1 (instruction-count)))
           (is (= 1 (key-count)) "the loser's key rolled back with its insert"))))))
+
+(deftest ac-18-5-a-lost-race-with-no-winning-row-is-a-defect-not-a-refusal
+  (testing "the violation says a winner committed and instructions are never
+            deleted, so finding no row is a 500 with a correlation id — not a 409
+            whose errors carry no reason the contract declares (review finding 6)"
+    (let [f (setup)
+          marker (ex-info "lost" {:clofin/error :conflict :clofin/client-reference-race "nobody"})
+          t (try (#'payments-api/resolve-client-reference-race!
+                  tdb/*pool* (org-uuid f) (instruction-body f "clientReference" "nobody")
+                  "nobody" marker)
+                 nil
+                 (catch Exception t t))]
+      (is (some? t))
+      (is (nil? (:clofin/error (ex-data t))) "not a domain error, so the boundary renders a 500")
+      (is (identical? marker (ex-cause t)) "and the original is kept as the cause, for the log"))))
 
 (deftest ac-18-5-a-reused-client-reference-under-a-new-key-answers-409-naming-the-existing-instruction
   (testing "rule 3, sequentially"
@@ -1359,9 +1407,15 @@
         (is (= 200 (:status (call :get (str "/payment-instructions/" (get-in json ["errors" "instructionId"])))))))))
 
   (testing "rule 3 with two threads and two keys racing on one reference. Thread A
-            holds its creation open after the insert, so B's pre-check cannot see
-            A's row and B reaches the unique index — the arbitration path, not
-            the pre-check — and is decided after its own rollback"
+            holds its creation open after its insert. B's pre-check runs while A
+            is uncommitted and misses A's row; identical content means the same
+            debtor account, so B then waits on the account row lock A holds —
+            observed below, and taken only *after* the pre-check, which is what
+            proves the pre-check missed. When A commits, B's insert fails on the
+            unique index against A's committed row — the arbitration path, not
+            the pre-check — and B is decided after its own rollback. (The
+            different-content race above is the one whose insert waits on the
+            index itself.)"
     (let [f (setup)
           h (handler)
           ;; The sequential half above left its own rows; this half counts from here.
@@ -1372,7 +1426,8 @@
       (await-latch inserted)
       (let [loser (future (call h :post "/payment-instructions"
                                 {:body body :idempotency-key (key!)}))]
-        (is (pos? (await-lock-wait!)) "B is parked on payment_instruction_client_reference_key")
+        (is (pos? (await-lock-wait! "%from ledger_account%for update%"))
+            "B passed its pre-check and is parked on the debtor account A holds")
         (is (not (realized? loser)))
         (.countDown ^CountDownLatch release)
         (let [winner @outcome

@@ -340,12 +340,16 @@
   `client-reference-conflict` for anything else. Never a shortcut that assumes
   the two requests were the same because their references were.
 
-  No row is a defect, not an answer — the violation said one was committed —
-  so the original error is rethrown rather than guessed around."
+  No row is a defect, not an answer — the violation said one was committed,
+  and instructions are never deleted — so it is raised as one: a `500` with a
+  correlation id, rather than a `409` carrying no `errors.reason` the contract
+  declares."
   [pool organisation-id body reference t]
   (let [[values _] (read-members body)
         existing (or (payments/find-by-client-reference pool organisation-id reference)
-                     (throw t))]
+                     (throw (ex-info "A clientReference race was lost to a row that cannot be read"
+                                     {:organisation-id (str organisation-id)}
+                                     t)))]
     (payments/client-reference-refusal values existing)))
 
 (defn create
@@ -371,11 +375,13 @@
   on.
 
   **A `clientReference` names at most one instruction per organisation**
-  (ADR-0028 D6). The order in which the answers are decided is the contract's:
-  the `Idempotency-Key` first, because `execute-once!` claims the key row
-  before anything runs — so the same key with a different body is the key's
-  `409` whatever the reference says, and the same key with the same body is the
-  ordinary replay; then the fields, all of them at once; then the reference
+  (ADR-0028 D6). The order in which the answers are decided is the contract's.
+  Authentication, the body's parse and the refusal of members a caller may not
+  set come first, outside the key; then the `Idempotency-Key`, because
+  `execute-once!` claims the key row before the effect runs — so the same key
+  with a different body is the key's `409` whatever the reference says, and the
+  same key with the same body is the ordinary replay; then the fields, all of
+  them at once; then the reference
   (`client-reference-exists` for identical content under another key,
   `client-reference-conflict` for different content, each naming
   `errors.instructionId`); then the rules that need the database. Nothing is

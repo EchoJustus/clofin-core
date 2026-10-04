@@ -56,11 +56,15 @@ alter table payment_instruction
     check (creditor_country is null or creditor_country ~ '^[A-Z]{2}$');
 
 -- **The arbiter under concurrency.** Two creations carrying one reference under
--- two keys both pass the application's pre-check; the second insert blocks on
--- this index until the first commits and then fails on it, and its whole
--- transaction — idempotency key row included — rolls back. Organisation-scoped:
--- the same reference in another organisation is a different reference.
--- Partial, so the many instructions with no reference do not contend.
+-- two keys can both pass the application's pre-check. Whichever inserts second
+-- fails on this index — after waiting for the first to commit, if it has not
+-- yet — and its whole transaction, idempotency key row included, rolls back.
+-- (Two creations with identical content name the same debtor account, so the
+-- second usually waits on that account's row lock first and meets this index
+-- only once the first has committed; it is refused here all the same.)
+-- Organisation-scoped: the same reference in another organisation is a
+-- different reference. Partial, so the many instructions with no reference do
+-- not contend.
 create unique index payment_instruction_client_reference_key
   on payment_instruction (organisation_id, client_reference)
   where client_reference is not null;

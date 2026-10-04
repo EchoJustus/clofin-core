@@ -72,10 +72,11 @@
   the form-encoding rule `URLDecoder` applies is the wrong one, so `+` is
   protected from it. A malformed escape is a `400` naming the parameter.
 
-  Behind the real server, an encoded `/` (`%2F`) or `%` (`%25`) never gets
-  this far: Jetty's default URI compliance refuses either in a path with its
-  own `400`. Decoding them here is still right for any caller that does reach
-  this function; it is not a promise the transport carries them."
+  Behind the real server, an encoded `/` (`%2F`), `%` (`%25`) or `\\` (`%5C`),
+  or a segment that is wholly `%2E` or `%2E%2E`, never gets this far: Jetty's
+  default URI compliance refuses each with its own `400`. Decoding them here is
+  still right for any caller that does reach this function; it is not a
+  promise the transport carries them."
   [value field]
   (when-not (string? value) (missing! field))
   (try
