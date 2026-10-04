@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | **Increment** | 3 (completion) — the first brief of the ADR-0028 batch, dispatched before 017 and 019 by ruling D10 |
-| **Status** | `READY` |
+| **Status** | `IN PROGRESS` — dispatched 2026-10-04 |
 | **Depends on** | [ADR-0028](../ADR/0028-satellite-clients-integrate-through-core-owned-contracts.md) ✅ accepted and merged (`c4e1689`); nothing else |
 | **Blocks** | TASK-017 (screening rules name `creditor-country`), TASK-019 (a chain event is bound to the instruction's `clientReference`) |
 | **Requirements** | PR-001…PR-005, PR-040…PR-044; ADR-0028 D6; ADR-0013 (the canonical request digest); ADR-0024 (a link set at creation never changes) |
