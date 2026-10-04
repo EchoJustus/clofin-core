@@ -659,8 +659,9 @@ ERROR:  … violates check constraint "token_registry_symbol_synthetic"
 And the scope proof: the identity key's definition read back from the
 catalogue is `UNIQUE (organisation_id, chain_id, transaction_hash,
 log_index)` — the organisation is part of it, as D7's amendment requires.
-The scripts are `scratchpad/preflight/0016.sql` and `0016-n7.sql` in Master
-Control's session (the membership control was first masked by the response
+The scripts are [`preflight/0016-task-019.sql`](preflight/0016-task-019.sql) and
+[`preflight/0016-task-019-membership-control.sql`](preflight/0016-task-019-membership-control.sql)
+(the membership control was first masked by the response
 key and re-run in isolation, which is why it is listed with that note); the
 REQ re-runs every refusal through `clofin.settlement.repository-test`.
 
