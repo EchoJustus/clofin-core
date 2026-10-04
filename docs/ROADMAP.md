@@ -33,7 +33,10 @@ and this table is stale.
 | 8.4 | Cockpit — Actions scenario runner, PAT-free | [TASK-014](briefs/014-TASK-cockpit-scenario-runner.md) | ✅ `CLOSED` — cockpit PR #4 (`9283dbf`) + REQ-only core PR #27 (`ea428a3`); hosted run #1 against `ref-1` green, 27/27 steps | green, incl. the hosted scenario run |
 | ref-2 | Release remediation — `FEEDBACK-REL-ref-2` (2 B / 20 S / 1 C), then the annotated tag | [TASK-015](briefs/015-TASK-ref-2-release-remediation.md) | ✅ `CLOSED` — merged in PR #31 (`32dfcc9`); both blockers re-verified; **`ref-2` released** — annotated tag `420722f` → `32dfcc9`, pre-release 401516365, mirror check OK (2026-10-02) | green on `32dfcc9` (run 34091727538) |
 | 5v.4 | Trace at `ref-2` — the capture stamps its identity binding; a fourth, reconciliation scenario | [TASK-016](briefs/016-TASK-trace-refresh-at-ref-2.md) | ✅ `CLOSED` — `clofin-trace` PR #4 (`0752637`) + `clofin-core` PR #38 (`fa5e790`); **live at <https://echojustus.github.io/clofin-trace/>**, replaying `ref-2` (`COMPLETE`, `annotated`, `instance-id`) | green, both repositories, incl. Pages run 37081282071 |
-| 7, 9 | Financial crime; programmable settlement | not yet briefed | 💭 later | — |
+| 3c | Payment lifecycle completion — `clientReference`, `creditorCountry`, the idempotency-key lookup (ADR-0028 D6) | [TASK-018](briefs/018-TASK-client-reference-and-idempotency-lookup.md) | 📋 `READY` — briefed 2026-10-03; first of the ADR-0028 batch | — |
+| 7 | Financial crime — sanctions screening and cases, C-07 (ADR-0028 D5/D8) | [TASK-017](briefs/017-TASK-screening-and-cases.md) | 📋 `READY` — briefed 2026-10-03; after TASK-018 | — |
+| 9 (first slice) | Programmable settlement — chain confirmations on a local chain, `SIM-EVM` (ADR-0028 D4/D7/D8) | [TASK-019](briefs/019-TASK-chain-confirmations-sim-evm.md) | 📋 `READY` — briefed 2026-10-03; after TASK-017 | — |
+| 6 / 5v | UAT-007 corrections and the walkthrough's findings | [TASK-020](briefs/020-TASK-uat-007-corrections-and-walkthrough-findings.md) | 📋 `READY` — briefed 2026-10-03; parallel with TASK-018 | — |
 
 **Controls now enforced on `main`.** As of 2026-08-04 the increment-3/4 stack is
 merged (PR #4 `31306dd`, PR #5 `5ff00eb`): C-06 (idempotency), C-01 (segregation
@@ -254,7 +257,9 @@ to rediscover them:
 - Breaks with ageing, ownership and resolution workflow
 - Adjustment posting with approval above a threshold
 
-## Increment 7 — Financial crime controls 💭
+## Increment 7 — Financial crime controls 📋
+
+**Brief:** [TASK-017](briefs/017-TASK-screening-and-cases.md) · **Status:** `READY` — screening and cases, under ADR-0028 D5; fraud scoring (PR-062) stays designed, for a later brief
 
 - Sanctions screening against a synthetic list, with list versioning
 - Rule-based fraud scoring with explainable contributing reasons
@@ -266,7 +271,9 @@ to rediscover them:
 - Chosen deliberately late: the API contract and controls are the substance,
   and a UI built before them would encode the wrong model.
 
-## Increment 9 — Programmable settlement exploration 💭
+## Increment 9 — Programmable settlement exploration 📋
+
+**Brief:** [TASK-019](briefs/019-TASK-chain-confirmations-sim-evm.md) · **Status:** `READY` — the first slice: chain confirmations on a local development chain as a third simulated scheme, under ADR-0028 D7; conditional release is a later slice
 
 - Conditional release against simulated tokenised-deposit or CBDC-style rails
 - Explicitly a **simulation**, and labelled as such wherever it appears.
