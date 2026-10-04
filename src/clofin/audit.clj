@@ -416,16 +416,36 @@
   that is not a change to this record. That is the same reasoning that keeps
   `age-seconds` out of `reconciliation-break-fields` and a balance out of
   `account-fields`. The retry's own creation event is where that fact is
-  recorded."
+  recorded.
+
+  **`:client-reference` and `:creditor-country` joined in TASK-018** (ADR-0028
+  D6), for `:retries-id`'s reason: the reference is the identity a client binds
+  its record to, and the country is what a screening rule reads, so a field left
+  out would be one an alteration could move without the trail noticing. Both are
+  optional, and `instruction-subject` leaves each **out of the projection when
+  it is nil** rather than digesting a null — so an instruction carrying neither
+  digests exactly as it did before they existed, whether the map it arrived in
+  omits the keys or carries them as nil. That is what makes the addition need no
+  `canonicalisation-version` bump: no digest of any existing shape moves."
   [:id :organisation-id :debtor-account-id :creditor-name :creditor-account
    :amount :value-date :purpose-code :status :created-by :reverses-id
-   :retries-id])
+   :retries-id :client-reference :creditor-country])
+
+(def ^:private omitted-when-absent
+  "Projection fields that are left out, not digested as null, when they have no
+  value — the members added after digests of instructions without them already
+  existed. `:reverses-id` and `:retries-id` are deliberately not here: they have
+  always been digested as null when absent, and changing that now would move
+  every existing digest."
+  #{:client-reference :creditor-country})
 
 (defn instruction-subject
   "The projection of an instruction that its audit digests are taken over."
   [instruction]
   (when instruction
-    (select-keys instruction instruction-fields)))
+    (into {}
+          (remove (fn [[k v]] (and (nil? v) (contains? omitted-when-absent k))))
+          (select-keys instruction instruction-fields))))
 
 (def approval-fields
   "The fields of an approval that a digest covers.

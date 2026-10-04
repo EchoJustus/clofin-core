@@ -8,6 +8,7 @@
   (:require [clofin.error :as err]
             [clofin.idempotency :as idem]
             [clojure.data.json :as json]
+            [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [clojure.test.check.clojure-test :refer [defspec]]
             [clojure.test.check.generators :as gen]
@@ -161,6 +162,26 @@
             keys compare equal, in the one field whose job is telling requests apart"
     (is (= :validation (error-type #(idem/read-key (str "a" (char 0) "b")))))
     (is (= :validation (error-type #(idem/read-key "a\u0007b"))))))
+
+(deftest ac-18-1-a-key-named-in-a-path-obeys-the-headers-rules
+  (testing "the lookup must be able to name every key the header can bind, and
+            refuse — 400, not 404 — a key the header could never have bound"
+    (is (= "abc" (idem/read-path-key "  abc  ")) "trimmed, as the header's key was")
+    (is (= "a b/c+d%" (idem/read-path-key "a b/c+d%")))
+    (is (= (apply str (repeat idem/max-key-length "k"))
+           (idem/read-path-key (apply str (repeat idem/max-key-length "k")))))
+    (doseq [bad [nil "" "   " (apply str (repeat (inc idem/max-key-length) "k"))
+                 (str "a" (char 0) "b") "a\u0007b"]]
+      (is (= :validation (error-type #(idem/read-path-key bad))) (pr-str bad)))
+    (testing "and it names a path segment, not a header the caller never sent"
+      (let [message (try (idem/read-path-key (str "a" (char 0) "b"))
+                         (catch Exception t (ex-message t)))]
+        (is (str/includes? message "Path segment 'key'") message)
+        (is (not (str/includes? message "Header")) message)))
+    (testing "and the header's own refusal is unchanged"
+      (let [message (try (idem/read-key (str "a" (char 0) "b"))
+                         (catch Exception t (ex-message t)))]
+        (is (= "Header 'Idempotency-Key' must not contain control characters" message))))))
 
 ;; ---------------------------------------------------------------------------
 ;; The replay decision

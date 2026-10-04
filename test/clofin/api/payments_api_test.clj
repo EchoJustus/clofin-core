@@ -12,7 +12,9 @@
 
   Acceptance criteria from docs/briefs/002-TASK-payment-instruction-lifecycle.md
   are named in the tests that cover them."
-  (:require [clofin.db.core :as db]
+  (:require [clofin.api.payments :as payments-api]
+            [clofin.db.core :as db]
+            [clofin.idempotency.repository :as idem-store]
             [clofin.payments.repository :as payments]
             [clofin.system :as system]
             [clofin.test-db :as tdb]
@@ -686,7 +688,10 @@
           ;; arriving at one process do.
           h (handler)
           k (key!)
-          body (instruction-body f)
+          ;; TASK-018 AC-18-10: the same race, carrying a client reference. The
+          ;; key arbitrates first, so the reference changes nothing about the
+          ;; outcome — and exactly one row ends up carrying it.
+          body (instruction-body f "clientReference" "agent-ref-ac-9")
           start (CountDownLatch. 1)
           done (CountDownLatch. 2)
           responses (atom [])
@@ -713,7 +718,11 @@
         (testing "exactly one effect occurred"
           (is (= 1 (instruction-count))
               "two payment instructions from one key is the failure C-06 exists to prevent")
-          (is (= 1 (key-count))))
+          (is (= 1 (key-count)))
+          (is (= 1 (:count (db/query-one tdb/*pool*
+                                         ["select count(*) as count from payment_instruction
+                                            where client_reference = 'agent-ref-ac-9'"])))
+              "and exactly one row carries the reference (AC-18-10)"))
 
         (testing "and exactly one of them did the work"
           (is (= 1 (count (filter #(= "true" (get-in % [:headers "idempotent-replayed"]))
@@ -1013,3 +1022,428 @@
       (let [replay (call :post "/payment-instructions" {:body body :idempotency-key k})]
         (is (= "application/json" (get-in replay [:headers "content-type"])))
         (is (map? (:json replay)) "and it still parses as JSON")))))
+
+;; ===========================================================================
+;; TASK-018 — `clientReference`, `creditorCountry` and the idempotency-key
+;; lookup (ADR-0028 D6). Test names are the executable identifiers ADR-0028's
+;; Verification table commits to.
+;; ===========================================================================
+
+(defn- lookup
+  ([k] (lookup k {}))
+  ([k opts] (call :get (str "/payment-instructions/by-idempotency-key/" k) opts)))
+
+(defn- org-uuid [f] (java.util.UUID/fromString (get-in f [:org "id"])))
+
+(defn- await-latch [^CountDownLatch latch]
+  (is (.await latch 30 TimeUnit/SECONDS) "a latch the test depends on was never reached"))
+
+(defn- backend-state
+  "What PostgreSQL says the backend `pid` is doing right now."
+  [pid]
+  (:state (db/query-one tdb/*pool* ["select state from pg_stat_activity where pid = ?" (int pid)])))
+
+(defn- await-lock-wait!
+  "Block until some backend in this database is waiting on a lock — the loser
+  of a race parked on a key or an index — and return how many are. Returns 0
+  after ten seconds, which the caller asserts against."
+  []
+  (loop [n 0]
+    (let [waiting (:count (db/query-one tdb/*pool*
+                                        ["select count(*) as count from pg_stat_activity
+                                           where datname = current_database()
+                                             and wait_event_type = 'Lock'"]))]
+      (if (or (pos? waiting) (> n 500))
+        waiting
+        (do (Thread/sleep 20) (recur (inc n)))))))
+
+(defn- hold-a-creation-open!
+  "Thread A of the race tests. Runs **the real creation effect**
+  (`clofin.api.payments/creation-effect`) under
+  `clofin.idempotency.repository/execute-once!` for `key` and `body`, and parks
+  inside the effect after the instruction row is inserted and before the effect
+  returns — so the key row is claimed, the instruction row is written, and
+  neither is committed. `:release` lets it finish.
+
+  The digest is the one the handler computes for the same request, so a later
+  HTTP creation under the same key and body is the same request."
+  [f key body]
+  (let [inserted (CountDownLatch. 1)
+        release  (CountDownLatch. 1)
+        pid      (promise)
+        request  {:request-method :post :uri "/payment-instructions"
+                  :headers {"idempotency-key" key} :json-body body}
+        effect   (payments-api/creation-effect request {:id @current-actor} (org-uuid f) body)
+        outcome  (future
+                   (idem-store/execute-once!
+                    tdb/*pool*
+                    {:organisation-id (org-uuid f)
+                     :key             key
+                     :digest          (#'payments-api/request-digest request)
+                     :operation-id    "createPaymentInstruction"}
+                    (fn [tx]
+                      (let [result (effect tx)]
+                        (deliver pid (:pid (db/query-one tx ["select pg_backend_pid() as pid"])))
+                        (.countDown inserted)
+                        (.await release 60 TimeUnit/SECONDS)
+                        result))))]
+    {:outcome outcome :inserted inserted :release release :pid pid}))
+
+;; ---------------------------------------------------------------------------
+;; AC-18-1 / AC-18-2 / AC-18-6 — the lookup
+;; ---------------------------------------------------------------------------
+
+(deftest ac-18-1-the-lookup-returns-the-stored-response-and-current-status
+  (let [f (setup)
+        k (key!)
+        creation (call :post "/payment-instructions" {:body (instruction-body f) :idempotency-key k})
+        pi (:json creation)
+        _ (is (= 200 (:status (submit! f pi))))
+        {:keys [status json]} (lookup k)]
+    (is (= 201 (:status creation)))
+    (is (= 200 status) (pr-str json))
+    (is (= k (get json "idempotencyKey")))
+    (is (= (get pi "id") (get json "instructionId")))
+    (is (= 201 (get json "originalStatus")))
+    (is (= (json/read-str (:body creation)) (get json "originalBody"))
+        "the stored body, in content exactly what a replay serves")
+    (is (= "draft" (get-in json ["originalBody" "status"]))
+        "as it was stored at creation — not refreshed")
+    (is (= "pending-approval" (get json "currentStatus"))
+        "and the instruction's status now, read in the same request")
+    (is (some? (get json "boundAt")))
+    (testing "the negative control: the same key from another organisation's actor
+              is not this organisation's binding — the scope is the key table's
+              primary key, so the answer is 404, not the other tenant's payment"
+      (let [other (setup)
+            {:keys [status json]} (lookup k {:actor (:maker other)})]
+        (is (= 404 status))
+        (is (= "no-binding" (get-in json ["errors" "reason"])))))))
+
+(deftest ac-18-1-a-key-with-reserved-characters-is-looked-up-percent-encoded
+  (testing "the header can bind any non-blank key of up to 255 characters, so the
+            lookup must be able to name one containing a space, a slash, a plus
+            or a percent sign — sent percent-encoded, compared decoded"
+    (let [f (setup)
+          k "client key/2026+01%"
+          creation (call :post "/payment-instructions" {:body (instruction-body f) :idempotency-key k})
+          {:keys [status json]} (lookup "client%20key%2F2026+01%25")]
+      (is (= 201 (:status creation)))
+      (is (= 200 status) (pr-str json))
+      (is (= k (get json "idempotencyKey")))
+      (is (= (get-in creation [:json "id"]) (get json "instructionId")))))
+  (testing "and a key the header could never have bound is a 400, not a 404"
+    (let [f (setup)]
+      (is (= 400 (:status (lookup (apply str (repeat 256 "k"))))))
+      (is (= 400 (:status (lookup "a%00b"))) "a control character")
+      (is (= 400 (:status (lookup "a%zzb"))) "malformed percent-encoding")
+      (is (some? f)))))
+
+(deftest ac-18-2-the-lookup-answers-404-only-when-no-key-is-bound
+  (let [f (setup)]
+    (testing "an unused key: 404 no-binding, carrying the contract sentence"
+      (let [{:keys [status json]} (lookup (key!))]
+        (is (= 404 status))
+        (is (= "no-binding" (get-in json ["errors" "reason"])))
+        (is (= payments-api/no-binding-detail (get json "detail")))
+        (is (str/includes? (get json "detail") "a creation still in flight may still commit"))
+        (is (str/includes? (get json "detail") "under the same key"))))
+
+    (testing "a key bound by a submission: 409, naming the operation"
+      (let [pi (new-instruction! f)
+            k (key!)
+            _ (is (= 200 (:status (submit! f pi :idempotency-key k))))
+            {:keys [status json]} (lookup k)]
+        (is (= 409 status))
+        (is (= "key-bound-to-another-operation" (get-in json ["errors" "reason"])))
+        (is (= "submitPaymentInstruction" (get-in json ["errors" "operationId"])))
+        (is (not (contains? json "instructionId"))
+            "a submission's stored body is a PaymentInstruction too, and must never be
+             described as a creation")))
+
+    (testing "a key row with no operation — the shape every row written before 0014
+              has — is 409 with operationId null, never 404: a 404 would tell the
+              client to resubmit under a key that is taken"
+      (db/execute! tdb/*pool* ["insert into idempotency_key
+                                  (organisation_id, key, request_digest, response_status, response_body)
+                                values (?, ?, ?, ?, ?)"
+                               (org-uuid f) "pre-0014-key" "d" 201 "{\"id\":\"x\"}"])
+      (let [{:keys [status json]} (lookup "pre-0014-key")]
+        (is (= 409 status))
+        (is (= "key-bound-to-another-operation" (get-in json ["errors" "reason"])))
+        (is (contains? (get json "errors") "operationId"))
+        (is (nil? (get-in json ["errors" "operationId"])))))))
+
+(deftest ac-18-6-the-lookup-requires-payment-read-and-is-scoped-to-the-callers-organisation
+  (let [f (setup)
+        k (key!)
+        _ (call :post "/payment-instructions" {:body (instruction-body f) :idempotency-key k})
+        other (setup)]
+    (reset! current-actor (:maker f))
+    (is (= 200 (:status (lookup k))) "the positive control: the maker may read it")
+    (is (= 401 (:status (lookup k {:actor false}))) "no actor")
+    (is (= 403 (:status (lookup k {:actor (seed-actor! (:org f) [])})))
+        "an actor holding no role, so no payment/read")
+    (let [{:keys [status]} (lookup k {:query (str "organisationId=" (get-in other [:org "id"]))})]
+      (is (= 403 status) "organisationId naming another organisation"))
+    (is (= 200 (:status (lookup k {:query (str "organisationId=" (get-in f [:org "id"]))})))
+        "and naming its own is the same as naming none")))
+
+;; ---------------------------------------------------------------------------
+;; AC-18-3 — the lookup raced against an in-flight creation
+;; ---------------------------------------------------------------------------
+
+(deftest ac-18-3-a-404-during-an-in-flight-creation-becomes-200-on-the-same-key-with-one-instruction
+  (let [f (setup)
+        h (handler)
+        k (key!)
+        body (instruction-body f)
+        {:keys [outcome inserted release pid]} (hold-a-creation-open! f k body)]
+    (await-latch inserted)
+
+    (testing "while A's transaction is open — key row claimed, instruction row
+              written, nothing committed — the lookup on a second connection
+              answers 404"
+      (is (= "idle in transaction" (backend-state @pid))
+          "non-vacuity: A's transaction is open when the lookup runs")
+      (is (= 1 (.getCount ^CountDownLatch release)) "and A has not been released")
+      (let [{:keys [status json]} (lookup k)]
+        (is (= 404 status) (pr-str json))
+        (is (= "no-binding" (get-in json ["errors" "reason"]))))
+      (is (= "idle in transaction" (backend-state @pid))
+          "and it was still open after the lookup returned"))
+
+    (testing "the client keeps its key and resubmits under it while A is in
+              flight: the resubmission waits on A's key row rather than creating"
+      (let [resubmitted (future (call h :post "/payment-instructions"
+                                      {:body body :idempotency-key k}))]
+        (is (pos? (await-lock-wait!)) "the resubmission is parked on A's key row")
+        (is (not (realized? resubmitted)))
+
+        (.countDown ^CountDownLatch release)
+        (let [a @outcome
+              b (deref resubmitted 30000 :timed-out)]
+          (is (= 201 (:status a)))
+          (is (false? (:replayed? a)))
+          (testing "and the late commit turned it into a replay, not a second instruction"
+            (is (= 201 (:status b)))
+            (is (= "true" (get-in b [:headers "idempotent-replayed"])))
+            (is (= (:body a) (:body b)))))))
+
+    (testing "after A commits the same lookup is 200, naming the one instruction"
+      (let [{:keys [status json]} (lookup k)]
+        (is (= 200 status))
+        (is (= (get (:data @outcome) "id") (get json "instructionId")))
+        (is (= 201 (get json "originalStatus")))
+        (is (= "draft" (get json "currentStatus")))))
+
+    (is (= 1 (instruction-count)) "exactly one payment_instruction")
+    (is (= 1 (key-count)) "and exactly one idempotency_key")
+
+    (testing "and a resubmission after the commit is a replay too"
+      (let [again (call :post "/payment-instructions" {:body body :idempotency-key k})]
+        (is (= 201 (:status again)))
+        (is (= "true" (get-in again [:headers "idempotent-replayed"])))
+        (is (= 1 (instruction-count)))))))
+
+;; ---------------------------------------------------------------------------
+;; AC-18-4 / AC-18-5 — the three reference rules
+;; ---------------------------------------------------------------------------
+
+(deftest ac-18-2-rule-1-the-same-reference-under-the-same-key-is-the-ordinary-replay
+  (let [f (setup)
+        k (key!)
+        body (instruction-body f "clientReference" "agent-ref-0001" "creditorCountry" "SG")
+        first-call (call :post "/payment-instructions" {:body body :idempotency-key k})
+        replay (call :post "/payment-instructions" {:body body :idempotency-key k})]
+    (is (= 201 (:status first-call) (:status replay)))
+    (is (= "agent-ref-0001" (get-in first-call [:json "clientReference"])))
+    (is (= "SG" (get-in first-call [:json "creditorCountry"])))
+    (is (= "true" (get-in replay [:headers "idempotent-replayed"])))
+    (is (= (:body first-call) (:body replay)))
+    (is (= 1 (instruction-count)))
+    (testing "and the reference is rendered on the resource when read back"
+      (is (= "agent-ref-0001"
+             (get (:json (call :get (get-in first-call [:headers "location"]))) "clientReference"))))))
+
+(deftest ac-18-4-a-reused-client-reference-with-different-content-is-409-and-creates-nothing
+  (let [f (setup)
+        k (key!)
+        body (instruction-body f "clientReference" "agent-ref-0001")
+        original (call :post "/payment-instructions" {:body body :idempotency-key k})
+        different (assoc body "amount" {"currency" "SGD" "minorUnits" 999})]
+    (is (= 201 (:status original)))
+
+    (testing "rule 2 under a new key"
+      (let [k2 (key!)
+            {:keys [status json]} (call :post "/payment-instructions"
+                                        {:body different :idempotency-key k2})]
+        (is (= 409 status))
+        (is (= "https://clofin.dev/problems/conflict" (get json "type")))
+        (is (= {"reason" "client-reference-conflict"
+                "instructionId" (get-in original [:json "id"])}
+               (get json "errors")))
+        (is (= 1 (instruction-count)) "nothing persisted")
+        (is (= 1 (key-count)) "and the new key was not consumed")
+        (testing "— so a corrected request under that same new key succeeds"
+          (let [corrected (call :post "/payment-instructions"
+                                {:body (assoc different "clientReference" "agent-ref-0002")
+                                 :idempotency-key k2})]
+            (is (= 201 (:status corrected)))
+            (is (nil? (get-in corrected [:headers "idempotent-replayed"])))))))
+
+    (testing "rule 2 under the original key: the key's own 409 wins, because the
+              key row is claimed before anything else runs — the published order"
+      (let [{:keys [status json]} (call :post "/payment-instructions"
+                                        {:body different :idempotency-key k})]
+        (is (= 409 status))
+        (is (= {"header" "Idempotency-Key"} (get json "errors"))
+            "the key conflict, not a reference conflict")
+        (is (str/includes? (get json "detail") "Idempotency-Key"))))
+
+    (testing "an existing instruction amended after creation answers rule 2 to its
+              own original content: the reference names content the client no
+              longer holds"
+      (is (= 200 (:status (call :patch (str "/payment-instructions/" (get-in original [:json "id"]))
+                                {:idempotency-key (key!)
+                                 :body {"organisationId" (get-in f [:org "id"])
+                                        "purposeCode" "TRAD"}}))))
+      (let [{:keys [status json]} (call :post "/payment-instructions"
+                                        {:body body :idempotency-key (key!)})]
+        (is (= 409 status))
+        (is (= "client-reference-conflict" (get-in json ["errors" "reason"])))))
+    (is (= 2 (instruction-count)) "the original and the corrected request, nothing else")))
+
+(deftest ac-18-4-a-race-loser-with-different-content-answers-client-reference-conflict
+  (testing "standing lesson L-18: the loser of the race on the unique index re-enters
+            the serial path's decision — so different content is a conflict even
+            when the reference was arbitrated by the index rather than the pre-check"
+    (let [f (setup)
+          h (handler)
+          body (instruction-body f "clientReference" "agent-ref-race-2")
+          {:keys [outcome inserted release]} (hold-a-creation-open! f (key!) body)]
+      (await-latch inserted)
+      (let [loser (future (call h :post "/payment-instructions"
+                                {:body (assoc body "amount" {"currency" "SGD" "minorUnits" 999})
+                                 :idempotency-key (key!)}))]
+        (is (pos? (await-lock-wait!)) "the loser passed the pre-check and is parked on the index")
+        (.countDown ^CountDownLatch release)
+        (let [winner @outcome
+              {:keys [status json]} (deref loser 30000 :timed-out)]
+          (is (= 201 (:status winner)))
+          (is (= 409 status) (pr-str json))
+          (is (= {"reason" "client-reference-conflict"
+                  "instructionId" (get (:data winner) "id")}
+                 (get json "errors")))
+          (is (= 1 (instruction-count)))
+          (is (= 1 (key-count)) "the loser's key rolled back with its insert"))))))
+
+(deftest ac-18-5-a-reused-client-reference-under-a-new-key-answers-409-naming-the-existing-instruction
+  (testing "rule 3, sequentially"
+    (let [f (setup)
+          body (instruction-body f "clientReference" "agent-ref-0001")
+          original (call :post "/payment-instructions" {:body body :idempotency-key (key!)})
+          k2 (key!)
+          {:keys [status json]} (call :post "/payment-instructions" {:body body :idempotency-key k2})]
+      (is (= 201 (:status original)))
+      (is (= 409 status))
+      (is (= {"reason" "client-reference-exists"
+              "instructionId" (get-in original [:json "id"])}
+             (get json "errors")))
+      (is (str/includes? (get json "detail") (get-in original [:json "id"])))
+      (is (= 1 (instruction-count)))
+      (is (= 1 (key-count)) "the second key was not consumed")
+      (testing "a lost key is resolved by the reference: the 409 names the id to read"
+        (is (= 200 (:status (call :get (str "/payment-instructions/" (get-in json ["errors" "instructionId"])))))))))
+
+  (testing "rule 3 with two threads and two keys racing on one reference. Thread A
+            holds its creation open after the insert, so B's pre-check cannot see
+            A's row and B reaches the unique index — the arbitration path, not
+            the pre-check — and is decided after its own rollback"
+    (let [f (setup)
+          h (handler)
+          ;; The sequential half above left its own rows; this half counts from here.
+          instructions-before (instruction-count)
+          keys-before (key-count)
+          body (instruction-body f "clientReference" "agent-ref-race")
+          {:keys [outcome inserted release]} (hold-a-creation-open! f (key!) body)]
+      (await-latch inserted)
+      (let [loser (future (call h :post "/payment-instructions"
+                                {:body body :idempotency-key (key!)}))]
+        (is (pos? (await-lock-wait!)) "B is parked on payment_instruction_client_reference_key")
+        (is (not (realized? loser)))
+        (.countDown ^CountDownLatch release)
+        (let [winner @outcome
+              {:keys [status json]} (deref loser 30000 :timed-out)]
+          (is (= [201 409] [(:status winner) status]) (pr-str json))
+          (is (= {"reason" "client-reference-exists"
+                  "instructionId" (get (:data winner) "id")}
+                 (get json "errors")))
+          (is (= 1 (- (instruction-count) instructions-before)) "exactly one instruction")
+          (is (= 1 (- (key-count) keys-before)) "and one key row"))))))
+
+;; ---------------------------------------------------------------------------
+;; AC-18-7 / AC-18-8 — immutability, and the country
+;; ---------------------------------------------------------------------------
+
+(deftest ac-18-7-a-client-reference-is-immutable-through-the-api-and-behind-it
+  (let [f (setup)
+        pi (new-instruction! f "clientReference" "agent-ref-0001")]
+    (testing "PATCH naming it is 422 naming the member"
+      (let [{:keys [status json]}
+            (call :patch (str "/payment-instructions/" (get pi "id"))
+                  {:idempotency-key (key!)
+                   :body {"organisationId" (get-in f [:org "id"]) "clientReference" "agent-ref-0002"}})]
+        (is (= 422 status))
+        (is (= {"clientReference" "is set when the instruction is created and cannot be amended"}
+               (get json "errors")))))
+    (testing "nor can one be added to an instruction created without one"
+      (let [plain (new-instruction! f)
+            {:keys [status]} (call :patch (str "/payment-instructions/" (get plain "id"))
+                                   {:idempotency-key (key!)
+                                    :body {"organisationId" (get-in f [:org "id"])
+                                           "clientReference" "agent-ref-late"}})]
+        (is (= 422 status))))
+    (testing "behind the API the trigger refuses the raw UPDATE — asserted in
+              `clofin.payments.repository-test`, application bypassed"
+      (is (thrown? Exception
+                   (db/execute! tdb/*pool* ["update payment_instruction set client_reference = 'x' where id = ?"
+                                            (java.util.UUID/fromString (get pi "id"))]))))
+    (testing "the same reference in a second organisation creates a second instruction"
+      (let [other (setup)
+            theirs (call :post "/payment-instructions"
+                         {:body (instruction-body other "clientReference" "agent-ref-0001")
+                          :idempotency-key (key!) :actor (:maker other)})]
+        (is (= 201 (:status theirs)))
+        (is (not= (get pi "id") (get-in theirs [:json "id"])))))))
+
+(deftest ac-18-8-creditor-country-is-syntax-only-and-amendable
+  (let [f (setup)]
+    (testing "SG accepted and rendered"
+      (is (= "SG" (get (new-instruction! f "creditorCountry" "SG") "creditorCountry"))))
+    (testing "sg, SGP and S1 refused, each named with every other failed field"
+      (doseq [bad ["sg" "SGP" "S1"]]
+        (let [{:keys [status json]}
+              (call :post "/payment-instructions"
+                    {:idempotency-key (key!)
+                     :body (instruction-body f "creditorCountry" bad
+                                             "clientReference" "has space"
+                                             "purposeCode" "XXXX")})]
+          (is (= 422 status))
+          (is (= {"clientReference" "must be 1–128 printable ASCII characters with no spaces"
+                  "creditorCountry" "must be an ISO 3166-1 alpha-2 shape: two uppercase letters"
+                  "purposeCode"     "unknown purpose code: XXXX"}
+                 (get json "errors"))
+              bad))))
+    (testing "an amend changes it, and the audit after-digest changes with it"
+      (let [pi (new-instruction! f "creditorCountry" "SG")
+            amended (call :patch (str "/payment-instructions/" (get pi "id"))
+                          {:idempotency-key (key!)
+                           :body {"organisationId" (get-in f [:org "id"]) "creditorCountry" "GB"}})
+            event (last (filter #(= "payment.amended" (:action %)) (audit-rows (get pi "id"))))]
+        (is (= 200 (:status amended)))
+        (is (= "GB" (get-in amended [:json "creditorCountry"])))
+        (is (some? event))
+        (is (not= (:before-digest event) (:after-digest event))
+            "the projection includes the country: a change to it alone moves the digest")))
+    (is (= 2 (instruction-count)))))

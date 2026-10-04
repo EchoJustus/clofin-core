@@ -488,3 +488,124 @@
                                "X" "SG-SYNTH-1" 100 "SGD" today "SUPP" (name status)
                                (random-uuid)]))
             (str (name status) " must be storable"))))))
+
+;; ---------------------------------------------------------------------------
+;; TASK-018 — `client_reference` and `creditor_country` (migration `0014`)
+;; ---------------------------------------------------------------------------
+
+(defn- raw-insert!
+  "Insert an instruction row with the application bypassed entirely."
+  [f & {:keys [client-reference creditor-country]}]
+  (let [id (random-uuid)]
+    (db/execute! tdb/*pool*
+                 ["insert into payment_instruction
+                     (id, organisation_id, debtor_account_id, creditor_name,
+                      creditor_account, amount_minor, currency, value_date,
+                      purpose_code, status, created_by, client_reference, creditor_country)
+                   values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                  id (:organisation-id f) (:account-id f)
+                  "X" "SG-SYNTH-1" 100 "SGD" today "SUPP" "draft" (:maker f)
+                  client-reference creditor-country])
+    id))
+
+(defn- refused-by
+  "The constraint or trigger message that refused `f`, or nil if nothing did."
+  [f]
+  (when-let [t (caught f)]
+    (or (:constraint (db/violation t)) (ex-message t))))
+
+(deftest ac-18-0-the-schema-refuses-every-bad-shape-with-the-application-bypassed
+  (let [f (fixture)
+        with-ref (raw-insert! f :client-reference "agent-ref-0001" :creditor-country "SG")
+        without (raw-insert! f)]
+    (testing "both documented shapes insert: both members, and neither"
+      (is (= {:client-reference "agent-ref-0001" :creditor-country "SG"}
+             (select-keys (payments/find-instruction tdb/*pool* (:organisation-id f) with-ref)
+                          [:client-reference :creditor-country])))
+      (is (= {:client-reference nil :creditor-country nil}
+             (select-keys (payments/find-instruction tdb/*pool* (:organisation-id f) without)
+                          [:client-reference :creditor-country]))))
+    (testing "the 128-character upper bound inserts"
+      (is (uuid? (raw-insert! f :client-reference (apply str "!~" (repeat 126 "x"))))))
+    (testing "the pre-flight's refusals, re-run on the migrated test database"
+      (is (= "payment_client_reference_shape"
+             (refused-by #(raw-insert! f :client-reference "has space"))))
+      (is (= "payment_client_reference_shape"
+             (refused-by #(raw-insert! f :client-reference (apply str (repeat 129 "x"))))))
+      (is (= "payment_client_reference_shape"
+             (refused-by #(raw-insert! f :client-reference ""))))
+      (is (= "payment_client_reference_shape"
+             (refused-by #(raw-insert! f :client-reference "réf-1"))))
+      (is (= "payment_creditor_country_shape"
+             (refused-by #(raw-insert! f :creditor-country "sg"))))
+      (is (= "payment_creditor_country_shape"
+             (refused-by #(db/execute! tdb/*pool* ["update payment_instruction set creditor_country = 'S1' where id = ?" without]))))
+      (is (= "payment_instruction_client_reference_key"
+             (refused-by #(raw-insert! f :client-reference "agent-ref-0001")))
+          "the same reference twice in one organisation"))
+    (testing "the same reference in another organisation is a different reference"
+      (is (uuid? (raw-insert! (fixture) :client-reference "agent-ref-0001"))))))
+
+(deftest ac-18-7-the-raw-update-of-a-reference-is-refused-by-the-trigger
+  (let [f (fixture)
+        with-ref (raw-insert! f :client-reference "agent-ref-0001")
+        without (raw-insert! f)
+        refusal "payment_instruction.client_reference is set when the instruction is created and never changes"]
+    (doseq [[label sql id] [["value -> value" "update payment_instruction set client_reference = 'agent-ref-0002' where id = ?" with-ref]
+                            ["value -> null" "update payment_instruction set client_reference = null where id = ?" with-ref]
+                            ["null -> value" "update payment_instruction set client_reference = 'agent-ref-0003' where id = ?" without]]]
+      (let [message (refused-by #(db/execute! tdb/*pool* [sql id]))]
+        (is (and message (re-find (re-pattern (java.util.regex.Pattern/quote refusal)) message))
+            (str label " must be refused by the trigger, got " (pr-str message)))))
+    (testing "and nothing moved"
+      (is (= "agent-ref-0001" (:client-reference (payments/find-instruction tdb/*pool* (:organisation-id f) with-ref))))
+      (is (nil? (:client-reference (payments/find-instruction tdb/*pool* (:organisation-id f) without)))))
+    (testing "an update that leaves the reference alone is not refused — the trigger
+              is narrower than the row, as 0013's is"
+      (db/execute! tdb/*pool* ["update payment_instruction set creditor_country = 'GB' where id = ?" with-ref])
+      (is (= "GB" (:creditor-country (payments/find-instruction tdb/*pool* (:organisation-id f) with-ref)))))))
+
+(deftest ac-18-2-both-members-round-trip-through-the-repository
+  (let [f (fixture)
+        created (payments/create-instruction! tdb/*pool*
+                                              (candidate f :client-reference "agent-ref-0001"
+                                                         :creditor-country "SG")
+                                              opts)
+        found (payments/find-instruction tdb/*pool* (:organisation-id f) (:id created))]
+    (is (= (dissoc created :created-at) (dissoc found :created-at)))
+    (is (= "agent-ref-0001" (:client-reference found)))
+    (is (= "SG" (:creditor-country found)))
+    (is (= (:id created) (:id (payments/find-by-client-reference tdb/*pool* (:organisation-id f) "agent-ref-0001"))))
+    (is (nil? (payments/find-by-client-reference tdb/*pool* (:organisation-id (fixture)) "agent-ref-0001"))
+        "scoped to the organisation")
+    (testing "amend! writes the country and leaves the reference where it was"
+      (let [{:keys [after]} (payments/amend! tdb/*pool* (:organisation-id f) (:id created)
+                                             {:creditor-country "GB"} {:today today :actor (:actor f)})
+            reread (payments/find-instruction tdb/*pool* (:organisation-id f) (:id created))]
+        (is (= "GB" (:creditor-country after) (:creditor-country reread)))
+        (is (= "agent-ref-0001" (:client-reference reread)))))))
+
+(deftest ac-18-4-the-reference-rules-hold-at-the-repository-seam
+  (let [f (fixture)
+        original (payments/create-instruction! tdb/*pool* (candidate f :client-reference "agent-ref-0001") opts)
+        count-rows #(:count (db/query-one tdb/*pool* ["select count(*) as count from payment_instruction"]))]
+    (testing "identical content: client-reference-exists, naming the instruction"
+      (let [data (ex-data (caught #(payments/create-instruction!
+                                    tdb/*pool* (candidate f :client-reference "agent-ref-0001") opts)))]
+        (is (= :conflict (:clofin/error data)))
+        (is (= "client-reference-exists" (:reason data)))
+        (is (= (str (:id original)) (:instructionId data)))))
+    (testing "different content: client-reference-conflict"
+      (let [data (ex-data (caught #(payments/create-instruction!
+                                    tdb/*pool* (candidate f :client-reference "agent-ref-0001"
+                                                          :amount (money/of "SGD" 999))
+                                    opts)))]
+        (is (= "client-reference-conflict" (:reason data)))
+        (is (= (str (:id original)) (:instructionId data)))))
+    (is (= 1 (count-rows)) "nothing was created by either")
+    (testing "the reference is checked before the debtor account — a frozen account
+              does not turn a repeated reference into a 422"
+      (db/execute! tdb/*pool* ["update ledger_account set status = 'frozen' where id = ?" (:account-id f)])
+      (is (= "client-reference-exists"
+             (:reason (ex-data (caught #(payments/create-instruction!
+                                         tdb/*pool* (candidate f :client-reference "agent-ref-0001") opts)))))))))

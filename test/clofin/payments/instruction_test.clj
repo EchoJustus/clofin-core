@@ -240,9 +240,115 @@
                   :creditor-account  "MY-SYNTH-42"
                   :amount            (money/of "SGD" 7500)
                   :value-date        (.plusDays today 30)
-                  :purpose-code      "TRAD"}]
+                  :purpose-code      "TRAD"
+                  :creditor-country  "MY"}]
     (is (= (set (keys changes)) instruction/amendable-fields)
         "this test covers the whole set, and fails if the set grows")
     (let [amended (instruction/amend existing changes opts)]
       (doseq [[field value] changes]
         (is (= value (get amended field)))))))
+
+;; ---------------------------------------------------------------------------
+;; TASK-018 — `client-reference` and `creditor-country` (ADR-0028 D6)
+;; ---------------------------------------------------------------------------
+
+(deftest ac-18-2-a-client-reference-is-optional-and-printable-ascii-without-spaces
+  (testing "absent is valid: the member is optional"
+    (is (nil? (:client-reference (errors {:client-reference nil}))))
+    (is (nil? (:client-reference (errors {})))))
+  (testing "every printable ASCII class, at both bounds"
+    (doseq [ok ["a" "agent-ref-0001" "!~#$%&'()*+,-./:;<=>?@[]^_`{|}"
+                (apply str (repeat 128 "x"))]]
+      (is (nil? (:client-reference (errors {:client-reference ok}))) (pr-str ok))))
+  (testing "refused, and named — never repaired"
+    (doseq [bad ["" "has space" " leading" "trailing " (apply str (repeat 129 "x"))
+                 "tab\there" "réf-1" "line\nbreak"]]
+      (is (= "must be 1–128 printable ASCII characters with no spaces"
+             (:client-reference (errors {:client-reference bad})))
+          (pr-str bad)))
+    (is (= "must be text" (:client-reference (errors {:client-reference 42}))))))
+
+(deftest ac-18-2-a-bad-client-reference-is-named-with-every-other-failed-field
+  (testing "PR-003: one pass, every failure"
+    (is (= #{:client-reference :creditor-country :purpose-code}
+           (set (keys (errors {:client-reference "has space"
+                               :creditor-country "sg"
+                               :purpose-code "XXXX"})))))))
+
+(deftest ac-18-8-creditor-country-is-a-shape-and-not-a-list
+  (testing "two uppercase letters, and nothing is looked up — `ZZ` passes too"
+    (doseq [ok ["SG" "GB" "ZZ"]]
+      (is (nil? (:creditor-country (errors {:creditor-country ok}))) ok))
+    (is (nil? (:creditor-country (errors {:creditor-country nil})))))
+  (testing "refused, not corrected: no upper-casing for the caller"
+    (doseq [bad ["sg" "SGP" "S1" "S" "" " SG"]]
+      (is (= "must be an ISO 3166-1 alpha-2 shape: two uppercase letters"
+             (:creditor-country (errors {:creditor-country bad})))
+          (pr-str bad)))))
+
+(deftest ac-18-2-construction-keeps-the-reference-exactly-as-sent
+  (let [built (instruction/draft (assoc (valid-candidate)
+                                        :client-reference "Agent-Ref_0001"
+                                        :creditor-country "SG")
+                                 opts)]
+    (is (= "Agent-Ref_0001" (:client-reference built)) "no trim, no case folding")
+    (is (= "SG" (:creditor-country built))))
+  (testing "and both are defaulted, so a built instruction has a loaded row's shape"
+    (let [built (instruction/draft (valid-candidate) opts)]
+      (is (contains? built :client-reference))
+      (is (contains? built :creditor-country))
+      (is (nil? (:client-reference built))))))
+
+(deftest ac-18-7-a-client-reference-is-not-amendable-and-a-country-is
+  (is (not (contains? instruction/amendable-fields :client-reference)))
+  (is (contains? instruction/amendable-fields :creditor-country))
+  (let [existing (instruction/draft (assoc (valid-candidate) :client-reference "agent-ref-0001")
+                                    opts)
+        t (caught #(instruction/amend existing {:client-reference "agent-ref-0002"} opts))]
+    (is (= :field-validation (:clofin/error (ex-data t))))
+    (is (= "cannot be amended" (:client-reference (ex-data t)))))
+  (testing "a country can be set, changed, and is re-validated with the whole"
+    (let [existing (instruction/draft (valid-candidate) opts)]
+      (is (= "GB" (:creditor-country (instruction/amend existing {:creditor-country "GB"} opts))))
+      (is (some? (caught #(instruction/amend existing {:creditor-country "gb"} opts)))))))
+
+(deftest ac-18-4-same-content-compares-every-creation-member-and-nothing-else
+  (let [base (instruction/draft (assoc (valid-candidate)
+                                       :id (random-uuid)
+                                       :client-reference "agent-ref-0001"
+                                       :creditor-country "SG")
+                                opts)]
+    (is (instruction/same-content? base base))
+    (testing "each creation member, changed alone, makes it different content"
+      (doseq [[field value] {:debtor-account-id (random-uuid)
+                             :creditor-name     "Andaman Shipping Sdn Bhd"
+                             :creditor-account  "MY-SYNTH-42"
+                             :creditor-country  "MY"
+                             :amount            (money/of "SGD" 125001)
+                             :value-date        (.plusDays today 8)
+                             :purpose-code      "TRAD"
+                             :reverses-id       (random-uuid)
+                             :retries-id        (random-uuid)}]
+        (is (not (instruction/same-content? (assoc base field value) base)) (str field)))
+      (is (= (set instruction/creation-members)
+             #{:debtor-account-id :creditor-name :creditor-account :creditor-country
+               :amount :value-date :purpose-code :reverses-id :retries-id})
+          "the set the brief names, and this test fails if it grows unnoticed"))
+    (testing "a currency change alone is a different amount"
+      (is (not (instruction/same-content? (assoc base :amount (money/of "JPY" 125000)) base))))
+    (testing "identity, provenance, lifecycle and the reference itself are not compared"
+      (doseq [[field value] {:id (random-uuid) :organisation-id (random-uuid)
+                             :created-by (random-uuid) :status :pending-approval
+                             :created-at (java.time.Instant/now)
+                             :retried-by-ids [(random-uuid)]
+                             :client-reference "agent-ref-9999"}]
+        (is (instruction/same-content? (assoc base field value) base) (str field))))
+    (testing "an absent optional member and a nil one are the same content"
+      (is (instruction/same-content? (dissoc base :creditor-country :reverses-id :retries-id)
+                                     (assoc base :creditor-country nil)) )
+      (is (not (instruction/same-content? (dissoc base :creditor-country) base))
+          "but absent against present is not"))
+    (testing "a request is compared as `instruction` stores it — surrounding
+              whitespace on the free-text fields is not a difference"
+      (is (instruction/same-content? (assoc base :creditor-name "  Pacific Rim Logistics Pte Ltd ")
+                                     base)))))

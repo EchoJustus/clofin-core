@@ -75,6 +75,11 @@
     :read #(java.util.UUID/fromString %) :unreadable "must be a UUID"}
    {:key :creditor-name     :wire "creditorName"}
    {:key :creditor-account  :wire "creditorAccount"}
+   ;; ADR-0028 D6. Text, read as sent: the domain judges the shape, and neither
+   ;; is trimmed or case-folded on the way in — a trailing space in a reference
+   ;; is refused, not removed, and `sg` is refused, not upper-cased.
+   {:key :client-reference  :wire "clientReference"}
+   {:key :creditor-country  :wire "creditorCountry"}
    {:key :purpose-code      :wire "purposeCode"}
    {:key :amount            :wire "amount" :read money/wire->
     :unreadable "must be an integer count of minor units in a supported currency"}
@@ -102,6 +107,13 @@
   caller believing it had recorded who raised a payment, which is exactly the
   belief that made the field worthless before there was a principal."
   {"createdBy" "is taken from the authenticated actor and cannot be set by the caller"})
+
+(def ^:private set-at-creation
+  "Members a `PATCH` is refused for naming with a reason more specific than
+  \"cannot be amended\". `clientReference` is an identity the client binds its
+  own record to (ADR-0028 D6), and saying *when* it is set tells the caller what
+  to do instead: create, or keep the one it has."
+  {"clientReference" "is set when the instruction is created and cannot be amended"})
 
 (defn- read-members
   "Parse every member of `body` that `field-readers` knows about.
@@ -229,13 +241,20 @@
   The key is scoped to the organisation, and the organisation now comes from
   the authenticated principal rather than from the request — so a caller cannot
   choose which tenant's key space its retry lands in. That was always the
-  intent of scoping it; before TASK-003 there was nothing to enforce it with."
-  [pool request organisation-id effect]
+  intent of scoping it; before TASK-003 there was nothing to enforce it with.
+
+  `operation-id` is the route's `operationId`, written on the key row when the
+  key is claimed (ADR-0028 D6). A literal at each call site rather than read
+  from the matched route, so a handler called outside the router still binds
+  its key correctly; `clofin.api.conformance-test` checks every row the walk
+  leaves against the operation that wrote it."
+  [pool request organisation-id operation-id effect]
   (idem-store/execute-once!
    pool
    {:organisation-id organisation-id
     :key             (idem/read-key (get-in request [:headers idempotency-header]))
-    :digest          (request-digest request)}
+    :digest          (request-digest request)
+    :operation-id    operation-id}
    effect))
 
 (defn- respond
@@ -268,6 +287,67 @@
 ;; Handlers
 ;; ---------------------------------------------------------------------------
 
+(defn creation-effect
+  "The effect `create` runs inside `execute-once!`: validate, insert, audit, and
+  answer `201` — `(fn [tx] {:status 201 :body …})`.
+
+  A function of its own, and public, so the lookup's race test can run **this**
+  effect under `clofin.idempotency.repository/execute-once!` and hold its
+  transaction open between the insert and the commit (ADR-0028 D6, AC-18-3).
+  A test that raced a stand-in for it would prove the stand-in."
+  [request actor organisation-id body]
+  (fn [tx]
+    (let [opts (today)
+          [values unreadable] (read-members body)
+          ;; One pass over every rule, so a caller with three bad
+          ;; fields learns about all three (PR-003, AC-2). A member
+          ;; that could not be parsed reaches the domain as absent, so
+          ;; its parse message takes precedence: "must be a UUID" is
+          ;; the useful answer for `"debtorAccountId": "nope"`, and
+          ;; "is required" is not.
+          candidate (assoc values
+                           :organisation-id organisation-id
+                           :created-by (:id actor)
+                           :status state/initial-state)
+          errors (merge (instruction/field-errors candidate opts) unreadable)
+          _ (when (seq errors) (invalid-fields! errors))
+          created (wire-named
+                   #(payments/create-instruction!
+                     tx (assoc candidate :id (random-uuid)) opts))]
+      ;; Same transaction as the insert (C-05, PR-075, invariant I9).
+      ;; `execute-once!` owns it and hands it here as `tx`; a write
+      ;; after this function returns would be a payment captured with
+      ;; no record that it was.
+      (audit-store/record! tx {:organisation-id organisation-id
+                               :actor-id        (:id actor)
+                               :action          "payment.created"
+                               :subject-type    "payment-instruction"
+                               :subject-id      (:id created)
+                               :before          nil
+                               :after           (audit/instruction-subject created)
+                               :correlation-id  (:correlation-id request)})
+      {:status 201 :body (wire/instruction->wire created)})))
+
+(defn- resolve-client-reference-race!
+  "Decide a creation that lost the race on `payment_instruction_client_reference_key`.
+
+  Called **after** `execute-once!` has rolled the losing transaction back —
+  instruction row, audit event and key row together, so the key is not
+  consumed. The winner blocked the loser's insert until it committed, so its row
+  is visible on the pool now, and the loser re-enters the serial path's own
+  decision against it (`clofin.payments.repository/client-reference-refusal`,
+  standing lesson **L-18**): `client-reference-exists` for identical content,
+  `client-reference-conflict` for anything else. Never a shortcut that assumes
+  the two requests were the same because their references were.
+
+  No row is a defect, not an answer — the violation said one was committed —
+  so the original error is rethrown rather than guessed around."
+  [pool organisation-id body reference t]
+  (let [[values _] (read-members body)
+        existing (or (payments/find-by-client-reference pool organisation-id reference)
+                     (throw t))]
+    (payments/client-reference-refusal values existing)))
+
 (defn create
   "`POST /payment-instructions` — capture intent to pay.
 
@@ -290,6 +370,19 @@
   provenance an operator can rewrite is provenance an investigation cannot rely
   on.
 
+  **A `clientReference` names at most one instruction per organisation**
+  (ADR-0028 D6). The order in which the answers are decided is the contract's:
+  the `Idempotency-Key` first, because `execute-once!` claims the key row
+  before anything runs — so the same key with a different body is the key's
+  `409` whatever the reference says, and the same key with the same body is the
+  ordinary replay; then the fields, all of them at once; then the reference
+  (`client-reference-exists` for identical content under another key,
+  `client-reference-conflict` for different content, each naming
+  `errors.instructionId`); then the rules that need the database. Nothing is
+  persisted under either reference answer and the key is not consumed. Under
+  concurrency the unique index decides, and the loser is answered by
+  `resolve-client-reference-race!` after its rollback.
+
   `createdBy` is the authenticated actor. It is now evidence of who raised the
   payment, which is what makes it usable as the maker side of C-01 — and a
   caller that tries to set it is refused rather than quietly overridden."
@@ -300,39 +393,13 @@
           (principal/for-request pool request :payment/create body)
           _ (reject-caller-set-members! body)
           outcome
-          (idempotently
-           pool request organisation-id
-           (fn [tx]
-             (let [opts (today)
-                   [values unreadable] (read-members body)
-                   ;; One pass over every rule, so a caller with three bad
-                   ;; fields learns about all three (PR-003, AC-2). A member
-                   ;; that could not be parsed reaches the domain as absent, so
-                   ;; its parse message takes precedence: "must be a UUID" is
-                   ;; the useful answer for `"debtorAccountId": "nope"`, and
-                   ;; "is required" is not.
-                   candidate (assoc values
-                                    :organisation-id organisation-id
-                                    :created-by (:id actor)
-                                    :status state/initial-state)
-                   errors (merge (instruction/field-errors candidate opts) unreadable)
-                   _ (when (seq errors) (invalid-fields! errors))
-                   created (wire-named
-                            #(payments/create-instruction!
-                              tx (assoc candidate :id (random-uuid)) opts))]
-               ;; Same transaction as the insert (C-05, PR-075, invariant I9).
-               ;; `execute-once!` owns it and hands it here as `tx`; a write
-               ;; after this function returns would be a payment captured with
-               ;; no record that it was.
-               (audit-store/record! tx {:organisation-id organisation-id
-                                        :actor-id        (:id actor)
-                                        :action          "payment.created"
-                                        :subject-type    "payment-instruction"
-                                        :subject-id      (:id created)
-                                        :before          nil
-                                        :after           (audit/instruction-subject created)
-                                        :correlation-id  (:correlation-id request)})
-               {:status 201 :body (wire/instruction->wire created)})))]
+          (try
+            (idempotently pool request organisation-id "createPaymentInstruction"
+                          (creation-effect request actor organisation-id body))
+            (catch clojure.lang.ExceptionInfo t
+              (if-let [reference (:clofin/client-reference-race (ex-data t))]
+                (resolve-client-reference-race! pool organisation-id body reference t)
+                (throw t))))]
       (respond outcome {"location" (location (:data outcome))}))))
 
 (defn show
@@ -350,6 +417,95 @@
         (resp/ok (wire/instruction->wire found))
         (err/not-found! "No such payment instruction in this organisation"
                         {:id (str id)})))))
+
+(def lookup-refusal-reasons
+  "Why `GET /payment-instructions/by-idempotency-key/{key}` did not answer with a
+  binding, as the machine codes published under `errors.reason`
+  (`IdempotencyKeyLookupRefusalReason`; `clofin.contract-test` compares the two).
+
+  - `no-binding` — `404`: no committed binding existed at the instant of the
+    read. Nothing more: a creation in flight may still commit.
+  - `key-bound-to-another-operation` — `409`: the key is taken, by an operation
+    this lookup does not serve — or by a row written before migration `0014`,
+    whose operation is unknown and is reported as `null`, never as absent."
+  #{"no-binding" "key-bound-to-another-operation"})
+
+(def no-binding-detail
+  "The sentence a `404` from the lookup carries, verbatim in the contract: what
+  the answer proves, what it does not, and what a client does next (ADR-0028
+  D6, the operator's ruling of 2026-10-03)."
+  (str "No committed binding existed at the instant of this read; a creation "
+       "still in flight may still commit — keep the original key, read again "
+       "before deciding, and resubmit, if at all, under the same key."))
+
+(def ^:private served-operation
+  "The one binding the lookup describes. A key bound by a submission stores a
+  `PaymentInstruction` body too, and must never be described as a creation."
+  "createPaymentInstruction")
+
+(defn lookup-by-key
+  "`GET /payment-instructions/by-idempotency-key/:key`
+
+  What a creation's `Idempotency-Key` is bound to, for a client that lost the
+  answer: the response the creation stored — status and body, exactly as a
+  replay would serve them — and the instruction's status **now**, read in the
+  same request (ADR-0028 D6).
+
+  Reads `idempotency_key` by `(organisation, key)` with no cache: the row the
+  write path claims inside the creating transaction. So the three answers mean
+  precisely this, and the contract says so in the same words:
+
+  - **`200`** — a committed creation bound this key.
+  - **`404 no-binding`** — no committed binding existed *at the instant of this
+    read*. It does not prove that a creation still in flight cannot commit
+    afterwards; its key row is invisible until it does. The client keeps the
+    original key, reads again before deciding, and resubmits — if at all —
+    under the same key, which turns a late commit into a replay rather than a
+    second instruction.
+  - **`409 key-bound-to-another-operation`** — the key is taken by an amendment,
+    a submission, a cancellation or an approval decision, named in
+    `errors.operationId`; or by a row written before migration `0014`, whose
+    operation is unknown and reported as `null`. Never `404` for either: a
+    `404` would tell a client to resubmit under a key that is taken.
+
+  `:payment/read`, scoped to the principal's organisation like every read: a
+  stated `organisationId` naming another is `403`, and another organisation's
+  key is simply not in this organisation's key space — `404`."
+  [pool]
+  (fn [request]
+    (let [[_ organisation-id] (principal/for-request pool request :payment/read)
+          key (idem/read-path-key
+               (wire/read-path-segment (get-in request [:path-params :key]) "key"))
+          found (idem-store/find-binding pool organisation-id key)]
+      (cond
+        (nil? found)
+        (err/not-found! no-binding-detail {:reason "no-binding"})
+
+        (not= served-operation (:operation-id found))
+        (err/conflict!
+         (str "This Idempotency-Key is bound to "
+              (if-let [op (:operation-id found)]
+                (str "operation " op)
+                "an operation recorded before keys carried their operation")
+              ", not to a creation. It is taken: do not reuse it to create a payment.")
+         {:reason      "key-bound-to-another-operation"
+          :operationId (:operation-id found)})
+
+        :else
+        (let [instruction-id (get (:data found) "id")
+              current (or (payments/find-instruction pool organisation-id
+                                                     (java.util.UUID/fromString instruction-id))
+                          ;; A creation's binding names an instruction this
+                          ;; organisation created, and instructions are never
+                          ;; deleted. Its absence is a defect, not an answer.
+                          (throw (ex-info "A creation's key names an instruction that cannot be read"
+                                          {:instruction-id instruction-id})))]
+          (resp/ok {"idempotencyKey" key
+                    "instructionId"  instruction-id
+                    "boundAt"        (str (:bound-at found))
+                    "originalStatus" (:status found)
+                    "originalBody"   (:data found)
+                    "currentStatus"  (name (:status current))}))))))
 
 (defn index
   "`GET /payment-instructions` — an organisation's instructions, newest first.
@@ -409,7 +565,7 @@
           id (wire/read-uuid (get-in request [:path-params :id]) "id")
           outcome
           (idempotently
-           pool request organisation-id
+           pool request organisation-id "amendPaymentInstruction"
            (fn [tx]
              (let [opts (assoc (today) :actor actor)
                    [values unreadable] (read-members body)
@@ -422,7 +578,9 @@
                    rejected  (remove permitted (keys body))]
                (when (seq rejected)
                  (err/fail! :field-validation "Request failed validation"
-                            (by-member (zipmap rejected (repeat "cannot be amended")))))
+                            (by-member (zipmap rejected
+                                               (map #(get set-at-creation % "cannot be amended")
+                                                      rejected)))))
                (when (seq unreadable) (invalid-fields! unreadable))
                (let [{:keys [before after invalidated-approvals]}
                      (wire-named
@@ -470,8 +628,9 @@
   `permission` is named per event rather than shared, because submitting a
   payment and cancelling one are different authorities (C-08) and an
   organisation may reasonably grant one without the other. `action` is the
-  audit vocabulary term the resulting event is recorded under."
-  [pool event permission action]
+  audit vocabulary term the resulting event is recorded under, and
+  `operation-id` the route's `operationId`, which the key row records."
+  [pool event permission action operation-id]
   (fn [request]
     (let [body (wire/read-object request)
           [actor organisation-id]
@@ -479,7 +638,7 @@
           id (wire/read-uuid (get-in request [:path-params :id]) "id")
           outcome
           (idempotently
-           pool request organisation-id
+           pool request organisation-id operation-id
            (fn [tx]
              (let [{:keys [before after]}
                    ;; The actor travels down so `transition!` can enforce
@@ -518,7 +677,8 @@
   A submitted instruction stops at `pending-approval`. Moving it further is
   `POST /payment-instructions/:id/approvals`."
   [pool]
-  (transition-handler pool :submit :payment/submit "payment.submitted"))
+  (transition-handler pool :submit :payment/submit "payment.submitted"
+                      "submitPaymentInstruction"))
 
 (defn cancel
   "`POST /payment-instructions/:id/cancellation` — cancel an instruction.
@@ -527,4 +687,5 @@
   approved instruction that has not been released is still stoppable. Once
   released it is not, and the answer is `409`."
   [pool]
-  (transition-handler pool :cancel :payment/cancel "payment.cancelled"))
+  (transition-handler pool :cancel :payment/cancel "payment.cancelled"
+                      "cancelPaymentInstruction"))

@@ -24,8 +24,10 @@
 
   [C-06]: docs/COMPLIANCE.md"
   (:require [clofin.db.core :as db]
+            [clofin.error :as err]
             [clofin.idempotency :as idem]
-            [clojure.data.json :as json]))
+            [clojure.data.json :as json]
+            [clojure.string :as str]))
 
 (def ^:private key-constraint
   "The composite primary key of `idempotency_key`. Named so that a unique
@@ -62,12 +64,56 @@
   [source organisation-id key]
   (some-> (stored source organisation-id key) ->replay))
 
+(defn find-binding
+  "What `(organisation-id, key)` is bound to, read from the row the write path
+  binds — no cache — or nil when no committed row exists.
+
+  `{:operation-id :status :body :data :bound-at}`. `:operation-id` is the
+  `operationId` the key was claimed by, and nil for a row written before
+  migration `0014`; `:body` is the stored JSON string, byte for byte what a
+  replay serves, and `:data` the same document decoded.
+
+  **A nil here proves one thing:** that no committed binding existed at the
+  instant of this read. A creation still in flight holds its key row inside an
+  open transaction, invisible to this read until it commits — so nil never
+  means the key is free to be reused for different content (ADR-0028 D6). The
+  lookup endpoint publishes exactly that, and nothing more."
+  [source organisation-id key]
+  (when-let [row (db/query-one source
+                               ["select operation_id, response_status, response_body, created_at
+                                   from idempotency_key
+                                  where organisation_id = ? and key = ?"
+                                organisation-id key])]
+    {:operation-id (:operation-id row)
+     :status       (int (:response-status row))
+     :body         (:response-body row)
+     :data         (json/read-str (:response-body row))
+     :bound-at     (db/->instant (:created-at row))}))
+
+(defn- assert-operation-id!
+  "Refuse to claim a key without the operation claiming it, before any write.
+
+  A key bound with no operation would be a row the lookup can only refuse
+  (`key-bound-to-another-operation`, with a null `operationId`) for as long as
+  it exists — which is the treatment a row written before migration `0014`
+  gets, and must not become the treatment of a row written after it."
+  [operation-id]
+  (when-not (and (string? operation-id) (not (str/blank? operation-id)))
+    (err/invalid! "An idempotency key cannot be bound without the operationId binding it"
+                  {:operation-id (some-> operation-id str)}))
+  operation-id)
+
 (defn execute-once!
   "Run `effect` at most once for `(organisation-id, key)`.
 
   `effect` is `(fn [tx] {:status <int> :body <JSON-ready data>})`, called with a
   connection inside the transaction that also writes the key — so whatever it
   persists commits with the key or not at all.
+
+  `:operation-id` is **required**: the `operationId` of the route doing the
+  binding, written on the claiming insert so a later read of the key can say
+  which operation bound it (ADR-0028 D6, migration `0014`). Nil or blank is a
+  `:validation` error raised before anything is read or written.
 
   Returns `{:status :body :data :replayed?}`, where `:body` is the response as
   a JSON string.
@@ -85,7 +131,8 @@
   failed does not consume its key. That is deliberate: a caller correcting a
   rejected request and retrying with the same key gets a fresh execution, not a
   `409` telling it the body changed."
-  [pool {:keys [organisation-id key digest]} effect]
+  [pool {:keys [organisation-id key digest operation-id]} effect]
+  (assert-operation-id! operation-id)
   (if-let [row (stored pool organisation-id key)]
     ;; Already settled. Correctness does not rest on this read — the primary
     ;; key below does — but there is no reason to do the work and roll it back.
@@ -103,9 +150,10 @@
           ;; no other transaction can observe the placeholder.
           (db/execute! tx
                        ["insert into idempotency_key
-                           (organisation_id, key, request_digest, response_status, response_body)
-                         values (?, ?, ?, ?, ?)"
-                        organisation-id key digest 0 ""])
+                           (organisation_id, key, request_digest, response_status, response_body,
+                            operation_id)
+                         values (?, ?, ?, ?, ?, ?)"
+                        organisation-id key digest 0 "" operation-id])
           (let [{:keys [status body]} (effect tx)
                 encoded (json/write-str body)]
             (db/execute! tx

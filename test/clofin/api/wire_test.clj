@@ -151,3 +151,37 @@
     (is (false? (get wire "truncated"))
         "stated even when false: a consumer should not infer from an absent field")
     (is (= 500 (get wire "movementCap")))))
+
+;; ---------------------------------------------------------------------------
+;; TASK-018 — a free-text path parameter, and the two new members
+;; ---------------------------------------------------------------------------
+
+(deftest ac-18-1-a-path-segment-is-percent-decoded-as-a-path-and-not-as-a-form
+  (testing "the adapter hands handlers the raw path, so a key containing a space,
+            a slash or a percent sign arrives encoded and is compared decoded"
+    (is (= "a b" (wire/read-path-segment "a%20b" "key")))
+    (is (= "a/b" (wire/read-path-segment "a%2Fb" "key")))
+    (is (= "100%" (wire/read-path-segment "100%25" "key")))
+    (is (= "plain-uuid-like-0001" (wire/read-path-segment "plain-uuid-like-0001" "key"))))
+  (testing "`+` is a literal plus in a path; decoding it to a space would look up
+            a different key than the one the header bound"
+    (is (= "a+b" (wire/read-path-segment "a+b" "key"))))
+  (testing "a malformed escape is a 400 naming the parameter"
+    (let [data (rejection #(wire/read-path-segment "a%zzb" "key"))]
+      (is (= :validation (:clofin/error data)))
+      (is (= "key" (:parameter data))))))
+
+(deftest ac-18-2-the-two-new-members-are-rendered-only-when-present
+  (let [pi {:id (random-uuid) :organisation-id (random-uuid) :debtor-account-id (random-uuid)
+            :creditor-name "Pacific Rim Logistics Pte Ltd" :creditor-account "SG-SYNTH-88012345"
+            :amount (money/of "SGD" 125000) :value-date (java.time.LocalDate/parse "2026-08-10")
+            :purpose-code "SUPP" :status :draft :created-by (random-uuid)
+            :client-reference nil :creditor-country nil}]
+    (testing "the shape `reversesId` takes: absent rather than null"
+      (is (not (contains? (wire/instruction->wire pi) "clientReference")))
+      (is (not (contains? (wire/instruction->wire pi) "creditorCountry"))))
+    (testing "and exactly as stored when present"
+      (let [wire (wire/instruction->wire (assoc pi :client-reference "Agent-Ref_0001"
+                                                   :creditor-country "SG"))]
+        (is (= "Agent-Ref_0001" (get wire "clientReference")))
+        (is (= "SG" (get wire "creditorCountry")))))))

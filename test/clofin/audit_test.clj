@@ -65,6 +65,50 @@
                 (audit/digest (audit/instruction-subject (assoc pi field value))))
           (str "changing " field " must change the digest")))))
 
+(def ^:private golden-instruction
+  "A fixed instruction with neither TASK-018 member, and its digest as computed
+  by the projection **before** TASK-018 (`main` at `59c6fde`)."
+  {:id #uuid "00000000-0000-4000-8000-000000000018"
+   :organisation-id #uuid "00000000-0000-4000-8000-0000000000a1"
+   :debtor-account-id #uuid "00000000-0000-4000-8000-0000000000b1"
+   :creditor-name "Pacific Rim Logistics Pte Ltd" :creditor-account "SG-SYNTH-88012345"
+   :amount (money/of "SGD" 125000) :value-date (LocalDate/parse "2026-08-10")
+   :purpose-code "SUPP" :status :draft
+   :created-by #uuid "00000000-0000-4000-8000-0000000000c1"
+   :reverses-id nil :retries-id nil})
+
+(def ^:private golden-digest
+  "v1:ae49022d7ca4f09b6a1152eed67f3a84087003e45351ac16190746de813006f3")
+
+(deftest ac-18-8-the-two-new-members-move-no-existing-digest
+  (testing "an instruction carrying neither member digests as it did before they
+            existed — whether its map omits the keys or carries them as nil, which
+            is the shape `instruction` and a row read back both have. That is why
+            `canonicalisation-version` is not bumped"
+    (is (= golden-digest (audit/digest (audit/instruction-subject golden-instruction))))
+    (is (= golden-digest
+           (audit/digest (audit/instruction-subject
+                          (assoc golden-instruction :client-reference nil :creditor-country nil)))))
+    (is (= "v1" audit/canonicalisation-version))))
+
+(deftest ac-18-8-the-projection-includes-the-two-members-when-they-are-present
+  (testing "a field left out of the projection is one an alteration could move
+            without the trail noticing (ADR-0024's reasoning for retries-id)"
+    (is (some #{:client-reference} audit/instruction-fields))
+    (is (some #{:creditor-country} audit/instruction-fields))
+    (doseq [[field value] [[:client-reference "agent-ref-0001"] [:creditor-country "SG"]]]
+      (let [with (assoc golden-instruction field value)]
+        (is (= value (get (audit/instruction-subject with) field)))
+        (is (not= golden-digest (audit/digest (audit/instruction-subject with)))
+            (str "setting " field " must change the digest"))))
+    (testing "and a changed country is a changed digest — the amend case"
+      (is (not= (audit/digest (audit/instruction-subject (assoc golden-instruction :creditor-country "SG")))
+                (audit/digest (audit/instruction-subject (assoc golden-instruction :creditor-country "GB"))))))
+    (testing "the two older optional links keep digesting as null when absent —
+              changing that would move every existing digest"
+      (is (contains? (audit/instruction-subject golden-instruction) :reverses-id))
+      (is (contains? (audit/instruction-subject golden-instruction) :retries-id)))))
+
 (deftest a-currency-change-alone-changes-the-digest
   (testing "same minor units, different currency — a digest that missed this would prove nothing about money"
     (is (not= (audit/digest (audit/instruction-subject (instruction :amount (money/of "SGD" 125000))))

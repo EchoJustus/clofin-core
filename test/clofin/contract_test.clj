@@ -6,12 +6,14 @@
   declared operation is routable, and every route is declared. A route added
   without a contract change fails here, which is the point."
   (:require [clofin.api.health :as health]
+            [clofin.api.payments :as payments-api]
             [clofin.audit :as audit]
             [clofin.build-info :as build-info]
             [clofin.db.core :as db]
             [clofin.db.migrate :as migrate]
             [clofin.money :as money]
             [clofin.payments.instruction :as instruction]
+            [clofin.payments.repository :as payments-repo]
             [clofin.payments.state :as state]
             [clofin.routes :as routes]
             [clofin.settlement.response :as response]
@@ -565,3 +567,50 @@
             (str schema-name " requires organisationId, which the principal supplies"))
         (is (contains? (set (keys (get schema "properties"))) "organisationId")
             (str schema-name " must still accept it — it is verified, not ignored"))))))
+
+;; ---------------------------------------------------------------------------
+;; TASK-018 — the client reference, the country and the key lookup
+;; ---------------------------------------------------------------------------
+
+(deftest ac-18-10-the-contract-publishes-both-refusal-vocabularies-the-service-emits
+  (let [spec (load-spec)
+        enum (fn [schema] (set (get-in spec ["components" "schemas" schema "enum"])))]
+    (is (seq (enum "ClientReferenceRefusalReason")) "non-vacuity")
+    (is (= payments-repo/client-reference-refusal-reasons (enum "ClientReferenceRefusalReason"))
+        "a reason a creation can be refused under and the contract does not declare is
+         a code a client cannot have known to handle")
+    (is (seq (enum "IdempotencyKeyLookupRefusalReason")) "non-vacuity")
+    (is (= payments-api/lookup-refusal-reasons (enum "IdempotencyKeyLookupRefusalReason")))))
+
+(deftest ac-18-10-the-two-members-are-declared-where-the-service-accepts-and-renders-them
+  (let [schemas (get-in (load-spec) ["components" "schemas"])
+        props (fn [schema] (get-in schemas [schema "properties"]))]
+    (doseq [schema ["CreatePaymentInstructionRequest" "PaymentInstruction"]]
+      (is (= "^[\\x21-\\x7E]+$" (get-in (props schema) ["clientReference" "pattern"])) schema)
+      (is (= 128 (get-in (props schema) ["clientReference" "maxLength"])) schema)
+      (is (= 1 (get-in (props schema) ["clientReference" "minLength"])) schema)
+      (is (= "^[A-Z]{2}$" (get-in (props schema) ["creditorCountry" "pattern"])) schema))
+    (testing "the country is amendable and the reference is not — the contract says
+              what `amendable-fields` says"
+      (is (contains? (props "AmendPaymentInstructionRequest") "creditorCountry"))
+      (is (not (contains? (props "AmendPaymentInstructionRequest") "clientReference"))))
+    (testing "the published patterns are the domain's, so neither can admit what
+              the other refuses"
+      (doseq [[pattern-string domain-pattern samples]
+              [["^[\\x21-\\x7E]+$" instruction/client-reference-pattern
+                ["agent-ref-0001" "has space" "" "r\u00e9f" "!~"]]
+               ["^[A-Z]{2}$" instruction/creditor-country-pattern ["SG" "sg" "SGP" "S1"]]]
+              sample samples]
+        (is (= (boolean (re-matches (re-pattern (subs pattern-string 1 (dec (count pattern-string)))) sample))
+               (boolean (re-matches domain-pattern sample)))
+            (str (pr-str sample) " against " pattern-string))))
+    (testing "the lookup's response is the ADR-0028 fragment, with the key published
+              as what the service accepts rather than as a uuid"
+      (let [lookup (get schemas "IdempotencyKeyLookup")]
+        (is (= #{"idempotencyKey" "instructionId" "boundAt" "originalStatus"
+                 "originalBody" "currentStatus"}
+               (set (get lookup "required"))))
+        (is (nil? (get-in lookup ["properties" "idempotencyKey" "format"])))
+        (is (= 255 (get-in lookup ["properties" "idempotencyKey" "maxLength"])))
+        (is (= "#/components/schemas/PaymentInstruction"
+               (get-in lookup ["properties" "originalBody" "$ref"])))))))

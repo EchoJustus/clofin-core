@@ -94,7 +94,8 @@
 (def ^:private instruction-columns
   (str "select id, organisation_id, debtor_account_id, creditor_name, creditor_account,
                amount_minor, currency, value_date, purpose_code, status,
-               created_by, created_at, reverses_id, retries_id, "
+               created_by, created_at, reverses_id, retries_id,
+               client_reference, creditor_country, "
        retried-by-column
        " from payment_instruction "))
 
@@ -117,7 +118,12 @@
      :retries-id        (:retries-id row)
      ;; The link others carry to it, derived. Empty for almost every
      ;; instruction, which is why it is a vector and never nil.
-     :retried-by-ids    (db/->uuids (:retried-by-ids row))}))
+     :retried-by-ids    (db/->uuids (:retried-by-ids row))
+     ;; Optional, both (ADR-0028 D6). The reference exactly as the client sent
+     ;; it; the country as the two letters `payment_creditor_country_shape`
+     ;; admits, so `char(2)` has no padding to strip.
+     :client-reference  (:client-reference row)
+     :creditor-country  (:creditor-country row)}))
 
 ;; ---------------------------------------------------------------------------
 ;; Reading
@@ -132,6 +138,20 @@
   (row->instruction
    (db/query-one source [(str instruction-columns "where organisation_id = ? and id = ?")
                          organisation-id id])))
+
+(defn find-by-client-reference
+  "The instruction this organisation holds under `client-reference`, or nil.
+
+  At most one, by `payment_instruction_client_reference_key`. Read **without a
+  lock**: it decides the common case of a repeated reference cheaply, and the
+  unique index — not this read — is what stops a second instruction when two
+  creations race (`create-instruction!`). Scoped by organisation, because the
+  same reference in another organisation is a different reference."
+  [source organisation-id client-reference]
+  (row->instruction
+   (db/query-one source [(str instruction-columns
+                              "where organisation_id = ? and client_reference = ?")
+                         organisation-id client-reference])))
 
 (defn list-instructions
   "An organisation's instructions, most recently created first, capped at
@@ -196,8 +216,9 @@
              ["insert into payment_instruction
                  (id, organisation_id, debtor_account_id, creditor_name,
                   creditor_account, amount_minor, currency, value_date,
-                  purpose_code, status, created_by, reverses_id, retries_id)
-               values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                  purpose_code, status, created_by, reverses_id, retries_id,
+                  client_reference, creditor_country)
+               values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                returning created_at"
               (:id instruction) (:organisation-id instruction)
               (:debtor-account-id instruction) (:creditor-name instruction)
@@ -205,7 +226,8 @@
               (:minor-units (:amount instruction)) (:currency (:amount instruction))
               (:value-date instruction) (:purpose-code instruction)
               (name (:status instruction)) (:created-by instruction)
-              (:reverses-id instruction) (:retries-id instruction)])]
+              (:reverses-id instruction) (:retries-id instruction)
+              (:client-reference instruction) (:creditor-country instruction)])]
     ;; A brand new instruction is retried by nothing, and says so as an empty
     ;; vector rather than by omitting the key — the shape a row read back has.
     (assoc instruction
@@ -347,19 +369,82 @@
                (array-map :retries-id  "cannot be set on a reversal"
                           :reverses-id "cannot be set on a retry"))))
 
+(def ^:private client-reference-constraint
+  "The partial unique index that makes a client reference name at most one
+  instruction per organisation (migration `0014`). Named, as
+  `clofin.idempotency.repository` names its own key, so that a unique violation
+  raised by anything else is rethrown as the defect it is rather than being
+  answered as a reference conflict."
+  "payment_instruction_client_reference_key")
+
+(def client-reference-refusal-reasons
+  "The `errors.reason` codes a creation may be refused under for its
+  `clientReference`, published as `ClientReferenceRefusalReason`
+  (`clofin.contract-test` compares the two in both directions)."
+  #{"client-reference-conflict" "client-reference-exists"})
+
+(defn client-reference-refusal
+  "The `409` for a `clientReference` this organisation already holds, decided
+  against `existing` **as it is now** by `clofin.payments.instruction/same-content?`
+  — the one function the serial path and a race's loser both ask (L-18).
+
+  Two reasons, and nothing is persisted under either (ADR-0028 D6):
+
+  - `client-reference-exists` — identical content under a different key. The
+    request is the instruction the client already has; it is told which one.
+  - `client-reference-conflict` — different content. The reference names a
+    payment that is not this request, so core will not create a second one and
+    will not pretend the request was accepted.
+
+  `errors.instructionId` names the existing instruction in both: a client that
+  lost its key resolves it by the reference, which is the point of having one.
+  Public because `clofin.api.payments` decides the race's loser with it after
+  the losing transaction has rolled back."
+  [candidate existing]
+  (let [same? (instruction/same-content? candidate existing)]
+    (err/conflict!
+     (if same?
+       (str "This clientReference already names payment instruction " (:id existing)
+            ", created with identical content under a different Idempotency-Key. "
+            "Nothing was created; read that instruction.")
+       (str "This clientReference already names payment instruction " (:id existing)
+            ", whose content differs from this request. Nothing was created; "
+            "read that instruction, or send this payment under a reference of its own."))
+     {:reason        (client-reference-refusal-reasons
+                      (if same? "client-reference-exists" "client-reference-conflict"))
+      :instructionId (str (:id existing))})))
+
 (defn create-instruction!
   "Persist a new instruction in `draft`. Returns it as stored.
 
   A caller cannot choose the status: an instruction that arrived already
   approved would be an approval nobody gave. `candidate` carries the id, the
   creating actor and — when this is a reversal — the settled instruction being
-  reversed, or — when it is a retry — the returned instruction it replaces."
+  reversed, or — when it is a retry — the returned instruction it replaces.
+
+  **A `client-reference` names at most one instruction per organisation**
+  (ADR-0028 D6). Checked first inside the transaction — after the idempotency
+  key, which the caller has already claimed, and before every other database
+  rule — by `find-by-client-reference`, which answers the common case with
+  `client-reference-refusal`. Two creations racing on one reference both pass
+  that read; the second insert then fails on
+  `payment_instruction_client_reference_key`, its transaction is aborted, and
+  this throws a `:conflict` marked `:clofin/client-reference-race` instead of
+  deciding anything: PostgreSQL refuses every statement on an aborted
+  transaction, so the loser's answer is decided by its caller **after** the
+  rollback, by reading the winner's committed row."
   [source candidate opts]
   (let [drafted (instruction/draft candidate opts)]
     (assert-one-linkage! drafted)
     (db/transactionally
      source
      (fn [tx]
+       ;; The reference before any lock. No row is locked by this read, so the
+       ;; lock order below is untouched; a repeated reference is refused without
+       ;; taking the link target's or the debtor account's lock for nothing.
+       (when-let [reference (:client-reference drafted)]
+         (when-let [existing (find-by-client-reference tx (:organisation-id drafted) reference)]
+           (client-reference-refusal drafted existing)))
        ;; Link target first, debtor account second — the lock order this
        ;; namespace's docstring fixes. `assert-reversal-target!` and
        ;; `assert-retry-target!` lock a `payment_instruction` row and
@@ -380,11 +465,24 @@
          (insert! tx drafted)
          (catch Exception t
            (let [{:keys [sql-state constraint]} (db/violation t)]
-             (if (= sql-state (:foreign-key-violation db/sql-states))
+             (cond
+               (= sql-state (:foreign-key-violation db/sql-states))
                (err/fail! :unprocessable
                           "The instruction references a record that does not exist"
                           (err/internal {:constraint constraint}))
-               (throw t)))))))))
+
+               ;; Lost a race on the reference. Nothing can be read on this
+               ;; connection any more, so nothing is decided here: the marker
+               ;; travels up through the rollback to a caller that can read the
+               ;; winner's committed row (`clofin.api.payments/create`). The
+               ;; message stands on its own in case no caller resolves it.
+               (and (= sql-state (:unique-violation db/sql-states))
+                    (= client-reference-constraint constraint))
+               (err/conflict!
+                "This clientReference was taken by a concurrent creation; nothing was created"
+                (err/internal {:client-reference-race (:client-reference drafted)}))
+
+               :else (throw t)))))))))
 
 (defn- assert-creator!
   "Only an instruction's creator may perform `verb` on it.
@@ -476,13 +574,17 @@
            amended   (instruction/amend reverted changes opts)]
        (assert-debtor-account! tx amended)
        (db/execute! tx
+                    ;; `client_reference` is deliberately not in this list: it
+                    ;; is not amendable, and the trigger in migration `0014`
+                    ;; would refuse it if it were.
                     ["update payment_instruction
                          set debtor_account_id = ?, creditor_name = ?,
-                             creditor_account = ?, amount_minor = ?, currency = ?,
+                             creditor_account = ?, creditor_country = ?,
+                             amount_minor = ?, currency = ?,
                              value_date = ?, purpose_code = ?, status = ?
                        where organisation_id = ? and id = ?"
                      (:debtor-account-id amended) (:creditor-name amended)
-                     (:creditor-account amended)
+                     (:creditor-account amended) (:creditor-country amended)
                      (:minor-units (:amount amended)) (:currency (:amount amended))
                      (:value-date amended) (:purpose-code amended)
                      (name (:status amended))

@@ -13,7 +13,13 @@
        :created-by        #uuid \"...\"
        :created-at        #inst \"...\"
        :reverses-id       nil
-       :retries-id        nil}
+       :retries-id        nil
+       :client-reference  \"agent-ref-0001\"
+       :creditor-country  \"SG\"}
+
+  `client-reference` and `creditor-country` are optional and may be nil
+  (ADR-0028 D6): the first is the identifier a creating client keeps for its
+  own record, the second the beneficiary's country as a two-letter shape.
 
   **Every failed field is reported, not the first one** (PR-003). That is the
   whole reason validation is a function returning a map rather than a chain of
@@ -74,6 +80,25 @@
   identifiers address nothing and a permissive field invites someone to paste
   something real into it."
   #"[A-Z0-9][A-Z0-9-]{2,32}[A-Z0-9]")
+
+(def client-reference-pattern
+  "A client's own reference for a payment: printable ASCII without spaces,
+  1–128 characters (ADR-0028 D6). The same shape as
+  `payment_client_reference_shape` in migration `0014`.
+
+  **Checked, never repaired.** No trim, no case folding: a trailing space is
+  refused rather than removed, because the reference is an identity the client
+  compares byte for byte against its own record, and one that core had quietly
+  edited would be a different identity that looked the same."
+  #"[\x21-\x7E]{1,128}")
+
+(def creditor-country-pattern
+  "The beneficiary's country as an ISO 3166-1 alpha-2 **shape**: two uppercase
+  letters, and nothing more (ADR-0028: \"syntax only\"). No list of countries is
+  consulted — the field is synthetic, a membership check would make it look like
+  a real-world validation, and it would need a list somebody maintained. Not
+  upper-cased for the caller: `sg` is refused, not corrected."
+  #"[A-Z]{2}")
 
 (def max-value-date-horizon-days
   "How far ahead a value date may be requested. A warehoused payment is a real
@@ -141,6 +166,20 @@
     (not (string? value))                 "must be text"
     (not (contains? purpose-codes value)) (str "unknown purpose code: " value)))
 
+(defn- client-reference-error
+  [value]
+  (cond
+    (not (string? value)) "must be text"
+    (not (re-matches client-reference-pattern value))
+    "must be 1–128 printable ASCII characters with no spaces"))
+
+(defn- creditor-country-error
+  [value]
+  (cond
+    (not (string? value)) "must be text"
+    (not (re-matches creditor-country-pattern value))
+    "must be an ISO 3166-1 alpha-2 shape: two uppercase letters"))
+
 (defn- status-error
   [value]
   (when-not (state/known? value)
@@ -158,7 +197,8 @@
   caller could not parse at all are its own to report; this sees only values
   that arrived as some Clojure value, and judges those."
   [{:keys [organisation-id debtor-account-id creditor-name creditor-account
-           amount value-date purpose-code status created-by reverses-id retries-id]}
+           amount value-date purpose-code status created-by reverses-id retries-id
+           client-reference creditor-country]}
    {:keys [today]}]
   (when-not (instance? LocalDate today)
     (err/invalid! "Validating a value date requires today's date from the caller"
@@ -192,7 +232,16 @@
          ;; retry, where it names the **returned** instruction this one was
          ;; raised to replace (ADR-0019, ADR-0024). That the target exists, is
          ;; in this organisation and is returned is a database question too.
-         :retries-id        (when (some? retries-id) (uuid-error retries-id))}))
+         :retries-id        (when (some? retries-id) (uuid-error retries-id))
+         ;; Optional (ADR-0028 D6). Judged beside every other rule so a bad
+         ;; reference is named with every other failed field (PR-003). Whether
+         ;; this organisation already holds an instruction under it is a
+         ;; database question, answered in `clofin.payments.repository`.
+         :client-reference  (when (some? client-reference)
+                              (client-reference-error client-reference))
+         ;; Optional; a shape, not a list (see `creditor-country-pattern`).
+         :creditor-country  (when (some? creditor-country)
+                              (creditor-country-error creditor-country))}))
 
 (defn valid?
   "True when `candidate` has no failed fields."
@@ -202,6 +251,17 @@
 ;; ---------------------------------------------------------------------------
 ;; Construction
 ;; ---------------------------------------------------------------------------
+
+(defn- trim-text
+  "The two free-text beneficiary fields with surrounding whitespace removed —
+  the normalisation `instruction` applies once they have validated, and the one
+  `same-content?` applies before comparing, so a request and the row it produced
+  compare as the same content. `client-reference` is deliberately not here: it
+  is an identity and is never edited (see `client-reference-pattern`)."
+  [m]
+  (cond-> m
+    (string? (:creditor-name m))    (update :creditor-name str/trim)
+    (string? (:creditor-account m)) (update :creditor-account str/trim)))
 
 (defn instruction
   "Validate and normalise a payment instruction.
@@ -215,19 +275,20 @@
   (let [errors (field-errors candidate opts)]
     (when (seq errors)
       (err/fail! :field-validation "Request failed validation" errors))
-    (-> ;; `reverses-id` and `retries-id` are defaulted rather than merely
-        ;; selected, so that an instruction built here and one loaded from a row
-        ;; have the same shape. A key that is absent in one and nil in the other
-        ;; is a difference that only ever shows up in an equality check nobody
+    (-> ;; The optional members are defaulted rather than merely selected, so
+        ;; that an instruction built here and one loaded from a row have the
+        ;; same shape. A key that is absent in one and nil in the other is a
+        ;; difference that only ever shows up in an equality check nobody
         ;; expected to fail.
-        (merge {:reverses-id nil :retries-id nil}
+        (merge {:reverses-id nil :retries-id nil
+                :client-reference nil :creditor-country nil}
                (select-keys candidate [:id :organisation-id :debtor-account-id
                                        :creditor-name :creditor-account
                                        :amount :value-date :purpose-code :status
                                        :created-by :created-at :reverses-id
-                                       :retries-id]))
-        (update :creditor-name str/trim)
-        (update :creditor-account str/trim))))
+                                       :retries-id :client-reference
+                                       :creditor-country]))
+        trim-text)))
 
 (defn draft
   "A new instruction in the state a new instruction begins in.
@@ -248,17 +309,59 @@
 
   Everything else is either identity (`id`, `organisation-id`), provenance
   (`created-by`, `created-at`), lifecycle (`status` — that moves by transition,
-  never by edit) or linkage (`reverses-id` — a reversal does not stop being one;
-  `retries-id` — nor does a retry stop replacing what it replaces).
+  never by edit), linkage (`reverses-id` — a reversal does not stop being one;
+  `retries-id` — nor does a retry stop replacing what it replaces) or a
+  client's identity for the payment (`client-reference`, ADR-0028 D6 — the
+  record a client binds to cannot be renamed underneath it).
 
   The linkage half is enforced twice on purpose. This set makes a `PATCH` naming
   either one a `422` that says the field cannot be amended; the database refuses
   a change to `retries_id` from **any** writer
   (`payment_instruction_retry_link_immutable`, migration `0013`), because
   provenance an operator can rewrite afterwards is provenance an investigation
-  cannot rely on (standing lesson **L-6**)."
-  #{:debtor-account-id :creditor-name :creditor-account
+  cannot rely on (standing lesson **L-6**). `client-reference` has the same two
+  halves: absent here, and refused by
+  `payment_instruction_client_reference_immutable` (migration `0014`) — which
+  refuses null to a value as well, so a reference cannot be added later either.
+
+  `creditor-country` is here: it is a beneficiary field like the name and the
+  account, and amendable while they are."
+  #{:debtor-account-id :creditor-name :creditor-account :creditor-country
     :amount :value-date :purpose-code})
+
+(def creation-members
+  "The members whose equality makes two creations *the same content* for the
+  `clientReference` rules (ADR-0028 D6): everything a caller states about the
+  payment itself. Status, identity (`id`, `organisation-id`), provenance
+  (`created-by`, `created-at`), the derived `retried-by-ids` and the reference
+  itself are not compared — the reference is what is being matched *on*."
+  [:debtor-account-id :creditor-name :creditor-account :creditor-country
+   :amount :value-date :purpose-code :reverses-id :retries-id])
+
+(defn same-content?
+  "True when `candidate` (a validated creation) and `existing` (an instruction as
+  stored) agree on every creation member: debtor account, creditor name,
+  account and country, amount, value date, purpose code, reverses-id and
+  retries-id. Status, identity, provenance and timestamps are not compared.
+
+  This is what decides between the two `clientReference` refusals: the same
+  reference with the same content under a different key is
+  `client-reference-exists`, with different content `client-reference-conflict`
+  — and it is the *one* place that decides, so the serial path and the loser of
+  a race on `payment_instruction_client_reference_key` cannot answer the same
+  request differently (standing lesson **L-18**).
+
+  `existing` is compared **as it is now**: an instruction amended after its
+  creation no longer holds the content the reference was first sent with, so a
+  request repeating that original content is a conflict — the client is told
+  which instruction to read rather than being told it already exists as sent.
+
+  An absent member and a nil one are the same (`get`), and both sides are
+  normalised as `instruction` normalises before comparing, so a creditor name
+  sent with surrounding whitespace matches the trimmed value it was stored as."
+  [candidate existing]
+  (let [content (fn [m] (mapv #(get (trim-text m) %) creation-members))]
+    (= (content candidate) (content existing))))
 
 (defn amend
   "Apply `changes` to `existing` and re-validate the whole instruction.

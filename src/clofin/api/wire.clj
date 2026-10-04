@@ -61,6 +61,25 @@
     (catch IllegalArgumentException _
       (err/invalid! (str "Field '" field "' must be a UUID") {:field field :value value}))))
 
+(defn read-path-segment
+  "A path parameter, percent-decoded as RFC 3986 decodes a path segment.
+
+  The HTTP adapter hands handlers the path **as it arrived** — Jetty's raw
+  path, percent-encoding intact — and the router splits on `/` before anything
+  is decoded, which is what lets an encoded `/` (`%2F`) stay inside one
+  segment. A handler whose parameter is free text rather than a UUID decodes
+  it here, once, after routing. `+` is a literal `+` in a path, not a space —
+  the form-encoding rule `URLDecoder` applies is the wrong one, so `+` is
+  protected from it. A malformed escape is a `400` naming the parameter."
+  [value field]
+  (when-not (string? value) (missing! field))
+  (try
+    (java.net.URLDecoder/decode (str/replace value "+" "%2B")
+                                java.nio.charset.StandardCharsets/UTF_8)
+    (catch IllegalArgumentException _
+      (err/invalid! (str "Path segment '" field "' is not valid percent-encoding")
+                    {:parameter field}))))
+
 (defn read-uuid-field
   [obj field]
   (read-uuid (get obj field) field))
@@ -230,6 +249,11 @@
     ;; Present only on a retry, where it names the returned instruction this one
     ;; was raised to replace (ADR-0019, ADR-0024).
     (:retries-id pi)  (assoc "retriesId" (str (:retries-id pi)))
+    ;; Present only when the creating client sent one (ADR-0028 D6): the
+    ;; identifier it keeps for this payment, exactly as it sent it.
+    (:client-reference pi) (assoc "clientReference" (:client-reference pi))
+    ;; Present only when known; a two-letter shape, not a looked-up country.
+    (:creditor-country pi) (assoc "creditorCountry" (:creditor-country pi))
     ;; The other end of the same link, derived rather than stored. Rendered only
     ;; when there is one, so an ordinary instruction carries no empty array — and
     ;; a returned instruction that *has* been retried says so from its own
