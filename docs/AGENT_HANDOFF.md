@@ -349,6 +349,12 @@ One row each. Every cell filled, or the question answered before dispatch (L-4).
 ## Acceptance criteria
 Given / When / Then. Each one testable. Each traced to a PR-nnn. For every
 guard added or changed: the negative control — the mutation that must fail (L-17).
+For a schema guard exercised across several connections — a unique index under
+a race — the mutation is made on the test database and reverted with the
+migration's own DDL after the run, never inside an open transaction: the other
+connections cannot see it and are blocked by it (018-REQ O-5). Where a field
+joins an audited projection, a golden digest is pinned from `main` before the
+change and asserted after it (018-REQ O-3).
 
 ## SQL pre-flight
 Either `No SQL.` — or, for each migration and for every other row of SQL this
