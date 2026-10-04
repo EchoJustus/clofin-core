@@ -259,8 +259,6 @@ to rediscover them:
 
 ## Increment 7 — Financial crime controls 📋
 
-**Brief:** [TASK-017](briefs/017-TASK-screening-and-cases.md) · **Status:** `READY` — screening and cases, under ADR-0028 D5; fraud scoring (PR-062) stays designed, for a later brief
-
 - Sanctions screening against a synthetic list, with list versioning
 - Rule-based fraud scoring with explainable contributing reasons
 - Case management and disposition with retained rationale
@@ -272,8 +270,6 @@ to rediscover them:
   and a UI built before them would encode the wrong model.
 
 ## Increment 9 — Programmable settlement exploration 📋
-
-**Brief:** [TASK-019](briefs/019-TASK-chain-confirmations-sim-evm.md) · **Status:** `READY` — the first slice: chain confirmations on a local development chain as a third simulated scheme, under ADR-0028 D7; conditional release is a later slice
 
 - Conditional release against simulated tokenised-deposit or CBDC-style rails
 - Explicitly a **simulation**, and labelled as such wherever it appears.
