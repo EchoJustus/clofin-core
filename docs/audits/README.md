@@ -12,6 +12,31 @@
 Append-only. A later change appends a new dated block; an existing block is
 never edited — the record of what was decided, and when, is the point.
 
+**2026-10-03 — ADR-0028 accepted and merged; the four briefs it calls for are
+written; a changelog Master Control claimed and had not committed is
+restored.** The satellite handover was answered as ADR-0028 (PR #40, merged
+`c4e1689`): the operator accepted D3, D4, D8, D9 and D10 as proposed and D5,
+D6 and D7 with amendments, all recorded in the ADR with the operator's words
+under *Rulings* and the executable test identifiers under *Verification*.
+TASK-018, TASK-017, TASK-019 and TASK-020 are briefed under AGENT_HANDOFF §4's
+full template — dependency matrix, SQL pre-flight run on PostgreSQL 16 with
+one row of every shape and every negative control refused, claims carrying
+the command that checked them — in ruling D10's order; the release that
+carries 017–019 is `ref-3` at the Sol tier, whole repository.
+
+**Master Control's own conduct, recorded (L-9's register, L-16's shape).**
+The `meta` commit that closed TASK-016 (`25b3d16`) says in its message that
+the brief's changelog records the reproduction and the eleven rulings; its
+diff changed three status lines and carried no changelog. The text had been
+written to the working tree and was discarded by a `git reset --hard` in the
+same session before the commit, and the commit message was written from the
+intent rather than from the diff. Found on 2026-10-03 while writing the
+briefs that cite those rulings; the changelog is restored from the session's
+record, verbatim, in the sync that carries this block. The rule it adds to
+Master Control's own practice: **a commit message is a claim about the diff;
+read `git show --stat` before pushing a message that names what the commit
+carries** — the same discipline L-16 asks of every other copy of a claim.
+
 **2026-10-02 (third) — `ref-2` restored and published; the release is
 closed; the mirror check's assumption corrected.** The operator executed the
 ruling below within three hours: the release deleted, `refs/tags/ref-2`

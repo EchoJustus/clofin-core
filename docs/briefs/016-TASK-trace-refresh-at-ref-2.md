@@ -381,3 +381,74 @@ with `cascade`.
   on both PRs; the trace PR's description links to it by path.
 - **L-9.** If a self-review is still running when you write the REQ, say so
   in the REQ and do not call the work complete until it is not.
+
+## Changelog — rulings on the `016-REQ` objections, and the close-out (2026-10-03)
+
+Delivered as `clofin-trace` PR #4 (6 commits, merged at `0752637`) and
+`clofin-core` PR #38 (7 commits, merged at `fa5e790`), in the brief's order:
+trace first, Pages run 37081282071 green, the live page verified, then core.
+The REQ is `docs/audits/016-REQ-trace-refresh-at-ref-2.md` on `main`.
+
+**Master Control's reproduction, before any merge.** Core, in a detached
+worktree at the PR tip `2681ff9`: `make verify` 543 tests / 3,404 assertions,
+and the integration suite 971 tests / 7,434 assertions (the Worker's run:
+7,449 — the property tests generate a varying number of cases), both 0
+failures, on a local PostgreSQL 16. Trace, at `36eefda`: the build and both
+checks pass on the committed fixtures; the `ref-1` manifest from `bc0017c` is
+refused naming `clofin.capture/1`; exactly two checks in each workflow.
+**Then the capture itself**: from a fresh detached worktree at the harness
+commit `1ee8346`, clean, with `ref-2` as a tag object, `make capture-trace
+CAPTURE_REF=ref-2` — the first attempt refused by the step-13 premise check
+with the message the REQ quotes (O-2 reproduced on the first try), the second
+captured. Against the Worker's fixtures: provenance identical in every field
+but `capturedAt`; all four bundles identical in step ids, kinds, actual and
+expected statuses; sand tables identical cell for cell (6 and 5 rows); journal
+entry counts identical (7, 3, 9). The Worker's site built from Master
+Control's capture passes both checks. **The live page** at
+https://echojustus.github.io/clofin-trace/ after the Pages deploy: `ref-2`,
+`32dfcc9`, `COMPLETE`, `annotated`, `instance-id`, the fourth page served, no
+`ref-1` or `PARTIAL` text left; the published manifest's provenance equals the
+committed one. After the core merge, `1ee8346` is an ancestor of `main`.
+
+| # | Objection | Ruling |
+|---|---|---|
+| O-1 | AC-3's "the PR branch's final commit" cannot also be the commit that carries the REQ and A-4. | **Confirmed — brief defect, Master Control's.** AC-3 means the last commit that changes anything the capture runs; the REQ's `git diff --stat 1ee8346 HEAD -- tools test src resources deps.edn Makefile scripts .github` being empty is the proof the brief should have asked for, and future briefs with a capture step will. |
+| O-2 | UAT-007 step 13's premise ("the `missing-line` run produced a break about the returned payment") holds in about half of all runs: the generator drops the first line in instruction-id order, and the ids are random. | **Confirmed — a defect in UAT-007, not in the replay; the scenario's refusal is ratified, and it is the right shape** (L-20: an acceptance script is an executable contract, and a premise that holds by coin-flip is not one). Master Control reproduced it on the first attempt. The published run is a run that happened, unedited. **Routed**: UAT-007 names the break by its `instructionId` equal to the returned payment, or the generator perturbs a line the caller names — to the UAT-007 corrections brief (below). |
+| O-3 | `$CHECKER2` is defined nowhere; run literally the call answers `401`. | **Ratified** as `$CHECKER`, with the narrative saying so; the `409` is the lifecycle's, whoever asks. UAT-007 defect, routed. |
+| O-4 | Step 10 says "restore the bands" and gives no statement. | **Ratified**: the *Before you start* SQL, run again. UAT-007 defect, routed. |
+| O-5 | Step 11's raw insert carries placeholders; `seed!` accepted any refusal. | **Ratified, and commended**: `seed!`'s `:expect-error` makes every raw-SQL refusal name the refusal it shows — the L-17 shape closed before anyone found it. |
+| O-6 | Step 13 uses variables the *inherits* table does not list, one defined nowhere. | **Ratified** as substituted. UAT-007 defect, routed. |
+| O-7 | The inherits table's "SGD limit above SGD 100.00" is insufficient for step 9's SGD 1,000.00. | **Ratified**: UAT-006's seeded limit. UAT-007 defect (L-20), routed. |
+| O-8 | The brief's "sand-table row after step 13" — step 13 posts nothing. | **Confirmed — brief defect, Master Control's.** The row is kept as taken: a row that equals the one before it is the captured evidence that raising a retry moves no money, which is worth a row. |
+| O-9 | "UAT-006 completed, or steps 1–7" admits a state that contradicts UAT-007 (a completed UAT-006 resolves the unanswered payment). | **Ratified**: steps 1–7's state-producing calls only, through the shared helpers. UAT-007's prerequisite sentence is a defect, routed. |
+| O-10 | Step 8's heading promises an attempt to "skip a step" that its body does not make; the brief repeated the heading. | **Ruled: the body is the intent.** The break lifecycle permits `open → resolved` and the capture shows it; there is no step to skip. The brief's phrase is withdrawn (Master Control copied a heading without reading the body — L-16 applied to a brief). The heading is a UAT-007 defect, routed. |
+| O-11 | ADR-0027 §3a names port exclusion without its limit; the brief asked ADR-0022's amendment to cite §3a "for what each value establishes". | **Ruled: ADR-0022 may state the limit; ADR-0027 gains nothing.** The limit is a property of the harness, and the harness's ADR is where it belongs; §3a describes the service's field. The amendment as written — citing §3a for the service's part and `assert-same-process!`'s docstring for the harness's — is accepted; a later edit of ADR-0022 may lift that docstring's sentence into the amendment, which is not a restatement of §3a. |
+
+**Routed, not changed here.** (1) **UAT-007 corrections** — the defects behind
+O-2, O-3, O-4, O-6, O-7, O-9, O-10 and the eight mismatched statements the REQ
+lists under §8: a doc-only brief in the subject, dispatched with the
+increment-7 batch, whose acceptance criterion is that the fourth scenario
+replays the corrected script *without* a substitution list in its docstring.
+(2) **A vacuous test in CI**, found by the Worker outside its scope:
+`capture-stack-test/which-gate-applies-is-read-from-the-source-not-from-the-answer`
+reads `ref-1`'s handler with `git show 5c7b4ba:…`, which fails on CI's depth-1
+checkout, and an empty extraction "does not self-identify" either — L-17's
+*assert non-vacuity after every discovery step*, in a test TASK-015 added
+under L-17. Same brief: assert the extracted source is non-blank, and give the
+job the history it needs. (3) **A multi-statement seed step records the first
+statement's row count** — the existing scenarios' "Applied — n row(s)" figures
+understate; same brief: one statement per step, as the fourth scenario already
+does. (4) **The proposal's `Location` names the break while the contract says
+the adjustment** — a `src/` contract defect in 2C-011's territory; the
+post-audit remediation backlog. (5) The harness's re-run message after a
+deleted worktree does not say `git worktree prune`; same brief as (2).
+
+**Recorded beside the rulings.** The Worker's adversarial review (34 findings,
+33 already fixed by the time their verifiers ran, 1 confirmed and fixed) found
+that the site's digit predicates used `\d`, which in Python admits any Unicode
+digit — a gap the harness's `\d` (ASCII in Java) does not have. Two
+implementations of one rule in two languages had already drifted at the
+character class; the fix spells `[0-9]`. The REQ's §3 side-by-side list is the
+first place the two required-field lists have been compared; a check that
+compares them mechanically is not possible across repositories, and the
+limitation is recorded as a limitation rather than papered over.
