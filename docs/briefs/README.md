@@ -54,6 +54,10 @@ table and a brief disagree, the brief on `origin/meta` wins.
 | [014 — Cockpit scenario runner](014-TASK-cockpit-scenario-runner.md) | 8.4 | `CLOSED` — cockpit PR #4 (`9283dbf`) + REQ-only core PR #27 (`ea428a3`); hosted run #1 against `ref-1` verified; one objection ruled for the Worker | 013 ✅ | D5 | Medium–Large |
 | [015 — `ref-2` release remediation](015-TASK-ref-2-release-remediation.md) | ref-2 | `CLOSED` — merged in PR #31 (`32dfcc9`); both blockers re-verified by CI and by Master Control; six objections ruled (O-1, O-2 confirmed as brief defects; O-3, O-6 ratified; O-4 confirmed; O-5 accepted with ADR-0027 §3a as the record); `ref-2` is tagged on that commit | audit ✅ ingested | FEEDBACK-REL-ref-2; ADR-0020/0022/0023/0027 | Large |
 | [016 — `clofin-trace` at `ref-2`](016-TASK-trace-refresh-at-ref-2.md) | 5v.4 | `CLOSED` — `clofin-trace` PR #4 (`0752637`) + `clofin-core` PR #38 (`fa5e790`); the capture reproduced independently by Master Control, step for step; eleven objections ruled (two brief defects, seven UAT-007 defects routed, two ratified) | `ref-2` ✅, 015 ✅ | D5, ADR-0020/0022/0027 | Medium–Large |
+| [017 — Sanctions screening and cases](017-TASK-screening-and-cases.md) | 7 | `READY` — briefed 2026-10-03 under ADR-0028 D5/D8; dispatch after 018 merges | 018, ADR-0028 ✅ | PR-060, PR-061, PR-063, PR-015; C-07 | Large |
+| [018 — `clientReference`, `creditorCountry` and the idempotency-key lookup](018-TASK-client-reference-and-idempotency-lookup.md) | 3 (completion) | `READY` — briefed 2026-10-03 under ADR-0028 D6; **first of the batch** (ruling D10) | ADR-0028 ✅ | PR-001…005, PR-040…044; C-06 | Medium |
+| [019 — Chain confirmations, `SIM-EVM`](019-TASK-chain-confirmations-sim-evm.md) | 9 (first slice) | `READY` — briefed 2026-10-03 under ADR-0028 D4/D7/D8; dispatch after 017 merges | 018, 017, ADR-0028 ✅ | ROADMAP increment 9; PR-030…032; ADR-0019 | Large |
+| [020 — UAT-007 corrections and the walkthrough's findings](020-TASK-uat-007-corrections-and-walkthrough-findings.md) | 6 / 5v | `READY` — briefed 2026-10-03 from the 016-REQ rulings; may run in parallel with 018 | — | PR-050…054; L-17, L-20 | Small–Medium |
 
 Sequencing follows **product relevance and regulatory risk**, not implementation
 convenience:
@@ -83,6 +87,15 @@ conflict. 005 is a single sitting — dispatching it first is the default.
 **008 and 009 share no files and may run in parallel, in separate Worker
 sessions.** 009's only `clofin-core` change is one README line; 008 does not
 touch the README. Neither waits on the other.
+
+**The ADR-0028 batch runs in the order ruling D10 fixed: 018, then 017, then
+019.** 018 adds the two fields the other two bind to; 017 and 019 both drop
+and recreate `role_known` and both extend the vocabulary owners, so they are
+sequential and each branches from `main` after its predecessor merges. **020
+shares no file with 018 but `api/openapi.yaml`, in different regions, and may
+run in parallel with it** in a separate Worker session; whichever lands second
+rebases. The release that carries 017–019 is `ref-3`, audited at the Sol tier
+over the whole repository (the 2026-08-05 rule).
 
 ## Writing a new brief
 
