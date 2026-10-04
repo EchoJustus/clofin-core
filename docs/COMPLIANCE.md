@@ -569,6 +569,29 @@ of that scope are load-bearing:
   the operator saw success. Amended by ruling (ADR-0013 §Amendment 1) after the
   gap was found and disclosed during increment 3.
 
+**The lookup, and exactly what its `404` proves**
+([ADR-0028](ADR/0028-satellite-clients-integrate-through-core-owned-contracts.md)
+D6). `GET /payment-instructions/by-idempotency-key/{key}` reads the
+`idempotency_key` row the write path claims inside the creating transaction —
+by `(organisation, key)`, with no cache — and since migration `0014` that row
+records the `operationId` that bound it, written on the claiming insert
+(`execute-once!` refuses to claim a key without one). A row bound by
+`createPaymentInstruction` answers `200` with the stored response, as a replay
+would serve it, and the instruction's status now; a row bound by any other
+operation — or written before `0014`, with no operation recorded — is `409
+key-bound-to-another-operation`, never `404`, because a `404` there would tell a
+client to resubmit under a key that is taken. A `404 no-binding` is strongly
+consistent **as of that read: it means no committed binding existed at that
+instant, and it does not prove that a `POST` still in flight cannot commit
+afterwards.** The client keeps its original key after a `404`, re-reads before
+any decision to resubmit, and resubmits — if at all — under the **same** key,
+which turns a late commit into a replay rather than a second instruction;
+`clofin.api.payments-api-test/ac-18-3-a-404-during-an-in-flight-creation-becomes-200-on-the-same-key-with-one-instruction`
+races the lookup against a creation held open between its insert and its commit
+and asserts `404`, then `200`, with one instruction. A client that also sends a
+`clientReference` cannot create a second instruction under a new key either:
+the same reference is `409` naming the instruction it already names.
+
 **Enforcement points.**
 
 | | |
