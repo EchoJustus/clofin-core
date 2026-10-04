@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | **Increment** | 3 (completion) — the first brief of the ADR-0028 batch, dispatched before 017 and 019 by ruling D10 |
-| **Status** | `IN PROGRESS` — dispatched 2026-10-04 |
+| **Status** | `CLOSED` — merged in PR #42 (`6536ef5`) on 2026-10-04, by the operator before the rulings (the second such merge; the register says so); verified on `main` by Master Control; eight objections ruled below |
 | **Depends on** | [ADR-0028](../ADR/0028-satellite-clients-integrate-through-core-owned-contracts.md) ✅ accepted and merged (`c4e1689`); nothing else |
 | **Blocks** | TASK-017 (screening rules name `creditor-country`), TASK-019 (a chain event is bound to the instruction's `clientReference`) |
 | **Requirements** | PR-001…PR-005, PR-040…PR-044; ADR-0028 D6; ADR-0013 (the canonical request digest); ADR-0024 (a link set at creation never changes) |
@@ -550,3 +550,49 @@ test database.
   new rows are ✅ once merged, not 🔨.
 - **L-9.** If a self-review is still running when you write the REQ, say so
   in the REQ and do not call the work complete until it is not.
+
+## Changelog — rulings on the `018-REQ` objections, and the close-out (2026-10-04)
+
+Delivered as `clofin-core` PR #42 (6 commits, merged at `6536ef5`). The REQ is
+`docs/audits/018-REQ-client-reference-and-idempotency-lookup.md` on `main`,
+with the independent adversarial review's six findings fixed in `255a0a6` and
+the L-9 statement in plain words.
+
+**The merge.** The operator merged PR #42 at 15:44Z, before these rulings and
+without a written override. CI was green on the branch head `9141697`
+(three checks) and is green on the merge commit; the integration job printed
+`0014` applied. The 2026-09-07 rule — a Worker's PR is merged by Master
+Control after its objections are ruled and CI is green on the branch — was set
+after the same thing happened to PR #31; this is the second instance, and the
+verification therefore moved onto `main`. The register records it; the rulings
+below are made against the merged tree.
+
+**Master Control's reproduction, on `main` at `6536ef5`** (a detached
+worktree, local PostgreSQL 16): `make verify` 559 tests / 3,548 assertions,
+0 failures — links OK (107 files), diagrams OK (7), consistency OK,
+disclaimer OK; the integration suite migrated from nothing to `0014`:
+`Applied: 14`, `Pending: 0`; 1,010 tests / 7,887 assertions, 0 failures, 0
+errors (the Worker's run: 7,866 — the property tests and the conformance walk
+generate their own populations). The merge touched no control-plane file
+(`git diff --stat 59c6fde..6536ef5 -- docs/ROADMAP.md docs/briefs
+docs/audits/README.md docs/AGENT_HANDOFF.md docs/audits/RELEASE-AUDIT-CHARTER.md
+docs/releases` is empty).
+
+| # | Objection | Ruling |
+|---|---|---|
+| O-1 | The brief says the router matches literals before parameters; it matches the first same-method route in table order. | **Confirmed — brief defect, Master Control's**, and of the kind the template was amended to forbid: a claim about current behaviour with no command behind it. The table-wide guard (no two same-method routes can match one path) is **accepted** and is the better invariant; no precedence rule is ordered. |
+| O-2 | The lookup cannot name every key the header binds (encoded `/`, `%`, `\`, dot segments, non-ASCII). | **Ruled: (a)** — the narrowed lookup as published, with the contract naming exactly which keys the path carries and the real-server test guarding it. (b) breaks current callers; (c) is a server-wide posture change with its own security argument; (d) would be a second form of one operation, a copy of its semantics. The false `404` the first version answered was precisely the failure the `404`'s promise exists to prevent, found and fixed by the Worker's own review before anyone else read it — **commended**. |
+| O-3 | "`select-keys` omits an absent field" is half the premise: the domain map carries the new fields as nil, so every digest would have moved. | **Confirmed — brief defect, Master Control's.** `omitted-when-absent` with the golden digest pinned from `main` is **accepted**; the pin is now a template expectation for any brief that adds to an audited projection (AGENT_HANDOFF §4, and the Notes of TASK-017 and TASK-019, amended today). |
+| O-4 | `readers` is `field-readers`; DOMAIN_MODEL's field table is §2.2, not §1. | **Confirmed**, both. The `IdempotencyKey` paragraph update is the L-16 discipline applied unasked — welcome, not unwelcome. |
+| O-5 | A race across connections cannot have its negative control "in a scratch transaction". | **Confirmed — brief defect.** The procedure the Worker used — drop on the test database, run, see failing, delete the mutated run's rows, recreate with the migration's own DDL, verify present — is adopted into AGENT_HANDOFF §4's template; TASK-019's AC-19-4 and AC-19-7 are corrected today. |
+| O-6 | `PATCH` wording: "exactly as `retriesId`" or the table's sentence? | **Confirmed: the table's wording.** The mechanism is `retriesId`'s; the message is the table's. |
+| O-7 | The creation effect made public as `creation-effect` so the race test runs the real code. | **Accepted** as decided. |
+| O-8 | Observations. | (i) `make -o db-up test-it` against a local PostgreSQL 16 is the run this environment can make and is what Master Control ran too; CI's integration job is the canonical run and it reports `0014` applied. (ii) `creditorCountry` cannot be cleared through `PATCH`: carried into TASK-017's Notes. (iii) `boundAt` is the start of the binding transaction, not its commit: recorded; the next brief that touches the lookup's contract says which instant it is. |
+
+**Carried forward.** TASK-017 reads `creditorCountry` and binds nothing to
+the lookup; TASK-019 binds a chain event to `clientReference` and inherits
+the race-test discipline (two connections, the interleaving forced and
+asserted — the Worker's review finding 3 is the standard). The `IdempotencyConflict`
+response component was folded into the create operation's `409` description
+(REQ §5); the contract test discovers nothing by that name any more, which is
+correct and is noted here so nobody restores it.
