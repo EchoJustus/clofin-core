@@ -101,8 +101,9 @@ out of date.
 
 Dependency rule: **the ledger's domain depends on nothing.** Payments depends on
 ledger and authz, **and on compliance's pure decision**: the lifecycle's own gate
-in `clofin.payments.repository/transition!` requires `clofin.screening.subject`
-and `clofin.screening.decision`, which require nothing from payments, so the
+in `clofin.payments.repository/transition!` requires `clofin.screening.subject`,
+`clofin.screening.decision` and `clofin.screening.list` (for the list lock's
+key), which require nothing from payments, so the
 arrow cannot close into a cycle; compliance's service, which screens and then
 submits, depends on payments in turn (C-07, TASK-017). The context was named
 `clofin.compliance` here until it was built, as `clofin.screening`, the root

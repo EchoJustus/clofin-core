@@ -21,9 +21,15 @@
   (`clofin.screening.list/lock-key`, shared), then `screening_case`. A
   disposition locks the instruction before the case for that reason, so a
   disposition and a submission of the same instruction serialise rather than
-  interleave. The loading tool takes the table lock on `screening_list`, then
-  the list lock exclusive, and touches no instruction or case, so no order it
-  takes can meet a decision's in reverse."
+  interleave. The loading tool takes the table lock on `screening_list`
+  (`share row exclusive`), then the list lock exclusive; a decision takes the
+  list lock shared and only then touches `screening_list` — reading it
+  (`access share`) and, through its inserts' foreign keys, `row share` and
+  `for key share` on the list's row. That is the reverse order on one table,
+  and it is deadlock-free **only because `share row exclusive` conflicts with
+  neither `access share` nor `row share`**: a stronger table lock in the tool
+  (`exclusive`, say) would let a decision holding the list lock wait on the
+  table while the tool waits on the list lock."
   (:require [clofin.db.core :as db]
             [clofin.screening.list :as screening-list]))
 

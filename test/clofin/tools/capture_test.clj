@@ -636,6 +636,7 @@
             service starts and any scenario submits"
     (let [base   (stamp (fake-git (answers)))
           calls  (atom [])
+          loaded (atom nil)
           called (fn [k v] (fn [& _] (swap! calls conj k) v))
           writer (fn [_] {:path "x" :sha256 "0"})]
       (with-redefs [prov/stamp                      (fn [_] base)
@@ -644,7 +645,10 @@
                     stack/assert-port-free!         (fn [& _] :free)
                     store/reset-schema!             (called :reset-schema "x_capture")
                     stack/migrate!                  (called :migrate :migrated)
-                    stack/load-screening-list!      (called :load-screening-list :loaded)
+                    stack/load-screening-list!      (fn [opts]
+                                                      (swap! calls conj :load-screening-list)
+                                                      (reset! loaded opts)
+                                                      :loaded)
                     stack/start!                    (fn [_] (swap! calls conj :start)
                                                       {:process nil
                                                        :base-url "http://127.0.0.1:1"
@@ -661,8 +665,11 @@
                     bundle/write-quotations!        writer
                     bundle/write-manifest!          writer]
         (capture/capture! {:ref "ref-1" :out (str (.getParentFile (temp-path "x")))
-                           :port 1 :clojure-bin "unused" :db {}}))
-      (is (= [:reset-schema :migrate :load-screening-list :start] @calls)))))
+                           :port 1 :clojure-bin "unused" :db {:url "jdbc:capture"}}))
+      (is (= [:reset-schema :migrate :load-screening-list :start] @calls))
+      (is (= {:worktree "/nonexistent-worktree" :db {:url "jdbc:capture"}}
+             (select-keys @loaded [:worktree :db]))
+          "the captured commit's worktree and the capture database — not the harness's own tree"))))
 
 (deftest ac-1-the-run-stamp-carries-what-start-established
   (let [base (stamp (fake-git (answers)))]

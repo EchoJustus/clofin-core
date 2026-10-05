@@ -444,14 +444,21 @@
 (deftest a-capture-loads-the-one-screening-list-the-commit-ships
   (testing "TASK-017's gate refuses every submission with no list accepted, so a
             capture of a commit that carries it loads the commit's own list with
-            the commit's own loader — here `echo` stands in for `clojure`, and
-            the log shows the command the worktree was asked to run"
-    (let [wt  (list-worktree! "synthetic-2026-10-v1.edn")
-          log (str wt "/capture.log")]
-      (is (= :loaded (stack/load-screening-list! {:worktree wt :db no-db :clojure-bin "echo"
-                                                  :log-file log})))
+            the commit's own loader, **run inside the captured worktree** — a
+            loader run anywhere else would load another commit's list. A script
+            stands in for `clojure` and prints where it ran and what it was
+            asked"
+    (let [wt     (list-worktree! "synthetic-2026-10-v1.edn")
+          log    (str wt "/capture.log")
+          script (doto (java.io.File/createTempFile "fake-clojure" ".sh")
+                   (spit "#!/bin/sh\necho \"cwd=$(pwd -P) args=$*\"\n")
+                   (.setExecutable true))]
+      (is (= :loaded (stack/load-screening-list! {:worktree wt :db no-db
+                                                  :clojure-bin (str script) :log-file log})))
+      (is (str/includes? (slurp log) (str "cwd=" (.getCanonicalPath (io/file wt)) " "))
+          "the loader ran in the captured worktree")
       (is (str/includes? (slurp log)
-                         "-M:screening-list load resources/screening-lists/synthetic-2026-10-v1.edn"))))
+                         "args=-M:screening-list load resources/screening-lists/synthetic-2026-10-v1.edn"))))
   (testing "a commit from before TASK-017 ships no list and needs none"
     (is (= :no-list (stack/load-screening-list! {:worktree (list-worktree!) :db no-db
                                                  :clojure-bin "false" :log-file nil}))))

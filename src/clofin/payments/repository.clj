@@ -59,8 +59,9 @@
             [clofin.money :as money]
             [clofin.payments.instruction :as instruction]
             [clofin.payments.state :as state]
-            ;; Pure, both: the screening subject's digest and C-07's judgement.
-            ;; Neither requires anything from payments, so this is no cycle;
+            ;; Pure, all three: the screening subject's digest, C-07's judgement
+            ;; and the list lock's key. None requires anything from payments,
+            ;; so this is no cycle;
             ;; `clofin.screening.service` requires this namespace, not the
             ;; reverse (ARCHITECTURE.md §3).
             [clofin.screening.decision :as decision]

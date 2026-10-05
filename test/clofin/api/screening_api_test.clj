@@ -509,10 +509,12 @@
           (is (= 201 status) (pr-str json))
           (is (= case-id (get json "caseId")) "names the case that already covers this content")
           (is (= 1 (count-of "screening_case" pi)) "and opens no second case"))
-        (is (= {"status" "dispositioned" "disposition" disposition}
-               (select-keys (:json (call :get (str "/screening-cases/" case-id) :actor (:compliance f)))
-                            ["status" "disposition"]))
-            "the disposition stands")
+        (is (= [[case-id "dispositioned" disposition]]
+               (mapv (juxt :id :status :disposition)
+                     (db/query tdb/*pool* ["select id::text as id, status, disposition from screening_case
+                                             where instruction_id = ?"
+                                           (java.util.UUID/fromString (get pi "id"))])))
+            "the disposition stands: the instruction's only case is the dispositioned one")
         (let [{:keys [status json]} (submit! f pi)]
           (is (= submit-status status) (str "the gate still answers by the disposition: " (pr-str json)))
           (when (= 409 submit-status)

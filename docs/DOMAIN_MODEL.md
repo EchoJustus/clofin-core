@@ -395,8 +395,9 @@ states what this costs an auditor.
 
 **Coverage.** Every state change the API can perform emits one event: payment
 instructions, approvals, settlement batches, reconciliation statements, breaks
-and adjustments, and — since TASK-005 — organisation creation, account opening
-and journal posting. **No qualification remains on [C-05](COMPLIANCE.md)**, and
+and adjustments, — since TASK-005 — organisation creation, account opening
+and journal posting, and — since TASK-017 — screening results (core's and
+clients', refused ones included) and screening cases, opened and dispositioned. **No qualification remains on [C-05](COMPLIANCE.md)**, and
 this paragraph says so only because the two facts behind it are now true rather
 than because it reads better.
 
@@ -452,7 +453,8 @@ self-registered: an actor that could grant itself the approver role would make
 segregation of duties unenforceable however carefully the rule is written.
 
 **Role** ✅ — one of `operator`, `approver`, `controller`, `compliance`,
-`auditor`. What each *means* is `clofin.authz.model/role-permissions`, in code
+`auditor` and, since TASK-017, `screening-service` (a screening client: it
+records evidence and reads what it needs, nothing else). What each *means* is `clofin.authz.model/role-permissions`, in code
 rather than in rows: a permission set stored as data is editable by anyone able
 to write those rows. **There is no superuser**, and a test asserts that no role
 holds every permission.

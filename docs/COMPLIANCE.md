@@ -469,7 +469,7 @@ transaction as the rows they describe:
 
 | Write | Action | Subject | Composed by |
 |---|---|---|---|
-| `POST /payment-instructions/{id}/submission` — core's screening result, at every submission, refused or not | `screening-result.recorded` (and `payment.submitted` only when the transition commits) | `screening-result` | `clofin.screening.service` |
+| `POST /payment-instructions/{id}/submission` — core's screening result, at every submission core screens (permitted or refused; a submission refused before screening — provenance, the lifecycle, no list accepted — stores none) | `screening-result.recorded` (and `payment.submitted` only when the transition commits) | `screening-result` | `clofin.screening.service` |
 | `POST /payment-instructions/{id}/screening-results` — a client's result, accepted **or refused** | `screening-result.recorded` — never a `payment.*` event | `screening-result` | `clofin.screening.service` |
 | a hit that opens a case, at either of the two above | `screening-case.opened` | `screening-case` | `clofin.screening.service` |
 | `POST /screening-cases/{id}/disposition` | `screening-case.dispositioned` | `screening-case` | `clofin.screening.service` |
@@ -684,7 +684,9 @@ submission screens the amended content again.
   `clofin.screening.rules/evaluate`, stores core's result, and decides with
   `clofin.screening.decision/decide`. A `clear` — or a hit a compliance actor
   dispositioned `false-positive` for this content against this list — permits
-  the transition; any other hit is `409 screening-hit` and opens a case.
+  the transition; any other hit is `409 screening-hit`, and opens a case unless
+  one already covers this content (a `confirmed-hit` names it) or a case still
+  open on earlier content blocks it (named `blockingCaseId`, below).
 - **The repository re-decides under the lock.**
   `clofin.payments.repository/transition!` reads the latest core result for the
   locked row's own digest and asks `decide` again before it moves the status;
@@ -734,7 +736,7 @@ submission screens the amended content again.
 | `clofin.screening.service` | `submit-screened!` screens every submission in the submitting transaction; `record-result!` records a client's result as evidence, never as a transition; `disposition!` refuses the maker and a second disposition. Each asserts its unit of work before its first write (C-05). |
 | `clofin.screening.decision/decide` | The judgement both callers ask: core's result only, for the current digest, against a list not retired, with the case for that content and list. |
 | `screening_case_open_key` | At most one open case per instruction, decided by the index rather than by a read. |
-| `clofin.screening.service/record-result!` and `decide`, under the instruction's lock | At most one case for an instruction's content against a list — **by a read under the lock, not by a schema constraint**: migration `0015` has no unique key on (instruction, digest, list), so a writer that bypassed the service could still insert a second (017-REQ O-7 asks for one). |
+| `clofin.screening.service/record-result!` and `decide`, under the instruction's lock | At most one case for an instruction's content against a list — **by a read under the lock, not by a schema constraint**: migration `0015` has no unique key on (instruction, digest, list), so a writer that bypassed the service could still insert a second (017-REQ O-7 asks whether a later migration should add one). |
 | `clofin.screening.list/lock-key` (a transaction-scoped advisory lock) | Every decision — core's at `submit`, a client's result, the repository's gate — holds it shared; the loading tool holds it exclusive. A list change waits for every decision in flight, no decision runs during one, and the tool stamps `retired_at` and `loaded_at` with one instant after its waits. |
 | `screening_case_disposition_final` | A dispositioned case cannot be changed by any writer; a second disposition is a new case. |
 | `screening_list_retire_only`, `screening_entry_append_only`, `screening_rule_append_only`, `screening_result_append_only`, `screening_result_match_append_only` and the `…_no_truncate` triggers | A list version is immutable once loaded but for its retirement, once; a result and its matched entries cannot be rewritten, deleted or truncated. |
@@ -753,7 +755,12 @@ list a decision names, entry by entry. **Loading a list is recorded by the list
 tables, not by the audit trail**: `screening_list.loaded_at`, `source` and
 `retired_at`, on rows the database keeps immutable, are the record of which list
 was in force when — `audit_event` requires an organisation, and a list belongs
-to none. The approval queue shows the checker core's screening outcome beside
+to none. **Which list a decision was taken against, and in what order, is read
+from `screening_result.recorded_at`** (`clock_timestamp()`, written after the
+instruction's lock and the list lock were taken), not from an event's
+`occurred_at` or a case's `opened_at`: those are the transaction's start time,
+shared by every row it writes with its event, and a decision that waited for a
+list change began before that change. The approval queue shows the checker core's screening outcome beside
 the amount (PR-015).
 
 **Tests.** `clofin.api.screening-api-test` carries ADR-0028's executable
@@ -779,8 +786,10 @@ decision, not by omission. **So the statement holds for every instruction
 submitted under migration `0015` and later, and not for one submitted before
 it**: an instruction already `pending-approval` or `approved` on a database
 when `0015` is applied carries no screening decision and can still be approved,
-released and settled — its queue row carries no `screening` member, which is
-how a checker sees it. A stack built from empty has no such instruction. Lists are one synthetic list for every tenant.
+released and settled. A `pending-approval` one's queue row carries no
+`screening` member, which is how a checker sees it; an `approved` one has no
+queue row, and shows only by having no core result at
+`GET /screening-results?instructionId=`. A stack built from empty has no such instruction. Lists are one synthetic list for every tenant.
 Fraud scoring (`FraudAssessment`, PR-062) remains designed and not built.
 
 ---

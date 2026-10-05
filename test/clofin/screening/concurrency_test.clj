@@ -312,7 +312,7 @@
                                                     (original-insert tx row))]
         (let [s (on-thread #(submit f))]
           (is (.await parked 30 TimeUnit/SECONDS)
-              "the submission holds the list's row and has not yet recorded its result")
+              "the submission holds the list lock and has not yet recorded its result")
           (let [t (on-thread #(screening-tool/retire! (:pool f) "synthetic-2026-10-v1"))]
             (is (pos? (await-lock-wait! list-lock))
                 "non-vacuity: the retirement is waiting on the decision's hold of the list lock")
@@ -354,3 +354,31 @@
               (is (instance? clojure.lang.ExceptionInfo s*) (pr-str s*))
               (is (= "screening-required" (:reason (ex-data s*))) (pr-str (ex-data s*)))))))
       (is (= "draft" (status-of f)) "nothing moved"))))
+
+(deftest a-retirement-in-flight-holds-the-list-and-a-client-result-waits-then-is-refused
+  (testing "recording a client's result takes the list lock too: posted while a
+            retirement holds it, the result waits, then finds its list no longer
+            accepted and is refused `list-version-not-accepted` — nothing
+            stored, and no result recorded after its list's retired_at
+            (017-REQ R-7, §8)"
+    (let [f (setup)
+          parked (CountDownLatch. 1)
+          release (CountDownLatch. 1)
+          original-retire screening-tool/retire-version!]
+      (with-redefs [screening-tool/retire-version! (fn [tx version at]
+                                                     (let [v (original-retire tx version at)]
+                                                       (.countDown parked)
+                                                       (.await release 60 TimeUnit/SECONDS)
+                                                       v))]
+        (let [t (on-thread #(screening-tool/retire! (:pool f) "synthetic-2026-10-v1"))]
+          (is (.await parked 30 TimeUnit/SECONDS) "the retirement reached its park point, uncommitted")
+          (let [b (on-thread #(record f))]
+            (is (pos? (await-lock-wait! list-lock))
+                "non-vacuity: the client's result is waiting on the list lock")
+            (.countDown release)
+            (let [t* (deref t 60000 ::timeout) b* (deref b 60000 ::timeout)]
+              (is (= "synthetic-2026-10-v1" t*) (pr-str t*))
+              (is (= 422 (:status b*)) (pr-str (:json b*)))
+              (is (= "list-version-not-accepted" (get-in b* [:json "errors" "reason"])))))))
+      (is (empty? (stored-results f)) "nothing recorded against the retired list")
+      (is (empty? (results-recorded-after-their-list-retired))))))

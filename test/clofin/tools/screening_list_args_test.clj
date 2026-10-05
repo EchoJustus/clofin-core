@@ -11,13 +11,16 @@
             `try`. Every malformed line parses to nil, which `-main` answers
             with its usage and exit 2 — including the ones an even count let
             through: a flag given twice, whose first value `hash-map` silently
-            dropped, and a flag where the file belongs"
+            dropped, a flag where the file belongs, and a flag where the
+            version belongs"
     (let [parse #'tool/parse-args]
       (doseq [args [["load" "f.edn" "--replacing"]
                     ["load" "f.edn" "--replacing" "v1" "--replacing"]
                     ["load" "f.edn" "--replacing" "v1" "--replacing" "v2"]
                     ["load" "--replacing"]
                     ["load" "--replacing" "v1"]
+                    ["load" "f.edn" "--replacing" "--replacing"]
+                    ["load" "f.edn" "--replacing" "--other"]
                     ["load" "f.edn" "--other" "x"]
                     ["load"]
                     ["retire"]

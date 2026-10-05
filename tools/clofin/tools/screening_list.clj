@@ -196,13 +196,15 @@
         ;; not an exception: `apply hash-map` would throw before `-main`'s
         ;; `try` and answer with a stack trace (017-REQ R-11). A flag given
         ;; twice is one too: `hash-map` would keep the last value and drop the
-        ;; operator's other without a word. And a flag is never a file or a
-        ;; version.
+        ;; operator's other without a word. And a flag is never a file, nor
+        ;; the version `--replacing` names.
         opts (when (even? (count more)) (apply hash-map more))
         flags-once? (= (count opts) (quot (count more) 2))
-        target? (and target (not (str/starts-with? target "--")))]
+        flag? #(str/starts-with? % "--")
+        target? (and target (not (flag? target)))]
     (cond
-      (and (= "load" command) target? opts flags-once? (every? #{"--replacing"} (keys opts)))
+      (and (= "load" command) target? opts flags-once? (every? #{"--replacing"} (keys opts))
+           (not-any? flag? (vals opts)))
       {:command :load :path target :replacing (get opts "--replacing")}
 
       (and (= "retire" command) target? (empty? more))
