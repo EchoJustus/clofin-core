@@ -16,11 +16,16 @@
 
   ## Lock order
 
-  Unchanged from `clofin.payments.repository`'s, extended by one row type:
-  `payment_instruction` first, then `screening_case`. A disposition locks the
-  instruction before the case for that reason, so a disposition and a
-  submission of the same instruction serialise rather than interleave."
-  (:require [clofin.db.core :as db]))
+  Unchanged from `clofin.payments.repository`'s, extended by one row type and
+  one advisory lock: `payment_instruction` first, then the list lock
+  (`clofin.screening.list/lock-key`, shared), then `screening_case`. A
+  disposition locks the instruction before the case for that reason, so a
+  disposition and a submission of the same instruction serialise rather than
+  interleave. The loading tool takes the table lock on `screening_list`, then
+  the list lock exclusive, and touches no instruction or case, so no order it
+  takes can meet a decision's in reverse."
+  (:require [clofin.db.core :as db]
+            [clofin.screening.list :as screening-list]))
 
 (def row-cap
   "Maximum rows a list query returns, with `truncated` saying whether there were
@@ -86,37 +91,38 @@
   `clofin.tools.screening-list`); if two are ever found, screening against
   either would be a decision nobody can say was taken against *the* list, so
   this throws — a `500` with a correlation id — rather than picking one."
-  ([source] (accepted-list source {}))
-  ([source {:keys [lock?]}]
-   (let [rows (db/query source [(str "select version, source, loaded_at, retired_at, entry_count
-                                        from screening_list where retired_at is null
-                                       order by version"
-                                     (when lock? " for share"))])]
-     (when (> (count rows) 1)
-       (throw (ex-info "More than one screening list is accepted; screening refuses to choose"
-                       {:accepted (mapv :version rows)})))
-     (when-let [row (first rows)]
-       (assoc (row->list-summary row) :entries (entries-of source (:version row)))))))
+  [source]
+  (let [rows (db/query source ["select version, source, loaded_at, retired_at, entry_count
+                                  from screening_list where retired_at is null
+                                 order by version"])]
+    (when (> (count rows) 1)
+      (throw (ex-info "More than one screening list is accepted; screening refuses to choose"
+                      {:accepted (mapv :version rows)})))
+    (when-let [row (first rows)]
+      (assoc (row->list-summary row) :entries (entries-of source (:version row))))))
+
+(defn hold-list-lock!
+  "Hold the list lock (`clofin.screening.list/lock-key`) **shared** until the
+  caller's transaction ends. Taken by every screening decision, after the
+  instruction's lock (L-8, 017-REQ R-7); re-taking it in one transaction is
+  immediate."
+  [tx]
+  (db/query-one tx ["select pg_advisory_xact_lock_shared(?) /* screening list lock */"
+                    screening-list/lock-key]))
 
 (defn lock-accepted-list!
-  "`accepted-list`, with the accepted list's row held `for share` until the
-  caller's transaction ends — taken by every screening decision, after the
-  instruction's lock (L-8, 017-REQ R-7).
+  "`accepted-list`, read under the list lock held shared (`hold-list-lock!`).
 
-  A retirement is an `update` of that row, so it waits for every decision in
-  flight against the list, and a decision that starts while a retirement is
-  uncommitted waits for it and then reads the list as it stands: a submission
-  can never commit `pending-approval` on the strength of a list retired before
-  it committed.
-
-  Read twice when the first read comes back empty. A statement that waited on
-  a retirement re-checks the row it waited for — now retired, so excluded — but
-  its snapshot predates the replacement the same tool committed with it; the
-  second statement sees that replacement. With no list accepted, both are
-  empty and the answer is nil."
+  The lock is taken in a statement of its own, so the read that follows has a
+  snapshot taken after any list change that was in flight has committed: a
+  decision sees the old list or the new one, never a retired list as accepted
+  and never no list while a replacement was being committed. A list change
+  waits for every decision holding the lock, so no decision commits against a
+  list after its retirement did, and no result is recorded after its list's
+  `retired_at` (the tool stamps it after its wait)."
   [tx]
-  (or (accepted-list tx {:lock? true})
-      (accepted-list tx {:lock? true})))
+  (hold-list-lock! tx)
+  (accepted-list tx))
 
 ;; ---------------------------------------------------------------------------
 ;; Results

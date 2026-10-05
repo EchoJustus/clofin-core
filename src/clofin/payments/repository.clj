@@ -35,6 +35,11 @@
      `clofin.ledger.repository/assert-postable!`, which orders by id within
      itself
 
+  `transition!` with `:submit` also takes the screening list lock — a
+  transaction-scoped advisory lock, shared (`clofin.screening.list/lock-key`) —
+  **after** the instruction, as every screening decision does; the list loader
+  holds it exclusive and locks no instruction, so the order cannot invert.
+
   The two link targets are the same row type, so a creation naming both would
   take two locks of one type in an order this namespace does not fix. It cannot:
   `create-instruction!` refuses an instruction that claims to be a reversal
@@ -59,6 +64,7 @@
             ;; `clofin.screening.service` requires this namespace, not the
             ;; reverse (ARCHITECTURE.md §3).
             [clofin.screening.decision :as decision]
+            [clofin.screening.list :as screening-list]
             [clofin.screening.subject :as subject]))
 
 (def row-cap
@@ -642,6 +648,12 @@
   this same lock (`clofin.screening.repository/insert-result!`), so \"latest\"
   is the latest decided."
   [tx instruction-id digest]
+  ;; The list lock, shared, as every screening decision takes it — this gate
+  ;; included, so a direct caller of `transition!` racing a list retirement
+  ;; waits for it and reads `list_retired` as committed (017-REQ R-7). Through
+  ;; `submit-screened!` the transaction already holds it.
+  (db/query-one tx ["select pg_advisory_xact_lock_shared(?) /* screening list lock */"
+                    screening-list/lock-key])
   (let [r (db/query-one tx ["select r.id, r.origin, r.outcome, r.disposition, r.instruction_digest,
                                     r.list_version, (l.retired_at is not null) as list_retired
                                from screening_result r
@@ -649,8 +661,7 @@
                               where r.instruction_id = ? and r.origin = 'core'
                                 and r.instruction_digest = ?
                               order by r.recorded_at desc, r.id desc
-                              limit 1
-                              for share of l"
+                              limit 1"
                             instruction-id digest])
         c (when r
             (db/query-one tx ["select id, status, disposition, instruction_digest, list_version

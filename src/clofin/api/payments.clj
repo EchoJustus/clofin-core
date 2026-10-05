@@ -743,7 +743,9 @@
   decision. A `:permit` submits through `transition!` — whose own gate decides
   again under the lock — and records `payment.submitted` here, as before. A hit
   is `409 screening-hit` with `errors.caseId` and `errors.listVersion` (and
-  `errors.disposition` once a case confirmed it), **rendered after the
+  `errors.disposition` once a case confirmed it) — or `errors.blockingCaseId`
+  in place of `errors.caseId` when the instruction's one open case is about
+  earlier content or a replaced list (017-REQ O-6) — **rendered after the
   transaction commits** so core's result and the case survive their own
   refusal (L-11) — and the key is bound to that answer: a retry under it
   replays the `409`; a submission after the disposition takes a new key. No

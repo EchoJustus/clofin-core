@@ -65,6 +65,8 @@
     ;; Every field of the stamp removed in turn, with the walk itself asserted
     ;; exhaustive against the requirement list (AC-2, lesson L-13).
     clofin.tools.capture-test
+    ;; 017-REQ R-11: the screening-list loader's command line, no database.
+    clofin.tools.screening-list-args-test
     ;; 2C-006, lesson L-19: a capture binds to the process it started, not to a
     ;; port and not to a schema version. Needs no service — the stranger on the
     ;; port is a local HttpServer.

@@ -1261,8 +1261,9 @@ paths:
             current state, or the `Idempotency-Key` has already been used for a
             different request, or **core's screening found a hit that stands**
             — `errors.reason` `screening-hit` with `errors.caseId` (or
-            `errors.blockingCaseId`, when a case open on earlier content keeps
-            this content's case from opening), `errors.listVersion`,
+            `errors.blockingCaseId` instead, when a case still open on the
+            instruction's earlier content, or against a list since replaced,
+            keeps this content's case from opening), `errors.listVersion`,
             `errors.resultId` and, once confirmed, `errors.disposition`
             (`ScreeningRefusalReason`). `screening-required` is the
             repository's own gate refusing a `submit` that reaches it without

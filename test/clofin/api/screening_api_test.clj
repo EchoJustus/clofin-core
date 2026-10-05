@@ -545,7 +545,7 @@
     (testing "the open case is named as what blocks, and not as this content's case"
       (is (= first-case (get-in json ["errors" "blockingCaseId"])))
       (is (not (contains? (get json "errors") "caseId")))
-      (is (str/includes? (get json "detail") "earlier content"))
+      (is (str/includes? (str (get json "detail")) "earlier content"))
       (is (= list-version (get-in json ["errors" "listVersion"])))
       (is (= 1 (count-of "screening_case" pi)) "no case could open"))
     (testing "once compliance dispositions the stale case, the next submission opens this content's"
@@ -576,7 +576,7 @@
           (is (= old-case (get-in json ["errors" "blockingCaseId"])))
           (is (not (contains? (get json "errors") "caseId")))
           (is (= "synthetic-2026-10-v2" (get-in json ["errors" "listVersion"])))
-          (is (str/includes? (get json "detail") (str "against list " list-version))))))))
+          (is (str/includes? (str (get json "detail")) (str "against list " list-version))))))))
 
 ;; ---------------------------------------------------------------------------
 ;; AC-17-12 — the screening-service actor

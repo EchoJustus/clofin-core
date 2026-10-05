@@ -26,6 +26,7 @@
   Synthetic data only."
   (:require [clofin.audit.repository :as audit-store]
             [clofin.db.core :as db]
+            [clofin.payments.repository :as payments]
             [clofin.screening.repository :as screening-repo]
             [clofin.system :as system]
             [clofin.test-db :as tdb]
@@ -225,7 +226,10 @@
 (defn- status-of [{:keys [pool maker id]}]
   (get (:json (call pool :get (str "/payment-instructions/" id) :actor maker)) "status"))
 
-(def ^:private list-lock "%screening_list%")
+(def ^:private list-lock
+  "The statement of a transaction waiting on the list lock — shared or
+  exclusive, `clofin.screening.list/lock-key` — which carries this comment."
+  "%screening list lock%")
 
 (defn- results-recorded-after-their-list-retired
   "Results whose `recorded_at` is not before their list's `retired_at` — a
@@ -237,14 +241,14 @@
                           where l.retired_at is not null and r.recorded_at >= l.retired_at"]))
 
 (deftest a-retirement-in-flight-holds-the-list-and-a-submission-waits-then-decides-nothing
-  (testing "the retirement holds the list's row: a submission waits for it, then
+  (testing "the retirement holds the list lock: a submission waits for it, then
             finds no list accepted and decides nothing"
     (let [f (setup)
           parked (CountDownLatch. 1)
           release (CountDownLatch. 1)
           original-retire screening-tool/retire-version!]
-      (with-redefs [screening-tool/retire-version! (fn [tx version]
-                                                     (let [v (original-retire tx version)]
+      (with-redefs [screening-tool/retire-version! (fn [tx version at]
+                                                     (let [v (original-retire tx version at)]
                                                        (.countDown parked)
                                                        (.await release 60 TimeUnit/SECONDS)
                                                        v))]
@@ -252,7 +256,7 @@
           (is (.await parked 30 TimeUnit/SECONDS) "the retirement reached its park point, uncommitted")
           (let [s (on-thread #(submit f))]
             (is (pos? (await-lock-wait! list-lock))
-                "non-vacuity: the submission is waiting on the list's row")
+                "non-vacuity: the submission is waiting on the list lock")
             (.countDown release)
             (let [t* (deref t 60000 ::timeout) s* (deref s 60000 ::timeout)]
               (is (= "synthetic-2026-10-v1" t*) (pr-str t*))
@@ -262,15 +266,15 @@
       (is (empty? (stored-results f)) "nothing decided against the retired list"))))
 
 (deftest a-replacement-in-flight-holds-the-list-and-a-submission-screens-against-the-replacement
-  (testing "a replacement holds the row: the submission waits, then screens
-            against the replacement the same transaction committed — the
-            second read sees what the first read's snapshot could not"
+  (testing "a replacement holds the list lock: the submission waits, then
+            screens against the replacement the same transaction committed —
+            its read is a statement whose snapshot follows that commit"
     (let [f (setup)
           parked (CountDownLatch. 1)
           release (CountDownLatch. 1)
           original-retire screening-tool/retire-version!]
-      (with-redefs [screening-tool/retire-version! (fn [tx version]
-                                                     (let [v (original-retire tx version)]
+      (with-redefs [screening-tool/retire-version! (fn [tx version at]
+                                                     (let [v (original-retire tx version at)]
                                                        (.countDown parked)
                                                        (.await release 60 TimeUnit/SECONDS)
                                                        v))]
@@ -295,9 +299,9 @@
           "screened against the replacement, never the retired list"))))
 
 (deftest a-decision-in-flight-holds-the-list-and-the-retirement-is-stamped-after-it
-  (testing "the decision holds the row: the retirement waits for it, and is
-            stamped after it — no result is ever recorded after its list's
-            retired_at"
+  (testing "the decision holds the list lock: the retirement waits for it,
+            and is stamped after it — no result is ever recorded after its
+            list's retired_at"
     (let [f (setup)
           parked (CountDownLatch. 1)
           release (CountDownLatch. 1)
@@ -311,7 +315,7 @@
               "the submission holds the list's row and has not yet recorded its result")
           (let [t (on-thread #(screening-tool/retire! (:pool f) "synthetic-2026-10-v1"))]
             (is (pos? (await-lock-wait! list-lock))
-                "non-vacuity: the retirement is waiting on the decision's hold")
+                "non-vacuity: the retirement is waiting on the decision's hold of the list lock")
             (.countDown release)
             (let [s* (deref s 60000 ::timeout) t* (deref t 60000 ::timeout)]
               (is (= 200 (:status s*)) (pr-str (:json s*)))
@@ -319,3 +323,34 @@
       (is (= 1 (count (stored-results f))))
       (is (empty? (results-recorded-after-their-list-retired))
           "the forbidden state is absent: a result recorded at or after its list's retirement"))))
+
+(deftest a-retirement-in-flight-and-a-direct-transition-serialise-at-the-gate
+  (testing "the repository's own gate takes the list lock too: a caller of
+            `transition!` that bypasses the service, racing a retirement,
+            waits for it and is refused `screening-required` — the retired list
+            permits nothing (017-REQ R-7; the gate is the one that cannot be
+            skipped)"
+    (let [f (setup)
+          org-id (java.util.UUID/fromString (:org f))
+          pi-id (java.util.UUID/fromString (:id f))
+          _ (tdb/record-core-screening! tdb/*pool* org-id pi-id (:maker f))
+          parked (CountDownLatch. 1)
+          release (CountDownLatch. 1)
+          original-retire screening-tool/retire-version!]
+      (with-redefs [screening-tool/retire-version! (fn [tx version at]
+                                                     (let [v (original-retire tx version at)]
+                                                       (.countDown parked)
+                                                       (.await release 60 TimeUnit/SECONDS)
+                                                       v))]
+        (let [t (on-thread #(screening-tool/retire! (:pool f) "synthetic-2026-10-v1"))]
+          (is (.await parked 30 TimeUnit/SECONDS) "the retirement reached its park point, uncommitted")
+          (let [s (on-thread #(payments/transition! (:pool f) org-id pi-id :submit
+                                                    {:actor {:id (:maker f)}}))]
+            (is (pos? (await-lock-wait! list-lock))
+                "non-vacuity: the direct transition is waiting on the list lock")
+            (.countDown release)
+            (let [t* (deref t 60000 ::timeout) s* (deref s 60000 ::timeout)]
+              (is (= "synthetic-2026-10-v1" t*) (pr-str t*))
+              (is (instance? clojure.lang.ExceptionInfo s*) (pr-str s*))
+              (is (= "screening-required" (:reason (ex-data s*))) (pr-str (ex-data s*)))))))
+      (is (= "draft" (status-of f)) "nothing moved"))))

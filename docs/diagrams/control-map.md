@@ -76,22 +76,24 @@ flowchart LR
     ep43["clofin.recon.matching/rules"]
     ep44["clofin.recon.repository/mark-rejected!"]
     ep45["clofin.screening.decision/decide"]
-    ep46["clofin.screening.service"]
-    ep47["integration test tampering with a checksum<br/>and asserting start-up fails ✅."]
-    ep48["journal_entry_append_only and<br/>journal_line_append_only triggers reject<br/>UPDATE, DELETE and TRUNCATE at the database<br/>✅ — the third verb added by migration 0007<br/>after audit finding F-002 found it uncovered<br/>✅"]
-    ep49["recon_adjustment_posted_key"]
-    ep50["recon_match_expectation_key"]
-    ep51["recon_match_rule_known"]
-    ep52["recon_statement_append_only,<br/>recon_statement_line_append_only,<br/>recon_match_append_only (and their TRUNCATE<br/>guards)"]
-    ep53["recon_statement_replay_key and<br/>reconciliation_statement.content_digest"]
-    ep54["reconciliation_break.assignee_id NOT NULL"]
-    ep55["scheme_response_append_only,<br/>scheme_response_no_truncate"]
-    ep56["scheme_response_replay_key and<br/>scheme_response.request_digest"]
-    ep57["screening_case_disposition_final"]
-    ep58["screening_case_open_key"]
-    ep59["screening_list_retire_only,<br/>screening_entry_append_only,<br/>screening_rule_append_only,<br/>screening_result_append_only,<br/>screening_result_match_append_only and the<br/>…_no_truncate triggers"]
-    ep60["screening_result_core_agrees_with_itself,<br/>screening_result_refusal_needs_reason,<br/>screening_case_disposition_complete"]
-    ep61["settlement_item_instruction_key"]
+    ep46["clofin.screening.list/lock-key (a<br/>transaction-scoped advisory lock)"]
+    ep47["clofin.screening.service"]
+    ep48["clofin.screening.service/record-result! and<br/>decide, under the instruction's lock"]
+    ep49["integration test tampering with a checksum<br/>and asserting start-up fails ✅."]
+    ep50["journal_entry_append_only and<br/>journal_line_append_only triggers reject<br/>UPDATE, DELETE and TRUNCATE at the database<br/>✅ — the third verb added by migration 0007<br/>after audit finding F-002 found it uncovered<br/>✅"]
+    ep51["recon_adjustment_posted_key"]
+    ep52["recon_match_expectation_key"]
+    ep53["recon_match_rule_known"]
+    ep54["recon_statement_append_only,<br/>recon_statement_line_append_only,<br/>recon_match_append_only (and their TRUNCATE<br/>guards)"]
+    ep55["recon_statement_replay_key and<br/>reconciliation_statement.content_digest"]
+    ep56["reconciliation_break.assignee_id NOT NULL"]
+    ep57["scheme_response_append_only,<br/>scheme_response_no_truncate"]
+    ep58["scheme_response_replay_key and<br/>scheme_response.request_digest"]
+    ep59["screening_case_disposition_final"]
+    ep60["screening_case_open_key"]
+    ep61["screening_list_retire_only,<br/>screening_entry_append_only,<br/>screening_rule_append_only,<br/>screening_result_append_only,<br/>screening_result_match_append_only and the<br/>…_no_truncate triggers"]
+    ep62["screening_result_core_agrees_with_itself,<br/>screening_result_refusal_needs_reason,<br/>screening_case_disposition_complete"]
+    ep63["settlement_item_instruction_key"]
 
     c_01 --> ep17
     c_01 --> ep24
@@ -102,7 +104,7 @@ flowchart LR
     c_02 --> ep24
     c_03 --> ep04
     c_03 --> ep35
-    c_03 --> ep48
+    c_03 --> ep50
     c_04 --> ep01
     c_04 --> ep02
     c_04 --> ep03
@@ -116,21 +118,23 @@ flowchart LR
     c_05 --> ep22
     c_05 --> ep23
     c_05 --> ep36
-    c_05 --> ep55
+    c_05 --> ep57
     c_06 --> ep06
     c_06 --> ep09
     c_06 --> ep32
     c_06 --> ep33
-    c_06 --> ep56
-    c_06 --> ep61
+    c_06 --> ep58
+    c_06 --> ep63
     c_07 --> ep25
     c_07 --> ep37
     c_07 --> ep45
     c_07 --> ep46
-    c_07 --> ep57
-    c_07 --> ep58
+    c_07 --> ep47
+    c_07 --> ep48
     c_07 --> ep59
     c_07 --> ep60
+    c_07 --> ep61
+    c_07 --> ep62
     c_08 --> ep10
     c_08 --> ep18
     c_08 --> ep24
@@ -138,7 +142,7 @@ flowchart LR
     c_09 --> ep28
     c_09 --> ep31
     c_10 --> ep05
-    c_10 --> ep47
+    c_10 --> ep49
     c_11 --> ep29
     c_11 --> ep30
     c_12 --> ep08
@@ -151,12 +155,12 @@ flowchart LR
     c_13 --> ep42
     c_13 --> ep43
     c_13 --> ep44
-    c_13 --> ep49
-    c_13 --> ep50
     c_13 --> ep51
     c_13 --> ep52
     c_13 --> ep53
     c_13 --> ep54
+    c_13 --> ep55
+    c_13 --> ep56
 ```
 
 Each control carries the status its `COMPLIANCE.md` heading states, grouped by

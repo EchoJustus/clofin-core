@@ -16,9 +16,13 @@
   **Exactly one list is accepted at a time.** `load` of a second version while
   one is accepted is refused unless `--replacing` names the accepted version,
   in which case the old is retired and the new loaded **in one transaction** —
-  never a moment with two accepted lists, never a moment with none. Loaders are
-  serialised by a table lock, so two concurrent loads cannot both find the
-  table empty of accepted versions. (The schema itself does not forbid two
+  never a moment with two accepted lists, never a moment with none, and the
+  rows say so: the old version's `retired_at` and the new one's `loaded_at` are
+  one instant. Loaders are serialised by a table lock, so two concurrent loads
+  cannot both find the table empty of accepted versions; and every load,
+  replacement and retirement holds the list lock exclusive
+  (`clofin.screening.list/lock-key`), so it waits for every screening decision
+  in flight and none starts until it commits. (The schema itself does not forbid two
   accepted rows; `clofin.screening.repository/accepted-list` treats two as a
   defect and refuses to screen against either.)
 
@@ -71,29 +75,32 @@
                                  where retired_at is null order by version"])))
 
 (defn- lock-lists!
-  "Serialise loaders. `share row exclusive` conflicts with itself and with every
-  write to the table, and not with the `for share` row lock a screening
-  decision holds on the accepted list
-  (`clofin.screening.repository/lock-accepted-list!`). The retirement's
-  `update` of that row is what serialises with decisions: it waits for every
-  one in flight, and one that starts meanwhile waits for this transaction and
-  then reads the list as it stands (017-REQ R-7)."
+  "Serialise loaders against each other and against screening decisions.
+
+  `share row exclusive` on the table conflicts with itself and with every write
+  to it, so two loads cannot both find no accepted list. Then the list lock
+  (`clofin.screening.list/lock-key`) **exclusive**, which waits for every
+  decision in flight — each holds it shared — and makes every decision that
+  starts meanwhile wait for this transaction to commit (017-REQ R-7).
+
+  Returns the instant every row this transaction writes is stamped with —
+  `clock_timestamp()` read **after** these waits, not `now()`, the
+  transaction's start: a retirement's `retired_at` and a replacement's
+  `loaded_at` are this one instant, so the rows show neither two lists accepted
+  at once nor a moment with none, and every result recorded against a list was
+  recorded before that list's `retired_at`."
   [tx]
-  (db/execute! tx ["lock table screening_list in share row exclusive mode"]))
+  (db/execute! tx ["lock table screening_list in share row exclusive mode"])
+  (db/query-one tx ["select pg_advisory_xact_lock(?) /* screening list lock */"
+                    screening-list/lock-key])
+  (:at (db/query-one tx ["select clock_timestamp() as at"])))
 
 (defn retire-version!
-  "Retire `version`, which must be accepted. Under the caller's transaction.
-
-  The row is read `for update` first, which waits for every screening decision
-  in flight against it (each holds the row `for share`), and only then stamped
-  with `clock_timestamp()` — not `now()`, the transaction's start, and not in
-  the `update` alone, whose new row is computed before it waits. So every
-  result recorded against a list was recorded before that list's `retired_at`,
-  and no decision taken against it commits after the retirement does
-  (017-REQ R-7)."
-  [tx version]
-  (let [row (db/query-one tx ["select version, retired_at from screening_list where version = ?
-                                  for update"
+  "Retire `version`, which must be accepted, stamping `retired_at` with `at` —
+  the instant `lock-lists!` returned, after every decision taken against the
+  list had committed. Under the caller's transaction."
+  [tx version at]
+  (let [row (db/query-one tx ["select version, retired_at from screening_list where version = ?"
                               version])]
     (when-not row
       (refuse! "unknown-version" (str "No screening list version " version " is loaded")
@@ -101,16 +108,21 @@
     (when (:retired-at row)
       (refuse! "already-retired" (str "Screening list " version " is already retired")
                {:version version}))
-    (db/execute! tx ["update screening_list set retired_at = clock_timestamp()
-                       where version = ? and retired_at is null" version])
+    (db/execute! tx ["update screening_list set retired_at = ?
+                       where version = ? and retired_at is null" at version])
     version))
 
 (defn insert-version!
   "Write a validated list — the version row, its entries and their rules —
-  under the caller's transaction."
-  [tx {:keys [version entries]} source]
-  (db/execute! tx ["insert into screening_list (version, source, entry_count) values (?, ?, ?)"
-                   version source (count entries)])
+  under the caller's transaction.
+
+  `loaded_at` is `at`, the instant `lock-lists!` returned, not the column's
+  default `now()`: in a replacement it is the predecessor's `retired_at`
+  exactly (017-REQ §8)."
+  [tx {:keys [version entries]} source at]
+  (db/execute! tx ["insert into screening_list (version, source, entry_count, loaded_at)
+                    values (?, ?, ?, ?)"
+                   version source (count entries) at])
   (doseq [{:keys [id rules]} entries]
     (db/execute! tx ["insert into screening_entry (list_version, id) values (?, ?)" version id])
     (doseq [[position {:keys [field operator value]}] (map-indexed vector rules)]
@@ -137,28 +149,28 @@
     (when (str/blank? source)
       (err/invalid! "A list is loaded from a source, which is recorded with it" {}))
     (db/with-transaction [tx pool]
-      (lock-lists! tx)
-      (when (db/query-one tx ["select 1 as present from screening_list where version = ?" version])
-        (refuse! "version-already-loaded"
-                 (str "Screening list " version " is already loaded; a changed list is a new version")
-                 {:version version}))
-      (let [accepted (accepted-versions tx)]
-        (cond
-          (and (seq accepted) (nil? replacing))
-          (refuse! "a-list-is-already-accepted"
-                   (str "Screening list " (str/join ", " accepted) " is accepted; exactly one list is "
-                        "accepted at a time — load with --replacing " (first accepted)
-                        " to retire it and load " version " in one transaction")
-                   {:accepted accepted :version version})
+      (let [at (lock-lists! tx)]
+        (when (db/query-one tx ["select 1 as present from screening_list where version = ?" version])
+          (refuse! "version-already-loaded"
+                   (str "Screening list " version " is already loaded; a changed list is a new version")
+                   {:version version}))
+        (let [accepted (accepted-versions tx)]
+          (cond
+            (and (seq accepted) (nil? replacing))
+            (refuse! "a-list-is-already-accepted"
+                     (str "Screening list " (str/join ", " accepted) " is accepted; exactly one list is "
+                          "accepted at a time — load with --replacing " (first accepted)
+                          " to retire it and load " version " in one transaction")
+                     {:accepted accepted :version version})
 
-          (and replacing (not= [replacing] accepted))
-          (refuse! "replacing-is-not-the-accepted-list"
-                   (str "--replacing " replacing " does not name the accepted list ("
-                        (if (seq accepted) (str/join ", " accepted) "none is accepted") ")")
-                   {:replacing replacing :accepted accepted}))
-        (when replacing (retire-version! tx replacing))
-        (insert-version! tx validated source)
-        {:version version :entry-count (count (:entries validated)) :retired replacing}))))
+            (and replacing (not= [replacing] accepted))
+            (refuse! "replacing-is-not-the-accepted-list"
+                     (str "--replacing " replacing " does not name the accepted list ("
+                          (if (seq accepted) (str/join ", " accepted) "none is accepted") ")")
+                     {:replacing replacing :accepted accepted}))
+          (when replacing (retire-version! tx replacing at))
+          (insert-version! tx validated source at)
+          {:version version :entry-count (count (:entries validated)) :retired replacing})))))
 
 (defn retire!
   "Retire the accepted `version`, leaving no list accepted. Every submission is
@@ -166,8 +178,7 @@
   unconfigured screen is not an unsupervised one."
   [pool version]
   (db/with-transaction [tx pool]
-    (lock-lists! tx)
-    (retire-version! tx version)))
+    (retire-version! tx version (lock-lists! tx))))
 
 (defn- usage []
   (str "usage: clojure -M:screening-list load <edn-file> [--replacing <version>]\n"
@@ -178,13 +189,18 @@
   (let [[command target & more] args
         ;; An odd count — `--replacing` with no version — is a usage error,
         ;; not an exception: `apply hash-map` would throw before `-main`'s
-        ;; `try` and answer with a stack trace (017-REQ R-11).
-        opts (when (even? (count more)) (apply hash-map more))]
+        ;; `try` and answer with a stack trace (017-REQ R-11). A flag given
+        ;; twice is one too: `hash-map` would keep the last value and drop the
+        ;; operator's other without a word. And a flag is never a file or a
+        ;; version.
+        opts (when (even? (count more)) (apply hash-map more))
+        flags-once? (= (count opts) (quot (count more) 2))
+        target? (and target (not (str/starts-with? target "--")))]
     (cond
-      (and (= "load" command) target opts (every? #{"--replacing"} (keys opts)))
+      (and (= "load" command) target? opts flags-once? (every? #{"--replacing"} (keys opts)))
       {:command :load :path target :replacing (get opts "--replacing")}
 
-      (and (= "retire" command) target (empty? more))
+      (and (= "retire" command) target? (empty? more))
       {:command :retire :version target}
 
       :else nil)))
@@ -195,19 +211,24 @@
     (when-not parsed
       (binding [*out* *err*] (println (usage)))
       (System/exit 2))
-    (let [pool (db/open-pool (assoc (:db (config/load-config)) :pool-size 2))
+    (let [pool (volatile! nil)
           code (try
+                 ;; Inside the `try`: a configuration that does not load, a
+                 ;; database that does not answer and a statement the database
+                 ;; refuses are each one line to the operator, not a stack
+                 ;; trace (017-REQ §8).
+                 (vreset! pool (db/open-pool (assoc (:db (config/load-config)) :pool-size 2)))
                  (case (:command parsed)
                    :load
                    (let [{:keys [version entry-count retired]}
-                         (load-list! pool (read-list-file (:path parsed))
+                         (load-list! @pool (read-list-file (:path parsed))
                                      {:source (:path parsed) :replacing (:replacing parsed)})]
                      (println (str "Loaded screening list " version " (" entry-count " entries)"
                                    (when retired (str "; retired " retired))
                                    ". Synthetic list, exact matching."))
                      0)
                    :retire
-                   (let [version (retire! pool (:version parsed))]
+                   (let [version (retire! @pool (:version parsed))]
                      (println (str "Retired screening list " version
                                    ". No list is accepted: every submission is refused until one is loaded."))
                      0))
@@ -216,6 +237,10 @@
                      (println (str "Refused: " (ex-message t)))
                      (when-let [reason (:reason (ex-data t))] (println (str "reason: " reason))))
                    1)
-                 (finally (db/close-pool! pool)))]
+                 (catch Exception t
+                   (binding [*out* *err*]
+                     (println (str "Failed: " (.getSimpleName (class t)) ": " (ex-message t))))
+                   1)
+                 (finally (when @pool (db/close-pool! @pool))))]
       (shutdown-agents)
       (System/exit code))))

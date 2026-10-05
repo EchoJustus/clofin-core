@@ -645,7 +645,9 @@ counterparts". As published:
   case if none is open", ruling asked).
 - On `submit`'s `409 screening-hit`, `errors.blockingCaseId` replaces
   `errors.caseId` when the instruction's one open case is about earlier content
-  or another list, and so is not the case for this content (017-REQ R-2).
+  or another list, and so is not the case for this content (017-REQ R-2). In
+  that one case the `409` departs from A-7's and AC-17-1's "with
+  `errors.caseId`" — 017-REQ O-6, ruling asked.
 - `screenedAt` is the client's own, recorded as sent.
 
 **Refusal reasons beyond D5's table**, one published enum

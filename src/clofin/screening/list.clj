@@ -24,6 +24,25 @@
             [clofin.screening.rules :as rules]
             [clojure.string :as str]))
 
+(def lock-key
+  "The key of the PostgreSQL transaction-scoped advisory lock that serialises
+  the accepted list against the decisions taken on it (017-REQ R-7).
+
+  Every screening decision — core's at `submit`, a client's result being
+  recorded, and the repository's own gate — holds it **shared** until its
+  transaction ends (`pg_advisory_xact_lock_shared`); the loading tool holds it
+  **exclusive** (`pg_advisory_xact_lock`) for the whole of a load, a
+  replacement or a retirement. So a list change waits for every decision in
+  flight, a decision that starts meanwhile waits for the change to commit and
+  then reads the list in a statement whose snapshot follows it, and a waiting
+  change is not overtaken by later decisions: PostgreSQL grants a queued
+  exclusive request before shared requests that arrive after it.
+
+  An advisory lock rather than a row or table lock because it needs no
+  privilege on `screening_list`, which the service only ever reads. Arbitrary
+  but stable; distinct from the migrator's."
+  1701701701701701701)
+
 (def ^:private printable-ascii
   "The shape a list version and an entry id share with the schema
   (`screening_list_version_shape`, `screening_entry_id_shape`): printable

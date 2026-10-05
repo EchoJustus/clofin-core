@@ -24,9 +24,10 @@
      checked out from a commit object is clean by construction; it is verified
      clean anyway, because \"by construction\" is how a stale reused directory
      goes unnoticed.
-  3. Migrations and the service are run **from inside that worktree**, by
-     path. The running process is a child of this one, started from a
-     directory whose `HEAD` was just verified.
+  3. Migrations, the screening-list load (`load-screening-list!`, for a
+     commit that ships a list) and the service are run **from inside that
+     worktree**, by path. The running process is a child of this one, started
+     from a directory whose `HEAD` was just verified.
   4. The port is refused if anything already answers on it, a fresh **instance
      id** is minted for the run and passed to the child; the child's liveness
      is checked before any `200` is accepted and again before every file is

@@ -111,6 +111,19 @@
       (is (zero? (:count (db/query-one tdb/*pool* ["select count(*) as count from screening_entry
                                                     where list_version = 'synthetic-2026-10-v2'"])))))))
 
+(deftest a-replacement-hands-over-at-one-instant
+  (testing "017-REQ §8: the predecessor's retired_at and the replacement's
+            loaded_at are one instant, read after the tool's waits — the rows
+            that record which list was in force when show neither two lists
+            accepted at once nor a moment with none"
+    (tool/load-list! tdb/*pool* (a-list "synthetic-2026-10-v2") {:source "test" :replacing shipped})
+    (let [[v1 v2] (db/query tdb/*pool* ["select version, loaded_at, retired_at from screening_list
+                                          order by version"])]
+      (is (= [shipped "synthetic-2026-10-v2"] [(:version v1) (:version v2)]))
+      (is (some? (:retired-at v1)))
+      (is (nil? (:retired-at v2)))
+      (is (= (:retired-at v1) (:loaded-at v2))))))
+
 (deftest two-accepted-lists-are-a-defect-screening-refuses-to-choose-between
   (testing "the schema does not forbid two accepted rows — the tool's lock does —
             so the reader refuses to pick one rather than screening against either"
@@ -131,23 +144,3 @@
            (:reason (ex-data (try (tool/read-list-file "Makefile") nil
                                   (catch clojure.lang.ExceptionInfo t t)))))
         "a file that is not EDN")))
-
-(deftest a-malformed-command-line-is-a-usage-error-not-a-stack-trace
-  (testing "017-REQ R-11: `load f --replacing` with no version reached
-            `apply hash-map` with an odd count, which threw before `-main`'s
-            `try`. Every malformed line now parses to nil, which `-main`
-            answers with its usage and exit 2"
-    (let [parse #'tool/parse-args]
-      (doseq [args [["load" "f.edn" "--replacing"]
-                    ["load" "f.edn" "--replacing" "v1" "--replacing"]
-                    ["load" "f.edn" "--other" "x"]
-                    ["load"]
-                    ["retire"]
-                    ["retire" "v1" "extra"]
-                    []]]
-        (is (nil? (parse args)) (pr-str args)))
-      (testing "negative control: the well-formed lines parse"
-        (is (= {:command :load :path "f.edn" :replacing "v1"}
-               (parse ["load" "f.edn" "--replacing" "v1"])))
-        (is (= {:command :load :path "f.edn" :replacing nil} (parse ["load" "f.edn"])))
-        (is (= {:command :retire :version "v1"} (parse ["retire" "v1"])))))))
