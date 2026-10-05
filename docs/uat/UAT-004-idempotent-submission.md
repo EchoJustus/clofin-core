@@ -1,7 +1,7 @@
 # UAT-004 — A retried submission cannot pay twice
 
 **Requirements:** PR-001, PR-003, PR-004, PR-040, PR-041, PR-042 · **Controls:** C-06
-**Prerequisites:** UAT-001 passed; the stack is running (`make up`)
+**Prerequisites:** UAT-001 passed; the stack is running (`make up`) — and, since TASK-017, `make load-screening-list` has run: every submission is screened against the accepted synthetic list, and with none accepted it is refused `422 no-screening-list-accepted`. This script's names are clear against the shipped list.
 **Estimated duration:** 25 minutes
 
 > **Numbering.** The TASK-002 brief asked for this script as `UAT-003`. That
