@@ -118,3 +118,16 @@
                               values ('raw-second', 'raw sql', 0)"])
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"More than one screening list is accepted"
                           (screening/accepted-list tdb/*pool*)))))
+
+(deftest a-path-that-is-not-a-list-is-refused-naming-the-path
+  (testing "found running UAT-008: an exported shell `LIST` holding a version was
+            taken by make for the file path, and the loader answered with a stack
+            trace. It now refuses, naming what it was given"
+    (doseq [path ["synthetic-2026-10-v1" "deps.edn-that-does-not-exist"]]
+      (let [t (try (tool/read-list-file path) nil (catch clojure.lang.ExceptionInfo t t))]
+        (is (= "unreadable-list-file" (:reason (ex-data t))) path)
+        (is (= path (:path (ex-data t))))))
+    (is (= "unreadable-list-file"
+           (:reason (ex-data (try (tool/read-list-file "Makefile") nil
+                                  (catch clojure.lang.ExceptionInfo t t)))))
+        "a file that is not EDN")))

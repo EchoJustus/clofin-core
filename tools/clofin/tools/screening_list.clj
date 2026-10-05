@@ -40,7 +40,8 @@
   "Why the tool refuses an act on the list table, beside the list-shape
   refusals of `clofin.screening.list/refusal-reasons`."
   (sorted-set "a-list-is-already-accepted" "replacing-is-not-the-accepted-list"
-              "version-already-loaded" "unknown-version" "already-retired"))
+              "version-already-loaded" "unknown-version" "already-retired"
+              "unreadable-list-file"))
 
 (defn- refuse!
   [reason message data]
@@ -48,9 +49,21 @@
 
 (defn read-list-file
   "Read the EDN list at `path`. `clojure.edn` reads data only — no evaluation,
-  no reader tags — so a list file cannot run code in the loader."
+  no reader tags — so a list file cannot run code in the loader.
+
+  A path that names no readable file, or a file that is not EDN, is refused
+  naming the path — never a stack trace an operator has to read."
   [path]
-  (edn/read-string (slurp path)))
+  (let [text (try (slurp path)
+                  (catch java.io.IOException e
+                    (err/fail! :unprocessable (str "No readable screening list file at " path
+                                                   " (" (ex-message e) ")")
+                               {:reason "unreadable-list-file" :path path})))]
+    (try (edn/read-string text)
+         (catch RuntimeException e
+           (err/fail! :unprocessable (str "The file at " path " is not an EDN screening list: "
+                                          (ex-message e))
+                      {:reason "unreadable-list-file" :path path})))))
 
 (defn- accepted-versions
   [tx]
