@@ -88,12 +88,17 @@
   transaction's start: a retirement's `retired_at` and a replacement's
   `loaded_at` are this one instant, so the rows show neither two lists accepted
   at once nor a moment with none, and every result recorded against a list was
-  recorded before that list's `retired_at`."
+  recorded before that list's `retired_at`.
+
+  Carried as PostgreSQL's own text and cast back (`?::timestamptz`), not as a
+  JDBC timestamp: a `java.sql.Timestamp` parameter is bound at millisecond
+  precision (`clofin.db.core`), and a truncated instant could fall before a
+  result recorded in the same millisecond."
   [tx]
   (db/execute! tx ["lock table screening_list in share row exclusive mode"])
   (db/query-one tx ["select pg_advisory_xact_lock(?) /* screening list lock */"
                     screening-list/lock-key])
-  (:at (db/query-one tx ["select clock_timestamp() as at"])))
+  (:at (db/query-one tx ["select clock_timestamp()::text as at"])))
 
 (defn retire-version!
   "Retire `version`, which must be accepted, stamping `retired_at` with `at` —
@@ -108,7 +113,7 @@
     (when (:retired-at row)
       (refuse! "already-retired" (str "Screening list " version " is already retired")
                {:version version}))
-    (db/execute! tx ["update screening_list set retired_at = ?
+    (db/execute! tx ["update screening_list set retired_at = ?::timestamptz
                        where version = ? and retired_at is null" at version])
     version))
 
@@ -121,7 +126,7 @@
   exactly (017-REQ §8)."
   [tx {:keys [version entries]} source at]
   (db/execute! tx ["insert into screening_list (version, source, entry_count, loaded_at)
-                    values (?, ?, ?, ?)"
+                    values (?, ?, ?, ?::timestamptz)"
                    version source (count entries) at])
   (doseq [{:keys [id rules]} entries]
     (db/execute! tx ["insert into screening_entry (list_version, id) values (?, ?)" version id])

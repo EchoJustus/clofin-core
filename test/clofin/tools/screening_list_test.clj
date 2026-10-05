@@ -122,7 +122,11 @@
       (is (= [shipped "synthetic-2026-10-v2"] [(:version v1) (:version v2)]))
       (is (some? (:retired-at v1)))
       (is (nil? (:retired-at v2)))
-      (is (= (:retired-at v1) (:loaded-at v2))))))
+      (is (= (:retired-at v1) (:loaded-at v2)))
+      (is (:same (db/query-one tdb/*pool* ["select (select retired_at from screening_list where version = ?)
+                                                 = (select loaded_at from screening_list where version = ?)
+                                                 as same" shipped "synthetic-2026-10-v2"]))
+          "equal at the database's own microsecond precision, not only as read through JDBC"))))
 
 (deftest two-accepted-lists-are-a-defect-screening-refuses-to-choose-between
   (testing "the schema does not forbid two accepted rows — the tool's lock does —
