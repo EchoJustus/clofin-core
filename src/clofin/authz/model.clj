@@ -89,7 +89,22 @@
          ;; `clofin.authz.approval/evaluate` refuses per adjustment as well.
          ;; The permission split is the belt to that brace.
          :reconciliation/execute
-         :reconciliation/read]))
+         :reconciliation/read
+         ;; Screening (TASK-017, C-07). Three, split as payments' are: recording
+         ;; a client's evidence, reading results, cases and lists, and deciding
+         ;; a case are three different authorities with three different holders.
+         ;;
+         ;; **No role holds `:screening/disposition` with `:payment/create`,
+         ;; `:payment/submit` or `:payment/approve`.** Asserted in
+         ;; `clofin.authz.model-test` beside the existing separation assertions:
+         ;; an actor who could raise a payment and clear its own hit, or clear a
+         ;; hit and then approve the payment, would put one person on both sides
+         ;; of C-07 — and the service refuses a maker's disposition per case as
+         ;; well (`self-disposition`). The permission split is the belt to that
+         ;; brace.
+         :screening/record
+         :screening/read
+         :screening/disposition]))
 
 (def actor-statuses
   "Every status an actor row may carry.
@@ -115,7 +130,10 @@
   Identical to the `role_known` check constraint in migration `0005`; a role
   present in one and not the other is caught by `clofin.authz.model-test`
   rather than by an insert failing in production."
-  (into (sorted-set) [:operator :approver :controller :compliance :auditor]))
+  (into (sorted-set) [:operator :approver :controller :compliance :auditor
+                      ;; ADR-0028 D8, migration `0015`: a screening client's
+                      ;; seeded identity — configured identity, not a credential.
+                      :screening-service]))
 
 (def role-permissions
   "What each role may do. This map **is** the access control model.
@@ -156,6 +174,9 @@
                  :payment/submit :account/read :entry/read :organisation/read}
    :approver   #{:payment/approve :payment/reject :payment/read
                  :approval/read :account/read :entry/read :organisation/read
+                 ;; The queue shows the screening outcome beside the amount
+                 ;; (PR-015); a checker may read the decision behind it.
+                 :screening/read
                  ;; A checker who cannot read the adjustment they are being
                  ;; asked to approve is a rubber stamp, which is the control
                  ;; failure the PRD opens with. It is a **read**: proposing one
@@ -170,9 +191,26 @@
                  ;; back — and emphatically not beside `:payment/approve`.
                  :reconciliation/execute :reconciliation/read}
    :compliance #{:payment/read :account/read :entry/read :audit/read
-                 :organisation/read :reconciliation/read}
+                 :organisation/read :reconciliation/read
+                 ;; C-07 (TASK-017). Compliance reads screening and decides a
+                 ;; case — and creates, submits and approves nothing, so the
+                 ;; actor who clears a hit is never the one who raised or agreed
+                 ;; the payment.
+                 :screening/read :screening/disposition}
    :auditor    #{:audit/read :payment/read :account/read :entry/read
-                 :organisation/read :reconciliation/read}})
+                 :organisation/read :reconciliation/read
+                 ;; A read, like everything this role holds: the trail of
+                 ;; screening decisions is part of what an auditor examines.
+                 :screening/read}
+   ;; ADR-0028 D8: a screening client — the satellite that pre-screens and
+   ;; sends its result to core as evidence. It records evidence and reads what
+   ;; it needs to produce it (the instruction's `screeningDigest`, the accepted
+   ;; list), and **writes nothing else**: it cannot create, amend, submit,
+   ;; approve or disposition, so the most its evidence can do is be recorded
+   ;; (`clofin.authz.model-test`). Its `X-Actor-Id` is configured identity, not
+   ;; a credential — the transport is scaffolding (COMPLIANCE §4).
+   :screening-service #{:screening/record :screening/read :payment/read
+                        :organisation/read}})
 
 ;; ---------------------------------------------------------------------------
 ;; Actors

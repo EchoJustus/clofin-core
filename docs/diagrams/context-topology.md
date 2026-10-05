@@ -14,11 +14,11 @@
 flowchart LR
     clofin_audit["Audit<br/>clofin.audit"]
     clofin_authz["Authorisation<br/>clofin.authz"]
-    clofin_compliance["Compliance<br/>clofin.compliance<br/>(not yet built)"]
     clofin_ledger["Ledger<br/>clofin.ledger"]
     clofin_organisations["Organisations<br/>clofin.organisations"]
     clofin_payments["Payments<br/>clofin.payments"]
     clofin_recon["Reconciliation<br/>clofin.recon"]
+    clofin_screening["Compliance<br/>clofin.screening"]
     clofin_settlement["Settlement<br/>clofin.settlement"]
 
     clofin_ledger --> clofin_audit
@@ -26,9 +26,12 @@ flowchart LR
     clofin_payments --> clofin_audit
     clofin_payments --> clofin_authz
     clofin_payments --> clofin_ledger
+    clofin_payments --> clofin_screening
     clofin_recon --> clofin_audit
     clofin_recon --> clofin_authz
     clofin_recon --> clofin_ledger
+    clofin_screening --> clofin_audit
+    clofin_screening --> clofin_payments
     clofin_settlement --> clofin_audit
     clofin_settlement --> clofin_ledger
     clofin_settlement --> clofin_payments

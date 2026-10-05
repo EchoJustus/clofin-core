@@ -114,7 +114,8 @@ See [ADR-0003](ADR/0003-money-as-integer-minor-units.md).
 | `retried-by-ids` | ✅ The other end, **derived at read time** from the retries themselves rather than stored, so the two ends cannot disagree. A list: the link carries no uniqueness rule (ADR-0024), and the ordinary case has one member. |
 | `client-reference` | ✅ Optional. The identifier the creating client keeps for this payment ([ADR-0028](ADR/0028-satellite-clients-integrate-through-core-owned-contracts.md) D6): printable ASCII without spaces, 1–128 characters, stored exactly as sent. **At most one instruction per organisation carries a given reference** — the same reference under a new key is `409` naming the existing instruction (`client-reference-exists` for identical content, `client-reference-conflict` otherwise), never a second instruction; a partial unique index arbitrates concurrent creations. Set at creation and never afterwards — not amendable, and the database refuses a change from any writer, including adding one later. In the audited projection when present. |
 | `creditor-country` | ✅ Optional. The beneficiary's country as an ISO 3166-1 alpha-2 **shape** — two uppercase letters, syntax only; no list of countries is consulted, because the field is synthetic. Amendable while `draft`, like the other beneficiary fields, and in the audited projection when present. It exists so a screening rule can name it (ADR-0028 D5). |
-| `screening-outcome` | 📋 Reference to the screening decision that permitted approval. Increment 7. |
+| `screening-outcome` | ✅ **Derived on the approval-queue row, not stored on the instruction or the approval** (TASK-017): the queue's `screening` member is core's latest accepted screening result over the instruction's *current* digest — result, outcome, list version, time — read in the same request. Nothing is copied onto the instruction, so it cannot disagree with the result it would copy. |
+| `screening-digest` | ✅ **Derived**, rendered as `screeningDigest`: `clofin.screening.subject/digest`, a SHA-256 over a versioned projection (`screening-subject/1`) of the instruction's identity and screened content — not its status, provenance or timestamps — so a submission does not change it and an amendment does. Every screening result and case is bound to it (§2.5). |
 
 **IdempotencyKey** ✅ — `(organisation-id, key)`, with the digest of the request,
 the response it produced, and — from migration `0014` — the `operationId` that
@@ -339,12 +340,41 @@ ledger entry's reference, or the statement line's end-to-end reference. An
 investigator holding a break about a payment that came back can see whether it
 was raised again without matching counterparty and amount by eye.
 
-### 2.5 Compliance context 📋
+### 2.5 Compliance context 🔨 (screening ✅; fraud scoring 📋)
 
-**ScreeningResult** — outcome, matched list entries, and the *list version*.
-Without the version, a past decision cannot be reproduced.
-**FraudAssessment** — score, contributing reasons, and the rule-set version.
-**Case** — an alert requiring human disposition, with rationale retained.
+Built as `clofin.screening` (TASK-017, [ADR-0028](ADR/0028-satellite-clients-integrate-through-core-owned-contracts.md)
+D5; C-07). **The list is synthetic and the matching exact**; nothing here
+models real-world screening quality.
+
+**ScreeningList** ✅ — a `version`, its entries and their rules, the `source` it
+was loaded from and `loaded-at`, and `retired-at` once retired. Each entry
+matches when **every** one of its rules does; the list is a hit when any entry
+matches. A rule reads one of three beneficiary fields — `creditor-name`,
+`creditor-account`, `creditor-country` — with operator `exact`, string equality
+and nothing else. Immutable once loaded but for its retirement, once; **exactly
+one version is accepted at a time**, loaded by the operator's tool and never by
+a client or a migration.
+
+**ScreeningResult** ✅ — outcome, matched list entries, and the *list version*.
+Without the version, a past decision cannot be reproduced. Also: its `origin`
+(`core`, decided at a submission, or `client`, recorded as evidence), core's
+own recomputed outcome and entries beside the claimed ones and whether they
+agree, the instruction digest it was taken over, its `disposition` —
+`accepted`, or `refused` with `screening-result-mismatch` when core could not
+reproduce a client's result — and who recorded it when. Append-only. **Only
+core's results gate submission**; a client's transitions nothing.
+
+**FraudAssessment** 📋 — score, contributing reasons, and the rule-set version.
+Designed and not built (PR-062).
+
+**Case** ✅ — an alert requiring human disposition, with rationale retained.
+Opened by an accepted hit — core's at a submission, or a client's core
+reproduced — and bound to the instruction, the digest and the list version of
+that hit; at most one open per instruction. Dispositioned once, finally,
+`false-positive` or `confirmed-hit`, with a rationale of 1–1000 characters, by a
+compliance actor who is not the instruction's maker. A disposition decides that
+hit on that content against that list, so an amendment or a new list makes it
+moot.
 
 ### 2.6 Audit context ✅ (payments and approvals)
 
@@ -508,9 +538,17 @@ human check.
 
 Rules that the diagram alone does not carry:
 
-1. 📋 `submit` requires screening to have completed. A pending screening blocks
-   submission rather than queuing behind it. *(Increment 7. There is a
-   `TODO(increment-7)` at the precondition it will gate.)*
+1. ✅ `submit` requires screening to have completed. A pending screening blocks
+   submission rather than queuing behind it. Core screens at every submission
+   (`clofin.screening.service/submit-screened!`), and the gate is
+   `clofin.payments.repository/transition!` itself: for `:submit` — the one
+   member of `clofin.payments.state/screened-events` — it reads, under the row
+   lock, core's latest result over the row's current digest and the case for
+   that content and list, and refuses anything
+   `clofin.screening.decision/decide` does not permit (`409
+   screening-required` with no usable decision, `409 screening-hit` while the
+   hit stands). With no list accepted, nothing is screened and `submit` is
+   `422 no-screening-list-accepted`. C-07; TASK-017.
 2. ✅ `approve` requires an actor other than the maker, within their limit, and
    enough approvals to satisfy the threshold for the amount. Decided by
    `clofin.authz.approval/evaluate`, a pure function: the rule holds with no

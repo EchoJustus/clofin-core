@@ -398,3 +398,115 @@
           _ (new-account! other other-controller "1100-CLIENT-FUNDS" "asset")]
       (is (= ["organisation.created" "account.created"] (actions-in-order org auditor)))
       (is (= 4 (audit-count)) "both tenants' events exist; only one tenant's are visible"))))
+
+;; ---------------------------------------------------------------------------
+;; AC-17-13 — screening's writes (TASK-017, C-07)
+;; ---------------------------------------------------------------------------
+
+(defn- screening-fixture
+  []
+  (let [org (new-organisation! (str "meridian-" (random-uuid)))
+        controller (seed-actor! org [:controller])
+        funds (new-account! org controller "1100-CLIENT-FUNDS" "asset")
+        maker (seed-actor! org [:operator])
+        screener (seed-actor! org [:screening-service])
+        compliance (seed-actor! org [:compliance])
+        auditor (seed-actor! org [:auditor])
+        raise (fn [creditor]
+                (created! "/payment-instructions"
+                          {"organisationId" (get org "id") "debtorAccountId" (get funds "id")
+                           "creditorName" creditor "creditorAccount" "SG-SYNTH-88012345"
+                           "amount" {"currency" "SGD" "minorUnits" 125000}
+                           "valueDate" (str (.plusDays today 7)) "purposeCode" "SUPP"}
+                          :actor maker :idempotency-key (str (random-uuid))))]
+    {:org org :maker maker :screener screener :compliance compliance :auditor auditor
+     :raise raise}))
+
+(defn- actions-about
+  "Actions about an instruction and every screening row about it, oldest first."
+  [pi]
+  (let [id (uuid pi)]
+    (mapv :action (db/query tdb/*pool*
+                            ["select action from audit_event
+                               where subject_id = ?
+                                  or subject_id in (select id from screening_result where instruction_id = ?)
+                                  or subject_id in (select id from screening_case where instruction_id = ?)
+                               order by occurred_at, id" id id id]))))
+
+(deftest ac-17-13-each-screening-write-leaves-exactly-one-event
+  (let [{:keys [org maker screener compliance auditor raise]} (screening-fixture)
+        hit (raise "Blocked Counterparty Ltd")
+        digest (get-in (call :get (str "/payment-instructions/" (get hit "id")) :actor maker)
+                       [:json "screeningDigest"])
+        record (fn [body]
+                 (call :post (str "/payment-instructions/" (get hit "id") "/screening-results")
+                       :actor screener :idempotency-key (str (random-uuid))
+                       :body (merge {"organisationId" (get org "id")
+                                     "listVersion" "synthetic-2026-10-v1"
+                                     "instructionDigest" digest}
+                                    body)))]
+    (testing "a client's accepted hit: the result and the case it opened, one event each"
+      (let [before (audit-count)
+            {:keys [status json]} (record {"outcome" "hit"
+                                           "matchedEntries" [{"id" "SYN-0001"
+                                                              "rules" [{"field" "creditor-name" "operator" "exact"
+                                                                        "value" "Blocked Counterparty Ltd"}]}]})]
+        (is (= 201 status) (pr-str json))
+        (is (= 2 (- (audit-count) before)))
+        ;; One transaction: its events share `occurred_at` and are ordered by
+        ;; a random id, so their order within it is stable, not causal
+        ;; (`clofin.audit.repository`). Compared as a multiset.
+        (is (= {"payment.created" 1 "screening-result.recorded" 1 "screening-case.opened" 1}
+               (frequencies (actions-about hit))))))
+    (testing "a client's refused result: one event, and the refusal is evidence"
+      (let [before (audit-count)]
+        (is (= 422 (:status (record {"outcome" "clear" "matchedEntries" []}))))
+        (is (= 1 (- (audit-count) before)))))
+    (testing "a refused recording that stores nothing leaves nothing"
+      (let [before (audit-count)]
+        (is (= 422 (:status (record {"listVersion" "synthetic-1999-01-v1" "outcome" "clear"
+                                     "matchedEntries" []}))))
+        (is (= 422 (:status (record {"instructionDigest" (apply str (repeat 64 "f"))
+                                     "outcome" "clear" "matchedEntries" []}))))
+        (is (= before (audit-count)))))
+    (testing "a submission screening refused: core's result, one event — no payment.* event,
+              and no second case while one is open"
+      (let [before (audit-count)
+            {:keys [status]} (call :post (str "/payment-instructions/" (get hit "id") "/submission")
+                                   :actor maker :idempotency-key (str (random-uuid))
+                                   :body {"organisationId" (get org "id")})]
+        (is (= 409 status))
+        (is (= 1 (- (audit-count) before)))
+        (is (= "screening-result.recorded" (last (actions-about hit))))
+        (is (not-any? #{"payment.submitted"} (actions-about hit)))))
+    (testing "the disposition: one event, and the case's evidence pack is its opening
+              then its disposition"
+      (let [case-id (get-in (call :get "/screening-cases" :actor compliance) [:json "screeningCases" 0 "id"])
+            before (audit-count)]
+        (is (= 200 (:status (call :post (str "/screening-cases/" case-id "/disposition")
+                                  :actor compliance :idempotency-key (str (random-uuid))
+                                  :body {"organisationId" (get org "id") "disposition" "false-positive"
+                                         "rationale" "Synthetic name collision"}))))
+        (is (= 1 (- (audit-count) before)))
+        (let [{:keys [status json]} (call :get (str "/audit/evidence/" case-id) :actor auditor)]
+          (is (= 200 status))
+          (is (= "screening-case" (get json "subjectType")))
+          (is (= ["screening-case.opened" "screening-case.dispositioned"]
+                 (mapv #(get % "action") (get json "events")))))))
+    (testing "and the permitted submission is core's result and the payment's own event"
+      (let [before (audit-count)]
+        (is (= 200 (:status (call :post (str "/payment-instructions/" (get hit "id") "/submission")
+                                  :actor maker :idempotency-key (str (random-uuid))
+                                  :body {"organisationId" (get org "id")}))))
+        (is (= 2 (- (audit-count) before)))
+        (is (= #{"screening-result.recorded" "payment.submitted"} (set (take-last 2 (actions-about hit)))))))))
+
+(deftest ac-17-13-a-submission-with-no-list-leaves-no-event
+  (let [{:keys [org maker raise]} (screening-fixture)
+        pi (raise "Pacific Rim Logistics Pte Ltd")]
+    (db/execute! tdb/*pool* ["update screening_list set retired_at = now() where retired_at is null"])
+    (let [before (audit-count)]
+      (is (= 422 (:status (call :post (str "/payment-instructions/" (get pi "id") "/submission")
+                                :actor maker :idempotency-key (str (random-uuid))
+                                :body {"organisationId" (get org "id")}))))
+      (is (= before (audit-count)) "nothing was screened, so nothing is recorded"))))

@@ -55,6 +55,7 @@
             [clofin.payments.approval-service :as approval-service]
             [clofin.recon.service :as recon-service]
             [clofin.recon.statement :as statement]
+            [clofin.screening.service :as screening-service]
             [clofin.settlement.service :as settlement-service]
             [clofin.test-db :as tdb]
             [clojure.test :refer [deftest is testing use-fixtures]])
@@ -86,7 +87,8 @@
                                                  :code "2100-CLIENT-PAYABLE" :type "liability"})
         instruction (random-uuid)
         approved (random-uuid)
-        batch (random-uuid)]
+        batch (random-uuid)
+        hit-draft (random-uuid)]
     (tdb/insert-threshold! tdb/*pool* {:organisation-id org :currency "SGD"
                                        :from-minor 0 :approvals-required 1})
     (db/execute! tdb/*pool*
@@ -111,8 +113,18 @@
                      (id, organisation_id, scheme, currency, value_date, created_by)
                    values (?, ?, 'SIM-RTGS', 'SGD', ?, ?)"
                   batch org value-date actor])
+    ;; A draft naming the shipped list's first entry, so recording a client's
+    ;; hit and submitting would each reach real work — a result row, a case —
+    ;; rather than being refused on eligibility.
+    (db/execute! tdb/*pool*
+                 ["insert into payment_instruction
+                     (id, organisation_id, debtor_account_id, creditor_name, creditor_account,
+                      amount_minor, currency, value_date, purpose_code, status, created_by)
+                   values (?, ?, ?, 'Blocked Counterparty Ltd', 'SG-SYNTH-88012342',
+                           125000, 'SGD', ?, 'SUPP', 'draft', ?)"
+                  hit-draft org cash value-date actor])
     {:org org :actor actor :cash cash :payable payable
-     :instruction instruction :approved approved :batch batch}))
+     :instruction instruction :approved approved :batch batch :hit-draft hit-draft}))
 
 (defn- counts
   "Every table an audit-composing service can write, in one map.
@@ -129,7 +141,8 @@
          "payment_instruction" "approval" "settlement_batch" "settlement_batch_item"
          "scheme_response" "audit_event"
          "reconciliation_statement" "reconciliation_statement_line"
-         "reconciliation_match" "reconciliation_break" "reconciliation_adjustment"]))
+         "reconciliation_match" "reconciliation_break" "reconciliation_adjustment"
+         "screening_result" "screening_result_match" "screening_case"]))
 
 ;; ---------------------------------------------------------------------------
 ;; The set
@@ -300,7 +313,36 @@
                      :decision :rejected :reason "the scheme was right"
                      :correlation-id "corr-f-011"
                      :entry-id (random-uuid)
-                     :occurred-at (Instant/parse "2026-08-04T09:00:00Z")}))}])
+                     :occurred-at (Instant/parse "2026-08-04T09:00:00Z")}))}
+
+   ;; Screening (TASK-017, C-07). A result, the case a hit opens and the events
+   ;; describing both are one unit of work — and the refused result, above all,
+   ;; is evidence only because it commits with its event. On a pool, the result
+   ;; row would commit on its own and a failed event would leave evidence the
+   ;; trail never heard of.
+   {:ns 'clofin.screening.service
+    :label "record-result!"
+    :call (fn [source {:keys [org actor hit-draft]}]
+            (screening-service/record-result!
+             source {:organisation-id org :instruction-id hit-draft :actor {:id actor}
+                     :list-version "synthetic-2026-10-v1" :outcome :clear
+                     :matched-entries [] :instruction-digest (apply str (repeat 64 "0"))
+                     :correlation-id "corr-f-011"}))}
+
+   {:ns 'clofin.screening.service
+    :label "submit-screened!"
+    :call (fn [source {:keys [org actor hit-draft]}]
+            (screening-service/submit-screened!
+             source {:organisation-id org :instruction-id hit-draft :actor {:id actor}
+                     :correlation-id "corr-f-011"}))}
+
+   {:ns 'clofin.screening.service
+    :label "disposition!"
+    :call (fn [source {:keys [org actor]}]
+            (screening-service/disposition!
+             source {:organisation-id org :case-id (random-uuid) :actor {:id actor}
+                     :disposition :false-positive :rationale "synthetic"
+                     :correlation-id "corr-f-011"}))}])
 
 (deftest every-audit-composing-service-is-covered-here
   (testing "the same set is written down in two places, so they are compared —

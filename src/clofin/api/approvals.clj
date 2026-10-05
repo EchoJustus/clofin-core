@@ -33,6 +33,8 @@
             [clofin.idempotency :as idem]
             [clofin.idempotency.repository :as idem-store]
             [clofin.payments.approval-service :as approvals]
+            [clofin.screening.repository :as screening]
+            [clofin.screening.subject :as screening-subject]
             [clojure.string :as str]))
 
 (def ^:private idempotency-header "idempotency-key")
@@ -187,11 +189,28 @@
   filtered out: hiding them would be a control implemented in a list query, and
   it would leave a maker unable to see that their own payment is waiting.
 
+  Each row also carries `screening` — core's latest accepted decision over the
+  instruction's current content: result, outcome, list version and when (C-07).
+  Every instruction submitted since migration `0015` has one, because `submit`
+  cannot succeed without it; the member is optional only for an instruction
+  submitted before that.
+
   JSON, not a UI. The approval queue screen is increment 8."
   [pool]
   (fn [request]
     (let [[actor organisation-id] (principal/for-request pool request :approval/read)
-          {:keys [items truncated?]} (approvals/queue pool organisation-id actor)]
+          {:keys [items truncated?]} (approvals/queue pool organisation-id actor)
+          ;; C-07 beside PR-015: core's latest accepted screening decision over
+          ;; each row's *current* content, read in this same request. One query
+          ;; for the page, keyed by the digest each row has now.
+          decisions (screening/latest-accepted-core-results
+                     pool organisation-id
+                     (into {} (map (fn [{:keys [instruction]}]
+                                     [(:id instruction) (screening-subject/digest instruction)]))
+                           items))
+          items (mapv (fn [item]
+                        (assoc item :screening (get decisions (get-in item [:instruction :id]))))
+                      items)]
       (resp/ok {"approvalQueue" (mapv #(wire/approval-queue-row->wire % wire/instruction->wire)
                                       items)
                 "count"     (count items)

@@ -47,6 +47,18 @@
   {:extra-paths ["tools"]
    :main-opts   ["-m" "clofin.tools.capture"]}
 
+  ;; Load or retire a version of the synthetic screening list (C-07):
+  ;;   clojure -M:screening-list load resources/screening-lists/synthetic-2026-10-v1.edn
+  ;;   clojure -M:screening-list load <edn-file> --replacing <version>
+  ;;   clojure -M:screening-list retire <version>
+  ;; On `tools`, not on the runtime classpath: a list is loaded by a deployment
+  ;; act, never by a client, and the running service cannot load one because
+  ;; the code that does is not there (docs/briefs/017, A-5). No dependency
+  ;; beyond what persistence already requires (ADR-0004).
+  :screening-list
+  {:extra-paths ["tools"]
+   :main-opts   ["-m" "clofin.tools.screening-list"]}
+
   ;; Unit + property tests (no database):  clojure -M:test
   :test
   {:extra-paths ["test" "test-resources" "tools"]

@@ -43,6 +43,7 @@
             [clofin.routes :as routes]
             [clofin.system :as system]
             [clofin.test-db :as tdb]
+            [clofin.tools.screening-list :as screening-tool]
             [clojure.data.json :as json]
             [clojure.set :as set]
             [clojure.string :as str]
@@ -226,6 +227,10 @@
         checker (seed [:approver] {"SGD" 100000000})
         checker-2 (seed [:approver] {"SGD" 100000000})
         auditor (seed [:auditor] {})
+        ;; TASK-017: a screening client's seeded identity, and the compliance
+        ;; actor who dispositions cases (ADR-0028 D8).
+        screener (seed [:screening-service] {})
+        compliance (seed [:compliance] {})
         q (str "organisationId=" org)]
     (tdb/insert-threshold! tdb/*pool* {:organisation-id org :currency "SGD"
                                        :from-minor 100000 :approvals-required 1})
@@ -298,7 +303,10 @@
                            "creditorCountry" "SG")
             returned (raise 110000)
             cancelled (raise 130000)
-            withdrawn (raise 140000)]
+            withdrawn (raise 140000)
+            ;; TASK-017: names the shipped synthetic list's first entry, so
+            ;; screening's operations reach their `201`, `409` and `422`.
+            hit (raise 120000 "creditorName" "Blocked Counterparty Ltd")]
         (call "listPaymentInstructions" :get "/payment-instructions" :actor maker :query q)
         ;; --- the lookup (TASK-018): its 200, its 404 and its 409 -----------
         (call "lookupPaymentInstructionByIdempotencyKey" :get
@@ -336,6 +344,51 @@
                 (str "/payment-instructions/by-idempotency-key/" (get submission-keys settled))
                 :actor maker :query q))
         (call "getApprovalQueue" :get "/approvals/queue" :actor checker :query q)
+
+        ;; --- screening (TASK-017, C-07) -----------------------------------
+        (let [digest (get-in (request! :get (str "/payment-instructions/" hit)
+                                       :actor screener :query q)
+                             [:json "screeningDigest"])
+              entry {"id" "SYN-0001"
+                     "rules" [{"field" "creditor-name" "operator" "exact"
+                               "value" "Blocked Counterparty Ltd"}]}
+              record (fn [body]
+                       (call "recordScreeningResult" :post
+                             (str "/payment-instructions/" hit "/screening-results")
+                             :actor screener :idempotency-key (str (random-uuid))
+                             :body (merge {"organisationId" (str org)
+                                           "listVersion" "synthetic-2026-10-v1"
+                                           "instructionDigest" digest}
+                                          body)))]
+          ;; The `201` — a hit core reproduces, which opens a case — and the
+          ;; stored `422` a result core cannot reproduce answers.
+          (record {"outcome" "hit" "matchedEntries" [entry]
+                   "screenedAt" "2026-10-05T09:00:00Z"})
+          (record {"outcome" "clear" "matchedEntries" []})
+          ;; Core screens the submission itself: `409 screening-hit`.
+          (call "submitPaymentInstruction" :post (str "/payment-instructions/" hit "/submission")
+                :actor maker :idempotency-key (str (random-uuid))
+                :body {"organisationId" (str org)})
+          (call "listScreeningResults" :get "/screening-results" :actor compliance
+                :query (str q "&instructionId=" hit))
+          (let [case-id (get-in (call "listScreeningCases" :get "/screening-cases"
+                                      :actor compliance :query (str q "&status=open"))
+                                [:json "screeningCases" 0 "id"])]
+            (call "getScreeningCase" :get (str "/screening-cases/" case-id)
+                  :actor compliance :query q)
+            (doseq [_ [:first :second]]
+              ;; the `200`, then the `409` a disposition is final with
+              (call "dispositionScreeningCase" :post (str "/screening-cases/" case-id "/disposition")
+                    :actor compliance :idempotency-key (str (random-uuid))
+                    :body {"organisationId" (str org) "disposition" "false-positive"
+                           "rationale" "Synthetic name collision; counterparty is not the listed entry"}))
+            (call "getScreeningCase" :get (str "/screening-cases/" case-id)
+                  :actor compliance :query q))
+          (call "listScreeningLists" :get "/screening-lists" :actor screener :query q)
+          (call "getScreeningList" :get "/screening-lists/synthetic-2026-10-v1"
+                :actor screener :query q)
+          (call "getScreeningList" :get "/screening-lists/no-such-version"
+                :actor screener :query q))
         (doseq [id [settled returned]]
           (call "approvePaymentInstruction" :post (str "/payment-instructions/" id "/approvals")
                 :actor checker :idempotency-key (str (random-uuid))
@@ -446,7 +499,15 @@
             (call "recordSchemeResponse" :post (str "/settlement-batches/" batch "/scheme-responses")
                   :actor controller
                   :body {"organisationId" (str org) "kind" "returned" "instructionId" settled
-                         "reference" (str "SIM-RTN-NO-REASON-" batch)}))))))
+                         "reference" (str "SIM-RTN-NO-REASON-" batch)})
+
+            ;; --- last, because it changes what every later submission
+            ;; meets: no list accepted, and `submit` is `422` (TASK-017) ------
+            (screening-tool/retire! tdb/*pool* "synthetic-2026-10-v1")
+            (call "submitPaymentInstruction" :post
+                  (str "/payment-instructions/" (raise 150000) "/submission")
+                  :actor maker :idempotency-key (str (random-uuid))
+                  :body {"organisationId" (str org)}))))))
   nil)
 
 (def ^:private bound-keys
@@ -522,7 +583,13 @@
                "getSettlementBatch" 400
                "listSettlementBatches" 400
                "submitSettlementBatch" 400
-               "recordSchemeResponse" 422}]
+               "recordSchemeResponse" 422
+               ;; TASK-017 (AC-17-14): every screening refusal the contract
+               ;; models, validated on the three dimensions only if provoked.
+               "recordScreeningResult" 422
+               "submitPaymentInstruction" 409
+               "dispositionScreeningCase" 409
+               "getScreeningList" 404}]
         (is (some #(= expected (:status %)) (get statuses operation-id))
             (str operation-id " must be driven to " expected
                  " — the audit found it emitting one undeclared; observed "
@@ -630,11 +697,13 @@
               (str "the row must still record " (pr-str remainder) " — " row)))))))
 
 ;; ---------------------------------------------------------------------------
-;; AC-15 (2B-009) — the six that require a key, and the eleven that do not
+;; AC-15 (2B-009) — the eight that require a key, and the eleven that do not
 ;;
 ;; `clofin.idempotency/read-key`'s docstring and its own `400` said the header
 ;; was mandatory on every mutating endpoint. Independent route and contract
-;; inventories contain seventeen mutations and only six read the header, so a
+;; inventories contained seventeen mutations and only six read the header (since
+;; TASK-017: nineteen and eight — recording a screening result and
+;; dispositioning a case take it too), so a
 ;; maintainer could infer fail-closed retry protection for eleven writes that
 ;; offer no caller-key contract at all.
 ;;
@@ -681,8 +750,9 @@
   (testing "AC-18-9. Every key row the walk left names the operation that claimed
             it — non-null, an operationId the route table has, and exactly the
             operation the walk sent that key to — and across the walk the
-            distinct set is exactly the six the contract marks as taking the
-            header. Discovered, not listed: the six come from the contract"
+            distinct set is exactly the operations the contract marks as taking
+            the header — eight since TASK-017. Discovered, not listed: the set
+            comes from the contract"
     (corpus)
     (let [rows @bound-keys
           route-ops (set (map :operation-id (routes/routes {:config {:environment :test}
@@ -703,21 +773,24 @@
           (str "the walk's key rows name " (pr-str (vec distinct-ops))
                "; the contract marks " (pr-str (vec (operations-the-contract-marks))))))))
 
-(deftest ac-15-the-key-is-required-by-exactly-the-six-operations-that-say-so
+(deftest ac-15-the-key-is-required-by-exactly-the-eight-operations-that-say-so
   (let [declared (operations-the-contract-marks)
         in-code (into (sorted-set) idempotency/protected-operations)]
-    (testing "the contract and the code name the same six, both directions"
+    (testing "the contract and the code name the same eight, both directions"
       (is (seq declared) "the contract marks no operation at all")
       (is (= declared in-code)
           (str "api/openapi.yaml marks " (pr-str (vec declared))
                " and clofin.idempotency/protected-operations holds "
                (pr-str (vec in-code)))))
 
-    (testing "and there really are seventeen mutations, so \"six of seventeen\"
-              is a counted claim rather than a remembered one"
-      (is (= 17 (count (mutating-routes)))
+    (testing "and there really are nineteen mutations, so \"eight of nineteen\"
+              is a counted claim rather than a remembered one (seventeen and six
+              until TASK-017 added recording a screening result and
+              dispositioning a case, both of which take the key)"
+      (is (= 8 (count in-code)))
+      (is (= 19 (count (mutating-routes)))
           (str "the route table has " (count (mutating-routes)) " mutating routes; "
-               "if that is right, every sentence saying seventeen needs revisiting")))))
+               "if that is right, every sentence saying nineteen needs revisiting")))))
 
 (def ^:private sweep-bodies
   "The body each mutation is swept with.
@@ -731,7 +804,7 @@
   {"approvePaymentInstruction" {"decision" "approved"}
    "recordSchemeResponse" {"kind" "ack"}})
 
-(deftest ac-15-a-mutation-with-no-key-is-refused-by-the-six-and-by-no-others
+(deftest ac-15-a-mutation-with-no-key-is-refused-by-the-eight-and-by-no-others
   (testing "the sweep. What answers the key-required 400 with no
             Idempotency-Key must be exactly the protected set — and for every
             other mutation the header must make no difference at all, which is
@@ -742,7 +815,12 @@
                             [:json "id"]))
           actor (tdb/insert-actor! tdb/*pool* {:organisation-id org
                                                :display-name "controller"
-                                               :roles [:controller :operator :approver]
+                                               ;; Every role a mutation's permission
+                                               ;; needs, so each reaches the key check
+                                               ;; rather than a 403 (TASK-017 added
+                                               ;; screening's two).
+                                               :roles [:controller :operator :approver
+                                                       :compliance :screening-service]
                                                :limits {"SGD" 100000000}})
           some-uuid (str (random-uuid))
           sweep (fn [{:keys [method path operation-id]} key]
@@ -777,7 +855,7 @@
                (pr-str (vec protected)) ". Observed: " (pr-str swept)))
 
       (is (= 11 (count (remove (comp :key-required? :without val) swept)))
-          (str "eleven of the seventeen mutations must not require the header; "
+          (str "eleven of the nineteen mutations must not require the header; "
                (count (remove (comp :key-required? :without val) swept))
                " did not: " (pr-str (vec (sort (map key (remove (comp :key-required? :without val)
                                                                 swept)))))))
@@ -793,7 +871,7 @@
                    "be indifferent to the header"))
           (is (not (:key-required? with)) op)))
 
-      (testing "and for the six it is the header that is missing, not the body"
+      (testing "and for the eight it is the header that is missing, not the body"
         (doseq [op protected]
           (is (:key-required? (:without (get swept op)))
               (str op " must answer the key-required 400 with no header"))
@@ -801,13 +879,44 @@
               (str op " must stop answering it once a header is supplied — if it "
                    "does not, this sweep is reading some other 400"))))
 
-      (testing "and the refusal names the six rather than claiming every mutation"
+      (testing "and the refusal names the eight rather than claiming every mutation"
         (let [detail (-> (request! :post "/payment-instructions"
                                    :actor actor
                                    :body {"organisationId" (str org)})
                          (get-in [:json "detail"]))]
-          (is (str/includes? (str detail) "six payment and approval mutations")
+          (is (str/includes? (str detail) "eight payment, approval and screening mutations")
               (str "the 400 must not say the header is required on every mutating "
                    "request — " (pr-str detail)))
           (is (not (str/includes? (str detail) "every mutating"))
               (str "the superseded claim must not survive — " (pr-str detail))))))))
+
+(deftest ac-17-14-every-screening-operation-is-walked-to-its-success-and-a-refusal
+  (testing "TASK-017: the seven operations, each driven to its 2xx — and the two
+            mutations, submit's screening answer and the list read to the
+            refusals they model — so every new schema and every refusal is
+            checked on the three dimensions above"
+    (let [statuses (group-by :operation-id (corpus))
+          seen (fn [op] (into #{} (map :status) (get statuses op)))]
+      (doseq [[op expected] {"recordScreeningResult"    #{201 422}
+                             "listScreeningResults"     #{200}
+                             "listScreeningCases"       #{200}
+                             "getScreeningCase"         #{200}
+                             "dispositionScreeningCase" #{200 409}
+                             "listScreeningLists"       #{200}
+                             "getScreeningList"         #{200 404}}]
+        (is (= expected (seen op)) (str op " observed " (pr-str (seen op)))))
+      (testing "submit reaches the screening refusals as well as its 200"
+        (is (every? (seen "submitPaymentInstruction") [200 409 422])
+            (pr-str (seen "submitPaymentInstruction")))
+        (is (= #{"screening-hit" "no-screening-list-accepted"}
+               (into #{} (keep #(get-in % [:body "errors" "reason"]))
+                     (get statuses "submitPaymentInstruction")))))
+      (testing "and the recording refusal is the stored mismatch"
+        (is (= #{"screening-result-mismatch"}
+               (into #{} (keep #(get-in % [:body "errors" "reason"]))
+                     (get statuses "recordScreeningResult")))))
+      (testing "and every queue row the walk read carries `screening` — each was
+                submitted after migration 0015 (AC-17-10)"
+        (let [rows (mapcat #(get-in % [:body "approvalQueue"]) (get statuses "getApprovalQueue"))]
+          (is (seq rows) "the queue had rows (non-vacuity)")
+          (is (every? #(get % "screening") rows) (pr-str rows)))))))

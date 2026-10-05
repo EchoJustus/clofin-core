@@ -20,7 +20,7 @@ Please read this before evaluating the project.
 | | |
 |---|---|
 | **Money** | CloFin **never handles real funds.** Every amount in this repository is synthetic. |
-| **Institutional connectivity** | All external interfaces (clearing scheme, sanctions screening, bank statements) are **simulated adapters**. CloFin is **not** connected to any bank, payment scheme, or central bank, and has never been. |
+| **Institutional connectivity** | All external interfaces (clearing scheme, bank statements) are **simulated adapters**, and sanctions screening runs against a **synthetic** list CloFin holds, with exact matching and no claim to real-world screening quality. CloFin is **not** connected to any bank, payment scheme, or central bank, and has never been. |
 | **Regulatory status** | CloFin holds **no licence, authorisation or regulatory approval** of any kind, and is not a submission to any regulator. Compliance material in `docs/` is a **modelling exercise** demonstrating control design — not a compliance attestation. |
 | **Data** | All fixtures are generated. No production data, no customer data, no client data. |
 | **Maturity** | Early. See [`docs/ROADMAP.md`](docs/ROADMAP.md) for what is built versus planned. |

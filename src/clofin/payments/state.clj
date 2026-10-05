@@ -209,6 +209,53 @@
   [event]
   (contains? creator-only-events event))
 
+(def screened-events
+  "Events that require **core's own screening decision** over the instruction's
+  current content (C-07, docs/briefs/017-TASK-screening-and-cases.md).
+
+  `:submit` and nothing else — C-07's design puts the gate on the arrow out of
+  `draft`, so it cannot be skipped by ordering: approval, release and settlement
+  rely on the decision retained at submission, and an amendment returns the
+  instruction to `draft`, so the next submission screens again. Screening at
+  later stages as well is out of scope by ruling, not by omission.
+
+  A precondition rather than a provenance rule or an arrow, so it is a named
+  set beside `creator-only-events` for the same reason. Enforced by
+  `clofin.payments.repository/transition!`, under the row lock, where it reads
+  the latest core result for the locked row's digest and asks
+  `clofin.screening.decision/decide` — so a direct call of `transition!` with
+  `:submit` and no decision is refused by the repository itself."
+  #{:submit})
+
+(defn screened?
+  "True when `event` requires core's screening decision."
+  [event]
+  (contains? screened-events event))
+
+(def screenable-states
+  "States in which a client's screening result may be recorded as evidence.
+
+  `draft` only: evidence about a submitted instruction would be evidence about
+  a decision already taken, and ADR-0028 D5 maps the satellite's
+  `:expected-prior-state-matches` precondition to exactly this check, made with
+  the row read `for update`. The same set as `mutable-states`, held separately
+  because it answers a different question."
+  #{:draft})
+
+(defn assert-screenable!
+  "Throw a `:conflict` unless a screening result may be recorded against an
+  instruction in `state` — the lifecycle's own refusal shape, naming the state."
+  [state]
+  (outgoing state)
+  (when-not (contains? screenable-states state)
+    (err/conflict!
+     (str "Cannot record a screening result against a payment instruction that is "
+          (name state) "; evidence is recorded against a draft")
+     {:instruction-status (name state)
+      :attempted          "record-screening-result"
+      :screenable-in      (mapv name (sort screenable-states))}))
+  state)
+
 (defn mutable?
   "True when an instruction in `state` may be amended in place."
   [state]

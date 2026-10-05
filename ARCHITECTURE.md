@@ -55,14 +55,20 @@ judged on — not by feature count.
                       │
      ┌────────────────┼────────────────┬──────────────────┐
      ▼                ▼                ▼                  ▼
- Clearing scheme  Sanctions/PEP   Bank statement    FX reference
- (simulated)      screening       feed (simulated)  rates (static)
-                  (simulated)
+ Clearing scheme  Screening list  Bank statement    FX reference
+ (simulated)      (synthetic,     feed (simulated)  rates (static)
+                  tool-loaded)
 ```
 
 Every external box is a **simulated adapter** behind a Clojure protocol. The
 protocol is the contract; the simulator is one implementation. This keeps the
 door open for a real adapter without ever implying one exists.
+
+**Screening is the exception, and the box says what it is.** It is not an
+adapter to anything: core screens against a **synthetic** list it holds —
+reference data the operator's tool loads, one accepted version at a time — with
+exact matching, and makes no claim about real-world screening quality (C-07).
+PEP screening is not built.
 
 ---
 
@@ -81,7 +87,7 @@ failure modes without adding product insight at this stage
 | **Authorisation** | `clofin.authz` | Roles, permissions, maker–checker, SoD |
 | **Settlement** | `clofin.settlement` | Batches, scheme adapter, settlement finality |
 | **Reconciliation** | `clofin.recon` | Statement ingestion, matching, breaks |
-| **Compliance** | `clofin.compliance` | Screening, fraud rules, cases |
+| **Compliance** | `clofin.screening` | Screening against a versioned synthetic list, results, cases (C-07); fraud rules designed, not built |
 | **Audit** | `clofin.audit` | Append-only event capture and evidence extraction |
 
 **Drawn:** [`docs/diagrams/context-topology.md`](docs/diagrams/context-topology.md)
@@ -94,7 +100,13 @@ are worth reading against each other, and the diagram is the one that cannot be
 out of date.
 
 Dependency rule: **the ledger's domain depends on nothing.** Payments depends on
-ledger and authz. Reconciliation depends on ledger and authz — on authz because
+ledger and authz, **and on compliance's pure decision**: the lifecycle's own gate
+in `clofin.payments.repository/transition!` requires `clofin.screening.subject`
+and `clofin.screening.decision`, which require nothing from payments, so the
+arrow cannot close into a cycle; compliance's service, which screens and then
+submits, depends on payments in turn (C-07, TASK-017). The context was named
+`clofin.compliance` here until it was built, as `clofin.screening`, the root
+ADR-0028's test identifiers already used. Reconciliation depends on ledger and authz — on authz because
 an adjustment goes through the *same* maker–checker control a payment does, not
 a second one. Settlement depends on ledger and payments, and on **reconciliation
 for the statement format its simulator emits**: an adapter writing documents in

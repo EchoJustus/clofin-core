@@ -19,9 +19,10 @@
   work without knowing which it was given. In practice every mutating call
   **in this namespace** arrives on a connection owned by
   `clofin.idempotency.repository`, because the state change and the idempotency
-  key protecting it commit together or not at all. Payments and approvals are
-  the six operations that take a caller key; the sentence said *every mutating
-  call* and was read as covering all seventeen of the route table's mutations
+  key protecting it commit together or not at all. Payments, approvals and
+  screening are the eight operations that take a caller key; the sentence said
+  *every mutating call* and was read as covering every one of the route table's
+  mutations
   (**2B-009**, standing lesson **L-14**).
 
   ## Lock order
@@ -52,7 +53,13 @@
             [clofin.error :as err]
             [clofin.money :as money]
             [clofin.payments.instruction :as instruction]
-            [clofin.payments.state :as state]))
+            [clofin.payments.state :as state]
+            ;; Pure, both: the screening subject's digest and C-07's judgement.
+            ;; Neither requires anything from payments, so this is no cycle;
+            ;; `clofin.screening.service` requires this namespace, not the
+            ;; reverse (ARCHITECTURE.md §3).
+            [clofin.screening.decision :as decision]
+            [clofin.screening.subject :as subject]))
 
 (def row-cap
   "Maximum rows a list query returns.
@@ -597,6 +604,89 @@
         :invalidated-approvals invalidated
         :approvals-invalidated (count invalidated)}))))
 
+(defn assert-may-apply!
+  "Refuse `event` on `existing` unless `actor` may cause it and the lifecycle
+  permits it. Returns the next state.
+
+  Provenance before the lifecycle, mirroring `amend!` — which asserts the
+  creator and only then asks whether the status permits the change. An actor
+  with no business touching this instruction is told that, rather than being
+  handed its current state and the list of events that would have been
+  permitted.
+
+  The opposite order is right in `approval-service`, and deliberately so: an
+  `approve` on a settled payment is a `409` whoever sent it, and answering
+  `403` first would suggest that fixing permissions would help. Here it would
+  not — no grant makes a non-creator the creator.
+
+  Public because `clofin.screening.service/submit-screened!` asks the same two
+  questions, under the same lock, **before** it screens: a submission that the
+  lifecycle or provenance refuses must not leave a screening decision — or open
+  a case — on the strength of a request that was never going to be honoured.
+  `transition!` asks them again; the second asking is the one that cannot be
+  skipped."
+  [existing event actor]
+  (when (state/creator-only? event)
+    (assert-creator! existing actor (name event)))
+  (state/transition (:status existing) event))
+
+(defn- screening-decision-inputs
+  "What the gate needs, read under the caller's row lock: the latest **core**
+  result over `digest`, with whether its list has since been retired, and the
+  latest case for (instruction, digest, that list).
+
+  The SQL is here rather than in `clofin.screening.repository` because it is
+  the lifecycle's own precondition, read on the lifecycle's own connection; the
+  judgement is not — it is `clofin.screening.decision/decide`'s. Ordered by
+  `recorded_at`, which a result is written with as its insert instant under
+  this same lock (`clofin.screening.repository/insert-result!`), so \"latest\"
+  is the latest decided."
+  [tx instruction-id digest]
+  (let [r (db/query-one tx ["select r.id, r.origin, r.outcome, r.disposition, r.instruction_digest,
+                                    r.list_version, (l.retired_at is not null) as list_retired
+                               from screening_result r
+                               join screening_list l on l.version = r.list_version
+                              where r.instruction_id = ? and r.origin = 'core'
+                                and r.instruction_digest = ?
+                              order by r.recorded_at desc, r.id desc
+                              limit 1"
+                            instruction-id digest])
+        c (when r
+            (db/query-one tx ["select id, status, disposition, instruction_digest, list_version
+                                 from screening_case
+                                where instruction_id = ? and instruction_digest = ?
+                                  and list_version = ?
+                                order by opened_at desc, id desc
+                                limit 1"
+                              instruction-id digest (:list-version r)]))]
+    {:digest             digest
+     :latest-core-result (when r (assoc r :list-retired? (boolean (:list-retired r))))
+     :case               c}))
+
+(defn- assert-screened!
+  "C-07's gate: refuse unless core's own decision over the locked row's current
+  content permits the event.
+
+  Re-read and re-decided here, under the lock, even when the caller has just
+  screened — `clofin.screening.service/submit-screened!` stores core's result
+  and then calls this function, which reads that result back rather than
+  trusting a flag the service set. A gate that trusted its caller would be
+  documentation (docs/briefs/017, *Notes*). So `transition!` with `:submit`
+  and no decision is refused by the repository itself: `screening-required`
+  when core holds no decision over this content, or holds one against a
+  retired list; `screening-hit` when the hit stands."
+  [tx existing]
+  (let [inputs (screening-decision-inputs tx (:id existing) (subject/digest existing))
+        verdict (decision/decide inputs)]
+    (when-not (decision/permits-submit? verdict)
+      (err/conflict!
+       (if (= "screening-hit" (decision/refusal-reason verdict))
+         "Core's screening of this instruction found a hit that has not been dispositioned false-positive"
+         "Submission requires core's screening decision over this instruction's current content")
+       {:reason   (decision/refusal-reason verdict)
+        :decision (name verdict)}))
+    verdict))
+
 (defn transition!
   "Apply `event` to an instruction. Returns `{:before … :after …}`.
 
@@ -623,32 +713,24 @@
 
   The check is inside the lock for the same reason the lifecycle check is: an
   instruction whose `created-by` was read outside the lock is provenance read
-  from a row that another transaction may be changing."
+  from a row that another transaction may be changing.
+
+  **For an event in `clofin.payments.state/screened-events` — `:submit` — core's
+  screening decision gates the transition** (C-07,
+  docs/briefs/017-TASK-screening-and-cases.md, A-8), checked after provenance
+  and the lifecycle and under the same lock: see `assert-screened!`."
   ([source organisation-id id event] (transition! source organisation-id id event {}))
   ([source organisation-id id event {:keys [actor]}]
    (db/transactionally
     source
     (fn [tx]
       (let [existing (lock-instruction! tx organisation-id id)
-            ;; Provenance BEFORE the lifecycle, mirroring `amend!` — which
-            ;; asserts the creator and only then asks whether the status
-            ;; permits the change. An actor with no business touching this
-            ;; instruction is told that, rather than being handed its current
-            ;; state and the list of events that would have been permitted.
-            ;;
-            ;; The opposite order is right in `approval-service`, and
-            ;; deliberately so: an `approve` on a settled payment is a `409`
-            ;; whoever sent it, and answering `403` first would suggest that
-            ;; fixing permissions would help. Here it would not — no grant
-            ;; makes a non-creator the creator.
-            _        (when (state/creator-only? event)
-                       (assert-creator! existing actor (name event)))
-            next     (state/transition (:status existing) event)]
-        ;; TODO(increment-7): screening gates submission here. `submit` requires
-        ;; screening to have completed — a pending screening blocks submission
-        ;; rather than queuing behind it (DOMAIN_MODEL §3 rule 1). Until
-        ;; increment 7 there is no screening decision to consult, and inventing
-        ;; a partial gate would look like a control that does not exist.
+            next     (assert-may-apply! existing event actor)]
+        ;; C-07 (TASK-017): `submit` requires core's completed screening decision
+        ;; over this row's current content — a missing decision blocks
+        ;; submission rather than queuing behind it (DOMAIN_MODEL §3 rule 1).
+        (when (state/screened? event)
+          (assert-screened! tx existing))
         (db/execute! tx ["update payment_instruction set status = ?
                            where organisation_id = ? and id = ?"
                          (name next) organisation-id id])

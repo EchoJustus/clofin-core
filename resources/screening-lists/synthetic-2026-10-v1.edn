@@ -1,0 +1,18 @@
+;; A CloFin-defined SYNTHETIC screening list. Not, and not derived from, any
+;; real sanctions or watch list; every name, account and code below is invented
+;; for this reference implementation, and `ZZ` is a user-assigned ISO 3166-1
+;; code that names no country. Matching is exact string equality and nothing
+;; about this list makes a claim about real-world screening quality.
+;;
+;; Loaded by a tool, never by a client and never by a migration:
+;;   make load-screening-list LIST=resources/screening-lists/synthetic-2026-10-v1.edn
+;; (docs/briefs/017-TASK-screening-and-cases.md, A-5; docs/COMPLIANCE.md C-07).
+;;
+;; The names are chosen to collide with nothing any existing test or UAT script
+;; uses, so loading the list turns no existing script into a screening hit.
+{:version "synthetic-2026-10-v1"
+ :entries [{:id "SYN-0001" :rules [{:field :creditor-name :operator :exact :value "Blocked Counterparty Ltd"}]}
+           {:id "SYN-0002" :rules [{:field :creditor-account :operator :exact :value "SG-SYNTH-99999999"}]}
+           {:id "SYN-0003" :rules [{:field :creditor-country :operator :exact :value "ZZ"}]}
+           {:id "SYN-0004" :rules [{:field :creditor-name :operator :exact :value "Dual Rule Trading Co"}
+                                   {:field :creditor-country :operator :exact :value "ZZ"}]}]}

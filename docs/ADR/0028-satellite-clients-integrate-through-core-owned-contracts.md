@@ -601,3 +601,73 @@ Mechanically, every guard above lands in `make verify` or `make test-it`; the
 partial-set sweep's discovered sets (schemes, roles, permissions, audit
 actions, enum copies) gain the new members in both directions or the
 existing tests fail.
+
+## Amendment 1 — what TASK-017 added to the screening contract (2026-10-05)
+
+*Appended by the TASK-017 Worker as the brief directs; nothing above is
+rewritten. Every item here is published in `api/openapi.yaml` and compared with
+the code by `clofin.contract-test`; the objections it raises are in
+`docs/audits/017-REQ-screening-and-cases.md`, for Master Control's ruling.*
+
+**`screeningDigest` on `PaymentInstruction`** (required, read-only). D5 asks a
+client to send `instructionDigest`, "core's canonical digest of the stored
+instruction's immutable fields", without publishing how a client obtains it. A
+client now reads it from the instruction and echoes it, rather than
+reimplementing the canonical form. It is `clofin.screening.subject/digest`:
+lowercase SHA-256 hex over `clofin.idempotency/canonical` of
+`clofin.audit/normalise` applied to the projection
+`{projection: "screening-subject/1", id, organisationId, debtorAccountId,
+creditorName, creditorAccount, creditorCountry, amount, valueDate,
+purposeCode}` — identity and the screened content, **not** status, provenance
+or timestamps, so a submission does not move it and an amendment does. The
+projection's name is inside it, so a changed projection changes every digest.
+D5's "immutable fields" is read as *the fields a decision is about*: they are
+amendable while `draft`, and an amendment is exactly what must make a decision
+moot.
+
+**`ScreeningResult`, completed.** The fragment above listed its required members
+and left "the remaining properties as named, with the types of their request
+counterparts". As published:
+
+- `disposition` (`accepted` | `refused`) is **required**, and
+  `dispositionReason` (`screening-result-mismatch`) is present exactly when it
+  is `refused` — D5's "a disagreement is recorded and refused" made a member,
+  because a refused result is stored and listed.
+- `matchedEntries` and `coreMatchedEntries` are **arrays of entry ids**, sorted —
+  not the request's `ScreeningEntry` objects. The rules are the list's, readable
+  at `GET /screening-lists/{version}`; the request carries them only so core can
+  refuse a claim on rules the list does not have.
+- `caseId` is present when a case was opened by the hit, or — on the `201` that
+  recorded it — was already open on the same content against the same list.
+- `screenedAt` is the client's own, recorded as sent.
+
+**Refusal reasons beyond D5's table**, one published enum
+(`ScreeningRefusalReason`) with every `errors.reason` screening answers:
+`outcome-entries-inconsistent` (`422`: a `hit` with no entries, a `clear` with
+some), `matched-entries-unknown` (`422`: an entry the version does not hold, or
+holds with other rules), `screening-required` (`409`: the repository's own gate
+— no core decision over the instruction's current content, or one against a
+retired list), `no-screening-list-accepted` (`422`: no list accepted, so nothing
+is screened and nothing submitted) and `self-disposition` (`403`: the
+instruction's maker may not disposition its case). D5's own four —
+`list-version-not-accepted`, `instruction-digest-mismatch`,
+`screening-result-mismatch`, `screening-hit` — are unchanged.
+
+**Two refusals bind the `Idempotency-Key`.** A `422 screening-result-mismatch`
+and a `409 screening-hit` are answers whose evidence commits — the refused
+result; core's result and the case — and a retry under the same key replays the
+refusal rather than recording the evidence twice. Every other refusal stores
+nothing and leaves the key unconsumed, as before.
+
+**The role, as built** (D8). `screening-service` holds `screening/record` and
+`payment/read`, as D8 says, **and** `screening/read` and `organisation/read`,
+as the brief's A-10 specifies: the client must read the accepted list it
+screens against and the instruction's `screeningDigest`, and every role reads
+its own organisation. It still writes nothing but evidence, and a test says so.
+
+**Where results are read.** `GET /screening-results?instructionId=` — not
+`GET /payment-instructions/{id}/screening-results` as the brief named it,
+because that path can match the same request as the idempotency-key lookup and
+the route table is held to having no such pair (TASK-018's accepted invariant).
+Objection O-1 in the REQ asks for the ruling; the recording operation is at the
+path D5 names.

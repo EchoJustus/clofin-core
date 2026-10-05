@@ -64,7 +64,16 @@
    'clofin.recon.statement                "src/clofin/recon/statement.clj"
    'clofin.recon.matching                 "src/clofin/recon/matching.clj"
    'clofin.recon.break-state              "src/clofin/recon/break_state.clj"
-   'clofin.recon.adjustment               "src/clofin/recon/adjustment.clj"})
+   'clofin.recon.adjustment               "src/clofin/recon/adjustment.clj"
+   ;; Screening's four (TASK-017, C-07). The rules engine, the subject digest,
+   ;; the decision and the list's shape: each is a rule an auditor must be able
+   ;; to replay against the list version and the digest a decision names, and
+   ;; `clofin.payments.repository` requires two of them — which it may only
+   ;; because they reach for nothing.
+   'clofin.screening.rules                "src/clofin/screening/rules.clj"
+   'clofin.screening.subject              "src/clofin/screening/subject.clj"
+   'clofin.screening.decision             "src/clofin/screening/decision.clj"
+   'clofin.screening.list                 "src/clofin/screening/list.clj"})
 
 (def forbidden-prefixes
   ["clofin.db." "clofin.http." "clofin.api."])
@@ -108,7 +117,8 @@
                   "src/clofin/authz/repository.clj"
                   "src/clofin/audit/repository.clj"
                   "src/clofin/settlement/repository.clj"
-                  "src/clofin/recon/repository.clj"]]
+                  "src/clofin/recon/repository.clj"
+                  "src/clofin/screening/repository.clj"]]
       (is (some #(str/starts-with? % "clofin.db.")
                 (required-namespaces (ns-form path)))
           (str path " is named `repository` but requires no persistence — "
@@ -143,7 +153,12 @@
    ;; every audit event describing them into one unit of work — and, when an
    ;; adjustment posts, a journal entry too. A connection of its own here would
    ;; be a break opened against a statement whose receipt did not commit.
-   'clofin.recon.service             "src/clofin/recon/service.clj"})
+   'clofin.recon.service             "src/clofin/recon/service.clj"
+   ;; TASK-017. Screening composes core's result, the case a hit opens, a
+   ;; client's evidence and a disposition, each with its event. A connection of
+   ;; its own here would be a refused result committed apart from the event
+   ;; that says it was refused — or a case opened with no record that it was.
+   'clofin.screening.service         "src/clofin/screening/service.clj"})
 
 (deftest a-service-cannot-open-its-own-transaction
   (doseq [[namespace-sym path] service-namespaces]

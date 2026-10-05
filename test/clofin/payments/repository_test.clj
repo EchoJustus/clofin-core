@@ -11,6 +11,7 @@
             [clofin.money :as money]
             [clofin.payments.repository :as payments]
             [clofin.payments.state :as state]
+            [clofin.screening.subject :as screening-subject]
             [clofin.test-db :as tdb]
             [clojure.test :refer [deftest is testing use-fixtures]])
   (:import [java.time LocalDate]
@@ -48,6 +49,14 @@
                                               :roles [:operator]})]
      {:organisation-id org-id :account-id account-id :maker maker
       :actor {:id maker}})))
+
+(defn- screen!
+  "Core's screening decision over the instruction as it stands, so a direct
+  `transition!` with `:submit` finds one — since TASK-017 the repository's own
+  gate refuses `:submit` without it (C-07). Called **only** where a test means
+  to submit a draft; `ac-17-11-…` below is what submitting without one does."
+  [f id]
+  (tdb/record-core-screening! tdb/*pool* (:organisation-id f) id (:id (:actor f))))
 
 (defn- candidate
   [{:keys [organisation-id account-id maker] :as fixture} & {:as overrides}]
@@ -170,6 +179,7 @@
 (deftest submitting-a-draft-persists-the-new-state
   (let [f (fixture)
         created (payments/create-instruction! tdb/*pool* (candidate f) opts)
+        _ (screen! f (:id created))
         moved (:after (payments/transition! tdb/*pool* (:organisation-id f) (:id created)
                                             :submit {:actor (:actor f)}))]
     (is (= :pending-approval (:status moved)))
@@ -180,6 +190,7 @@
 (deftest a-transition-the-lifecycle-refuses-changes-nothing
   (let [f (fixture)
         created (payments/create-instruction! tdb/*pool* (candidate f) opts)]
+    (screen! f (:id created))
     (payments/transition! tdb/*pool* (:organisation-id f) (:id created) :submit {:actor (:actor f)})
     (is (= :conflict (error-type #(payments/transition! tdb/*pool* (:organisation-id f)
                                                         (:id created) :submit
@@ -200,6 +211,7 @@
             without the lock both would read `draft` and both would write"
     (let [f (fixture)
           created (payments/create-instruction! tdb/*pool* (candidate f) opts)
+          _ (screen! f (:id created))
           start (CountDownLatch. 1)
           done (CountDownLatch. 2)
           outcomes (atom [])
@@ -274,6 +286,7 @@
           someone-else (tdb/insert-actor! tdb/*pool* {:organisation-id (:organisation-id f)
                                                       :display-name "Second operator"
                                                       :roles [:operator]})]
+      (screen! f (:id created))
       (payments/transition! tdb/*pool* (:organisation-id f) (:id created) :submit {:actor (:actor f)})
       ;; Already `pending-approval`, so the lifecycle would also refuse.
       (is (= :forbidden
@@ -298,6 +311,7 @@
             behind it did not exist; it does now (ADR-0014 amendment 1)."
     (let [f (fixture)
           created (payments/create-instruction! tdb/*pool* (candidate f) opts)]
+      (screen! f (:id created))
       (payments/transition! tdb/*pool* (:organisation-id f) (:id created) :submit {:actor (:actor f)})
       (let [{:keys [before after]}
             (payments/amend! tdb/*pool* (:organisation-id f) (:id created)
@@ -315,6 +329,7 @@
           checker (tdb/insert-actor! tdb/*pool* {:organisation-id (:organisation-id f)
                                                  :display-name "Checker"
                                                  :roles [:approver] :limits {"SGD" 10000000}})]
+      (screen! f (:id created))
       (payments/transition! tdb/*pool* (:organisation-id f) (:id created) :submit {:actor (:actor f)})
       (tdb/insert-approval! tdb/*pool* {:instruction-id (:id created) :actor-id checker})
       (payments/transition! tdb/*pool* (:organisation-id f) (:id created) :approve)
@@ -334,6 +349,7 @@
   (testing "the lifecycle table decides: `settled` has no `amend` arrow"
     (let [f (fixture)
           created (payments/create-instruction! tdb/*pool* (candidate f) opts)]
+      (screen! f (:id created))
       (doseq [event [:submit :approve :release :settle]]
         (payments/transition! tdb/*pool* (:organisation-id f) (:id created) event {:actor (:actor f)}))
       (is (= :conflict (error-type #(payments/amend! tdb/*pool* (:organisation-id f)
@@ -382,6 +398,7 @@
   Written as a walk rather than an `update ... set status = 'settled'` so that
   the fixture cannot reach a state the state machine would not have permitted."
   [f id]
+  (screen! f id)
   (doseq [event [:submit :approve :release :settle]]
     ;; `:actor` matters only for `:submit`, which is creator-only (F-001); the
     ;; fixture's actor is the creator, so the walk is one an operator could
@@ -444,6 +461,7 @@
         first-id (:id (payments/create-instruction! tdb/*pool* (candidate a) opts))
         second-id (:id (payments/create-instruction! tdb/*pool* (candidate a) opts))
         _ (payments/create-instruction! tdb/*pool* (candidate b) opts)]
+    (screen! a first-id)
     (payments/transition! tdb/*pool* (:organisation-id a) first-id :submit {:actor (:actor a)})
 
     (let [{:keys [instructions truncated?]}
@@ -609,3 +627,75 @@
       (is (= "client-reference-exists"
              (:reason (ex-data (caught #(payments/create-instruction!
                                          tdb/*pool* (candidate f :client-reference "agent-ref-0001") opts)))))))))
+
+;; ---------------------------------------------------------------------------
+;; TASK-017 — C-07's gate is the repository's own (AC-17-11)
+;; ---------------------------------------------------------------------------
+
+(defn- conflict-reason
+  "The `[error-type reason]` `f` was refused with, or nil."
+  [f]
+  (when-let [t (caught f)]
+    [(:clofin/error (ex-data t)) (:reason (ex-data t))]))
+
+(deftest ac-17-11-submit-without-a-screening-decision-is-refused-by-the-repository-itself
+  (testing "a direct call of `transition!` with `:submit` — no service, no
+            handler — on a draft core has not screened is refused by the gate
+            under the row lock: `screening-required`"
+    (let [f (fixture)
+          created (payments/create-instruction! tdb/*pool* (candidate f) opts)]
+      (is (= [:conflict "screening-required"]
+             (conflict-reason #(payments/transition! tdb/*pool* (:organisation-id f) (:id created)
+                                                     :submit {:actor (:actor f)}))))
+      (is (= :draft (:status (payments/find-instruction tdb/*pool* (:organisation-id f) (:id created))))
+          "and nothing moved")))
+  (testing "with core's clear result over the current digest → permitted"
+    (let [f (fixture)
+          created (payments/create-instruction! tdb/*pool* (candidate f) opts)]
+      (screen! f (:id created))
+      (is (= :pending-approval
+             (:status (:after (payments/transition! tdb/*pool* (:organisation-id f) (:id created)
+                                                    :submit {:actor (:actor f)})))))))
+  (testing "with core's clear result over a **stale** digest — screened, then
+            amended — → refused: the decision was about other content"
+    (let [f (fixture)
+          created (payments/create-instruction! tdb/*pool* (candidate f) opts)]
+      (screen! f (:id created))
+      (payments/amend! tdb/*pool* (:organisation-id f) (:id created)
+                       {:creditor-name "Andaman Shipping Sdn Bhd"} (assoc opts :actor (:actor f)))
+      (is (= [:conflict "screening-required"]
+             (conflict-reason #(payments/transition! tdb/*pool* (:organisation-id f) (:id created)
+                                                     :submit {:actor (:actor f)}))))))
+  (testing "with core's hit, no disposition → refused `screening-hit`"
+    (let [f (fixture)
+          created (payments/create-instruction! tdb/*pool*
+                                                (candidate f :creditor-name "Blocked Counterparty Ltd") opts)]
+      (screen! f (:id created))
+      (is (= [:conflict "screening-hit"]
+             (conflict-reason #(payments/transition! tdb/*pool* (:organisation-id f) (:id created)
+                                                     :submit {:actor (:actor f)}))))))
+  (testing "a client's accepted clear, alone, does not open the gate — the gate
+            reads core's results only"
+    (let [f (fixture)
+          created (payments/create-instruction! tdb/*pool* (candidate f) opts)
+          found (payments/find-instruction tdb/*pool* (:organisation-id f) (:id created))]
+      (db/execute! tdb/*pool*
+                   ["insert into screening_result
+                       (id, organisation_id, instruction_id, list_version, origin, outcome,
+                        core_outcome, agrees, instruction_digest, disposition, recorded_by)
+                     values (?, ?, ?, 'synthetic-2026-10-v1', 'client', 'clear', 'clear', true, ?,
+                             'accepted', ?)"
+                    (random-uuid) (:organisation-id f) (:id created)
+                    (screening-subject/digest found) (:id (:actor f))])
+      (is (= [:conflict "screening-required"]
+             (conflict-reason #(payments/transition! tdb/*pool* (:organisation-id f) (:id created)
+                                                     :submit {:actor (:actor f)}))))))
+  ;; Last, because it leaves no list accepted for anything after it.
+  (testing "with the result's list retired since → refused `screening-required`"
+    (let [f (fixture)
+          created (payments/create-instruction! tdb/*pool* (candidate f) opts)]
+      (screen! f (:id created))
+      (db/execute! tdb/*pool* ["update screening_list set retired_at = now() where retired_at is null"])
+      (is (= [:conflict "screening-required"]
+             (conflict-reason #(payments/transition! tdb/*pool* (:organisation-id f) (:id created)
+                                                     :submit {:actor (:actor f)})))))))

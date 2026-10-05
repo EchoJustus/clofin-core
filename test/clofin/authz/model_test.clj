@@ -169,11 +169,57 @@
   ;; migration that constrains the column. Set equality against the live
   ;; `role_known` constraint — in both directions, over values discovered
   ;; rather than enumerated — is `clofin.db.vocabulary-test`.
+  ;;
+  ;; The migration read is **the last one in `index.txt` that defines
+  ;; `role_known`** — `0005` created it and `0015` (TASK-017) dropped and
+  ;; recreated it with `screening-service`. Reading `0005` by name would hold the
+  ;; model to a constraint the live schema no longer has.
   (testing "a role here and not in the check constraint fails on insert, in production"
-    (let [sql (slurp (io/file "resources/migrations/0005-authorisation-and-audit.sql"))]
+    (let [defining (->> (str/split-lines (slurp (io/file "resources/migrations/index.txt")))
+                        (map str/trim)
+                        (remove #(or (str/blank? %) (str/starts-with? % "#")))
+                        (filter #(str/includes? (slurp (io/file "resources/migrations" %))
+                                                "constraint role_known"))
+                        last)
+          sql (slurp (io/file "resources/migrations" defining))]
+      (is (some? defining) "no migration defines role_known (non-vacuity)")
       (doseq [role model/roles]
         (is (str/includes? sql (str "'" (name role) "'"))
-            (str role " is in `model/roles` and appears nowhere in migration 0005"))))))
+            (str role " is in `model/roles` and appears nowhere in migration " defining))))))
+
+;; ---------------------------------------------------------------------------
+;; TASK-017 — screening (C-07)
+;; ---------------------------------------------------------------------------
+
+(deftest ac-17-12-no-role-holds-screening-disposition-with-create-submit-or-approve
+  (testing "the actor who clears a hit is never one who could raise, submit or
+            approve the payment it is about — C-01's shape applied to C-07. The
+            service refuses a maker's disposition per case as well
+            (`self-disposition`); this is the belt to that brace"
+    (is (seq (keep (fn [[role granted]] (when (contains? granted :screening/disposition) role))
+                   model/role-permissions))
+        "some role holds :screening/disposition (non-vacuity)")
+    (doseq [[role granted] model/role-permissions
+            other [:payment/create :payment/submit :payment/approve]]
+      (is (not (and (contains? granted :screening/disposition) (contains? granted other)))
+          (str role " holds :screening/disposition and " other)))))
+
+(deftest ac-17-12-the-screening-service-writes-nothing-but-evidence
+  (testing "ADR-0028 D8: a screening client records its result and reads what it
+            needs to produce one. Every other permission it holds is a read, so
+            the most its evidence can ever do is be recorded"
+    (let [granted (:screening-service model/role-permissions)]
+      (is (contains? granted :screening/record))
+      (is (= #{:screening/record}
+             (into #{} (remove #(= "read" (name %))) granted))
+          (str "screening-service holds writes beyond :screening/record: "
+               (pr-str (remove #(= "read" (name %)) granted)))))))
+
+(deftest ac-17-12-disposition-is-compliance-and-only-compliance
+  (testing "stated as a value so a grant added elsewhere is visible here"
+    (is (= #{:compliance}
+           (set (keep (fn [[role granted]] (when (contains? granted :screening/disposition) role))
+                      model/role-permissions))))))
 
 (deftest every-role-has-a-permission-set
   (testing "a role nobody wrote permissions for grants nothing, silently"

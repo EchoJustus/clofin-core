@@ -16,6 +16,9 @@
             [clofin.payments.repository :as payments-repo]
             [clofin.payments.state :as state]
             [clofin.routes :as routes]
+            [clofin.screening.decision :as screening-decision]
+            [clofin.screening.rules :as screening-rules]
+            [clofin.screening.service :as screening-service]
             [clofin.settlement.response :as response]
             [clojure.java.io :as io]
             [clojure.set :as set]
@@ -223,9 +226,16 @@
         (is (not (str/includes? description "Only `submit` and `cancel` have an"))
             "the superseded claim must not survive beside its correction")))))
 
+(def ^:private number-words
+  "The count the evidence-pack prose states, in the word a reader reads."
+  {9 "nine" 10 "ten" 11 "eleven" 12 "twelve" 13 "thirteen"})
+
 (deftest the-evidence-pack-description-names-every-subject-type
   (testing "010-REQ N-3: the prose named six of the nine subjects and omitted
-            reconciliation's three"
+            reconciliation's three. TASK-017 added screening's two; the count
+            the prose must state is derived from `clofin.audit/subject-types`
+            rather than written here, so a twelfth is a failing test, not a
+            stale sentence"
     (let [description (get-in (load-spec) ["paths" "/audit/evidence/{subjectId}"
                                            "get" "description"])
           ;; The prose spells subjects in words; the vocabulary spells them with
@@ -236,8 +246,9 @@
         (is (str/includes? (str/lower-case description) (in-words subject))
             (str "the evidence-pack description does not name the subject type "
                  (pr-str subject) ", which clofin.audit/subject-types has")))
-      (is (str/includes? description "nine")
-          "and it states how many there are, so a tenth cannot be added
+      (is (= 11 (count audit/subject-types)) "the brief's count (non-vacuity)")
+      (is (str/includes? description (str "**" (number-words (count audit/subject-types)) "**"))
+          "and it states how many there are, so another cannot be added
            without this sentence being read"))))
 
 (deftest the-patch-description-tells-a-tenant-assertion-from-an-amendment
@@ -512,11 +523,14 @@
                                   (str/starts-with? path "/accounts")      "accounts"
                                   (str/starts-with? path "/journal-entries") "entries"
                                   (str/starts-with? path "/payment-instructions/")
-                                  (if (str/includes? path "approvals") "approvals" "payments")
+                                  (cond (str/includes? path "approvals") "approvals"
+                                        (str/includes? path "screening") "screening"
+                                        :else "payments")
                                   (str/starts-with? path "/payment-instructions") "payments"
                                   (str/starts-with? path "/approvals")     "approvals"
                                   (str/starts-with? path "/settlement-")   "settlement"
                                   (str/starts-with? path "/reconciliation-") "reconciliation"
+                                  (str/starts-with? path "/screening-")    "screening"
                                   (str/starts-with? path "/audit")         "audit"
                                   :else "health")))
                   route-table))))
@@ -614,3 +628,94 @@
         (is (= 255 (get-in lookup ["properties" "idempotencyKey" "maxLength"])))
         (is (= "#/components/schemas/PaymentInstruction"
                (get-in lookup ["properties" "originalBody" "$ref"])))))))
+
+;; ---------------------------------------------------------------------------
+;; TASK-017 — screening (C-07)
+;; ---------------------------------------------------------------------------
+
+(def ^:private screening-enum-owners
+  "Every enum the contract publishes for screening, by where it sits, and the
+  code vocabulary it must equal. **Discovered and compared**: the test below
+  finds every `enum` under a `Screening*` schema (and the queue's member and the
+  case-list filter) and fails if one is published that this table does not
+  name — a copy nobody compares is the L-6 drift this file exists for."
+  {["ScreeningRule" "field"]                      (set (keys screening-rules/fields))
+   ["ScreeningRule" "operator"]                   screening-rules/operators
+   ["ScreeningResultRequest" "outcome"]           screening-decision/outcomes
+   ["ScreeningResult" "origin"]                   screening-decision/origins
+   ["ScreeningResult" "outcome"]                  screening-decision/outcomes
+   ["ScreeningResult" "coreOutcome"]              screening-decision/outcomes
+   ["ScreeningResult" "disposition"]              screening-decision/result-dispositions
+   ["ScreeningResult" "dispositionReason"]        screening-decision/stored-refusal-reasons
+   ["ScreeningCase" "status"]                     screening-decision/case-statuses
+   ["ScreeningCase" "disposition"]                screening-decision/case-dispositions
+   ["ScreeningCase" "permittedTransitions"]       (reduce into #{} (vals screening-decision/case-events))
+   ["ScreeningDispositionRequest" "disposition"]  screening-decision/case-dispositions
+   ["ApprovalQueueRow" "screening.outcome"]       screening-decision/outcomes
+   ["listScreeningCases" "status"]                screening-decision/case-statuses})
+
+(defn- as-names [vocabulary] (into (sorted-set) (map #(if (keyword? %) (name %) (str %))) vocabulary))
+
+(defn- screening-enums
+  "`{[schema property] #{value …}}` for every enum a screening surface publishes."
+  [spec]
+  (let [schemas (get-in spec ["components" "schemas"])
+        prop-enum (fn [prop] (or (get prop "enum") (get-in prop ["items" "enum"])))]
+    (merge
+     (into {}
+           (for [[schema-name schema] schemas
+                 :when (str/starts-with? schema-name "Screening")
+                 [prop-name prop] (get schema "properties")
+                 :let [enum (prop-enum prop)]
+                 :when enum]
+             [[schema-name prop-name] (set enum)]))
+     {["ApprovalQueueRow" "screening.outcome"]
+      (set (get-in schemas ["ApprovalQueueRow" "properties" "screening" "properties" "outcome" "enum"]))
+      ["listScreeningCases" "status"]
+      (set (some #(when (= "status" (get % "name")) (get-in % ["schema" "enum"]))
+                 (get-in spec ["paths" "/screening-cases" "get" "parameters"])))})))
+
+(deftest ac-17-14-every-screening-enum-is-the-vocabulary-the-service-holds
+  (let [published (screening-enums (load-spec))]
+    (is (<= 14 (count published)) "the discovery found the screening enums (non-vacuity)")
+    (is (= (set (keys screening-enum-owners)) (set (keys published)))
+        (str "published screening enums and the owners this test compares differ: "
+             (pr-str (set/difference (set (keys published)) (set (keys screening-enum-owners))))
+             " / " (pr-str (set/difference (set (keys screening-enum-owners)) (set (keys published))))))
+    (doseq [[where owner] screening-enum-owners]
+      (is (= (as-names owner) (into (sorted-set) (get published where)))
+          (str (pr-str where) " publishes " (pr-str (sort (get published where)))
+               " and the service holds " (pr-str (as-names owner)))))))
+
+(deftest ac-17-14-the-contract-publishes-every-screening-refusal-reason
+  (let [enum (set (get-in (load-spec) ["components" "schemas" "ScreeningRefusalReason" "enum"]))]
+    (is (= 9 (count enum)) "the nine reasons the brief names (non-vacuity)")
+    (is (= screening-service/refusal-reasons enum)
+        "a reason the service answers with and the contract does not declare is a code a
+         client cannot have known to handle; one declared and never emitted is a promise")))
+
+(deftest ac-17-14-the-instruction-publishes-its-screening-digest-read-only
+  (let [schema (get-in (load-spec) ["components" "schemas" "PaymentInstruction"])]
+    (is (contains? (set (get schema "required")) "screeningDigest"))
+    (is (true? (get-in schema ["properties" "screeningDigest" "readOnly"])))
+    (is (= "^[0-9a-f]{64}$" (get-in schema ["properties" "screeningDigest" "pattern"])))
+    (testing "and no request accepts it"
+      (doseq [request ["CreatePaymentInstructionRequest" "AmendPaymentInstructionRequest"]]
+        (is (not (contains? (set (keys (get-in (load-spec) ["components" "schemas" request "properties"])))
+                            "screeningDigest"))
+            request)))))
+
+(deftest ac-17-14-no-operation-writes-a-screening-list
+  (testing "a client that could load the list it is screened against would make
+            C-07 unenforceable: every operation under /screening-lists is a read"
+    (let [ops (for [[path methods] (get (load-spec) "paths")
+                    :when (str/starts-with? path "/screening-lists")
+                    [method _] methods
+                    :when (contains? http-methods (str/lower-case method))]
+                (str/lower-case method))]
+      (is (= 2 (count ops)) "the two list reads exist (non-vacuity)")
+      (is (every? #{"get"} ops) (pr-str ops)))
+    (is (empty? (filter #(and (str/includes? (:path %) "screening-list")
+                              (not= :get (:method %)))
+                        route-table))
+        "and the route table agrees")))

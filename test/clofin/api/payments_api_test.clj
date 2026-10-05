@@ -468,6 +468,12 @@
   repository. It still goes through `transition!`, so the fixture cannot reach
   a state the state machine would not have permitted."
   [f pi]
+  ;; Core's screening decision first: since TASK-017 `transition!` refuses
+  ;; `:submit` without one, whoever its caller is (C-07).
+  (tdb/record-core-screening! tdb/*pool*
+                              (java.util.UUID/fromString (get-in f [:org "id"]))
+                              (java.util.UUID/fromString (get pi "id"))
+                              (:maker f))
   (doseq [event [:submit :approve :release :settle]]
     (payments/transition! tdb/*pool*
                           (java.util.UUID/fromString (get-in f [:org "id"]))
@@ -792,6 +798,12 @@
   `released`. It still goes through `transition!`, so the fixture cannot reach a
   state the state machine would not have permitted."
   [f pi]
+  ;; Core's screening decision first: since TASK-017 `transition!` refuses
+  ;; `:submit` without one, whoever its caller is (C-07).
+  (tdb/record-core-screening! tdb/*pool*
+                              (java.util.UUID/fromString (get-in f [:org "id"]))
+                              (java.util.UUID/fromString (get pi "id"))
+                              (:maker f))
   (doseq [event [:submit :approve :release :return]]
     (payments/transition! tdb/*pool*
                           (java.util.UUID/fromString (get-in f [:org "id"]))

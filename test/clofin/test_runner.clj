@@ -37,6 +37,9 @@
     clofin.recon.matching-test
     clofin.recon.break-state-test
     clofin.recon.adjustment-test
+    clofin.screening.rules-test
+    clofin.screening.subject-test
+    clofin.screening.decision-test
     clofin.config-test
     ;; What `GET /` may report as the running commit, and the several ways it
     ;; could report something plausible and wrong instead (ADR-0027).
@@ -107,6 +110,10 @@
     ;; 2C-002 and 2B-004: reconciliation where the outcome depends on timing —
     ;; the receipt-collision matrix and the two-connection lock proofs.
     clofin.recon.concurrency-test
+    clofin.screening.repository-test
+    clofin.tools.screening-list-test
+    clofin.api.screening-api-test
+    clofin.screening.concurrency-test
     clofin.system-test])
 
 (defn integration?
