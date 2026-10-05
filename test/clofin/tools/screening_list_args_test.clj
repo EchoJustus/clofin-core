@@ -34,3 +34,16 @@
                (parse ["load" "f.edn" "--replacing" "v1"])))
         (is (= {:command :load :path "f.edn" :replacing nil} (parse ["load" "f.edn"])))
         (is (= {:command :retire :version "v1"} (parse ["retire" "v1"])))))))
+
+(deftest the-loader-says-refused-only-for-its-own-refusals
+  (testing "017-REQ §8: `Refused:` is the tool refusing a list act; anything
+            else — a configuration that does not load, which also throws an
+            ExceptionInfo — is `Failed:`"
+    (let [line #'tool/outcome-line]
+      (is (= "Refused: no such version"
+             (line (ex-info "no such version" {:reason "unknown-version"}))))
+      (is (= "Refused: bad rule"
+             (line (ex-info "bad rule" {:reason "unsupported-operator"})))
+          "a list-shape refusal of clofin.screening.list is the tool's too")
+      (is (= "Failed: CLOFIN_ENV must be one of dev, prod, test"
+             (line (ex-info "CLOFIN_ENV must be one of dev, prod, test" {:clofin/error :invalid})))))))

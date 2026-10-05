@@ -5451,7 +5451,7 @@ components:
         - `matched-entries-unknown` — `422`, recording: an entry the version does not hold, or holds with other rules.
         - `instruction-digest-mismatch` — `422`, recording: not the instruction's current `screeningDigest`.
         - `screening-result-mismatch` — `422`, recording: core's recomputation disagrees; **the result is stored**, refused.
-        - `screening-hit` — `409`, submit: core's decision is a hit that has not been dispositioned false-positive; core's result is stored, and a case when one opens (none when a case already covers the content, or when one open on earlier content blocks it — `blockingCaseId`).
+        - `screening-hit` — `409`, submit: core's decision is a hit that has not been dispositioned false-positive; core's result is stored, and a case when one opens (none when a case already covers the content against the list, or when one still open on earlier content or against a replaced list blocks it — `blockingCaseId`).
         - `screening-required` — `409`, submit: core holds no decision over the instruction's current content, or holds one against a retired list. The repository's own gate answers it, whoever calls it.
         - `no-screening-list-accepted` — `422`, submit: no list is accepted, so nothing can be screened and nothing is submitted.
         - `self-disposition` — `403`, disposition: the actor created the instruction.

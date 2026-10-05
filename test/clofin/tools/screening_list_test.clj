@@ -61,7 +61,8 @@
            ["an entry with no rules" "empty-rules" (a-list "v-norules" [{:id "E" :rules []}])]
            ["a version with a space" "invalid-version" (a-list "synthetic 2026")]
            ["a version of 129 characters" "invalid-version" (a-list (apply str (repeat 129 "v")))]
-           ["a non-ASCII version" "invalid-version" (a-list "synthétique")]]]
+           ["a non-ASCII version" "invalid-version" (a-list "synthétique")]
+           ["a version the command line would read as a flag" "invalid-version" (a-list "--2026-11")]]]
     (testing label
       (let [before (list-rows)]
         (is (= expected (refusal #(tool/load-list! tdb/*pool* list* {:source "test" :replacing shipped}))))
@@ -122,11 +123,23 @@
       (is (= [shipped "synthetic-2026-10-v2"] [(:version v1) (:version v2)]))
       (is (some? (:retired-at v1)))
       (is (nil? (:retired-at v2)))
-      (is (= (:retired-at v1) (:loaded-at v2)))
-      (is (:same (db/query-one tdb/*pool* ["select (select retired_at from screening_list where version = ?)
-                                                 = (select loaded_at from screening_list where version = ?)
-                                                 as same" shipped "synthetic-2026-10-v2"]))
-          "equal at the database's own microsecond precision, not only as read through JDBC"))))
+      (is (= (:retired-at v1) (:loaded-at v2))))))
+
+(deftest the-hand-over-instant-keeps-its-microseconds
+  (testing "017-REQ §8 (8de56e7): the instant must reach the rows at the
+            database's own precision. Bound back as a JDBC timestamp it was cut
+            to the millisecond — on both columns alike, so the equality above
+            cannot see it — and a truncated retired_at can fall before a result
+            recorded in the same millisecond. Five replacements: a clock that
+            lands on a whole millisecond every time is a one-in-10^15 event, a
+            truncation is every time"
+    (doseq [[from to] (partition 2 1 [shipped "v-hand-1" "v-hand-2" "v-hand-3" "v-hand-4" "v-hand-5"])]
+      (tool/load-list! tdb/*pool* (a-list to) {:source "test" :replacing from}))
+    (let [sub-ms (mapv :sub-ms (db/query tdb/*pool* ["select (extract(microseconds from retired_at)::bigint % 1000) as sub_ms
+                                                       from screening_list where retired_at is not null"]))]
+      (is (= 5 (count sub-ms)))
+      (is (some pos? sub-ms)
+          (str "every retired_at is a whole millisecond — the instant was truncated: " (pr-str sub-ms))))))
 
 (deftest two-accepted-lists-are-a-defect-screening-refuses-to-choose-between
   (testing "the schema does not forbid two accepted rows — the tool's lock does —

@@ -451,12 +451,14 @@
     (let [wt     (list-worktree! "synthetic-2026-10-v1.edn")
           log    (str wt "/capture.log")
           script (doto (java.io.File/createTempFile "fake-clojure" ".sh")
-                   (spit "#!/bin/sh\necho \"cwd=$(pwd -P) args=$*\"\n")
+                   (spit "#!/bin/sh\necho \"cwd=$(pwd -P) db=$CLOFIN_DB_URL args=$*\"\n")
                    (.setExecutable true))]
       (is (= :loaded (stack/load-screening-list! {:worktree wt :db no-db
                                                   :clojure-bin (str script) :log-file log})))
       (is (str/includes? (slurp log) (str "cwd=" (.getCanonicalPath (io/file wt)) " "))
           "the loader ran in the captured worktree")
+      (is (str/includes? (slurp log) (str "db=" (:url no-db) " "))
+          "and was given the capture database, not whatever the harness's environment holds")
       (is (str/includes? (slurp log)
                          "args=-M:screening-list load resources/screening-lists/synthetic-2026-10-v1.edn"))))
   (testing "a commit from before TASK-017 ships no list and needs none"

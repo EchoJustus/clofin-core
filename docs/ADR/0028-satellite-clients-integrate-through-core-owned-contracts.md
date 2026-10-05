@@ -605,9 +605,11 @@ existing tests fail.
 ## Amendment 1 — what TASK-017 added to the screening contract (2026-10-05)
 
 *Appended by the TASK-017 Worker as the brief directs; nothing above is
-rewritten. Every item here is published in `api/openapi.yaml`; the enums are
-compared with the code by `clofin.contract-test`, and the members that are not
-enums (`caseId`, `blockingCaseId`) by `clofin.api.screening-api-test`; the objections it raises are in
+rewritten. Every item here is published in `api/openapi.yaml`. The enums, and
+`screeningDigest`'s shape, are compared with the code by `clofin.contract-test`
+(and every response by the conformance walk); the other members (`caseId`,
+`blockingCaseId`, `matchedEntries`, `coreMatchedEntries`, `screenedAt`) are
+asserted by `clofin.api.screening-api-test`. The objections this amendment raises are in
 `docs/audits/017-REQ-screening-and-cases.md`, for Master Control's ruling.*
 
 **`screeningDigest` on `PaymentInstruction`** (required, read-only). D5 asks a

@@ -105,7 +105,10 @@
 
   Refused, each with its reason (`refusal-reasons`):
 
-  - a version outside `^[\\x21-\\x7E]{1,128}$` — `invalid-version`
+  - a version outside `^[\\x21-\\x7E]{1,128}$`, or beginning with `-` —
+    `invalid-version`: the loading tool's command line takes a version as the
+    value of `--replacing` and of `retire`, where a leading `-` reads as a
+    flag, so such a list could be loaded and then never replaced or retired
   - no entries at all — `empty-entries`: an empty list would make every
     instruction `clear`, which is the control's absence wearing its name
   - an entry without a well-formed id — `invalid-entry`; with no rules —
@@ -118,9 +121,10 @@
   (when-not (map? list)
     (refuse! "invalid-version" "A screening list is a map with :version and :entries" {}))
   (let [{:keys [version entries]} list]
-    (when-not (and (string? version) (re-matches printable-ascii version))
+    (when-not (and (string? version) (re-matches printable-ascii version)
+                   (not (str/starts-with? version "-")))
       (refuse! "invalid-version"
-               "A list version is 1-128 printable ASCII characters without spaces"
+               "A list version is 1-128 printable ASCII characters without spaces, not beginning with -"
                {:version (pr-str version)}))
     (when-not (and (sequential? entries) (seq entries))
       (refuse! "empty-entries"

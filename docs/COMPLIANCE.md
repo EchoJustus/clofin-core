@@ -685,8 +685,9 @@ submission screens the amended content again.
   `clofin.screening.decision/decide`. A `clear` — or a hit a compliance actor
   dispositioned `false-positive` for this content against this list — permits
   the transition; any other hit is `409 screening-hit`, and opens a case unless
-  one already covers this content (a `confirmed-hit` names it) or a case still
-  open on earlier content blocks it (named `blockingCaseId`, below).
+  a case already covers this content against this list (it is named) or a case
+  still open on earlier content, or against a list since replaced, blocks it
+  (named `blockingCaseId`, below).
 - **The repository re-decides under the lock.**
   `clofin.payments.repository/transition!` reads the latest core result for the
   locked row's own digest and asks `decide` again before it moves the status;
@@ -755,9 +756,10 @@ list a decision names, entry by entry. **Loading a list is recorded by the list
 tables, not by the audit trail**: `screening_list.loaded_at`, `source` and
 `retired_at`, on rows the database keeps immutable, are the record of which list
 was in force when — `audit_event` requires an organisation, and a list belongs
-to none. **Which list a decision was taken against, and in what order, is read
-from `screening_result.recorded_at`** (`clock_timestamp()`, written after the
-instruction's lock and the list lock were taken), not from an event's
+to none. **The list a decision was taken against is its `list_version`; when,
+relative to that list's `loaded_at` and `retired_at`, and in what order, is
+read from `screening_result.recorded_at`** (`clock_timestamp()`, written after
+the instruction's lock and the list lock were taken), not from an event's
 `occurred_at` or a case's `opened_at`: those are the transaction's start time,
 shared by every row it writes with its event, and a decision that waited for a
 list change began before that change. The approval queue shows the checker core's screening outcome beside

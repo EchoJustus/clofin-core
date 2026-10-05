@@ -395,7 +395,7 @@ states what this costs an auditor.
 
 **Coverage.** Every state change the API can perform emits one event: payment
 instructions, approvals, settlement batches, reconciliation statements, breaks
-and adjustments, — since TASK-005 — organisation creation, account opening
+and adjustments, and — since TASK-005 — organisation creation, account opening
 and journal posting, and — since TASK-017 — screening results (core's and
 clients', refused ones included) and screening cases, opened and dispositioned. **No qualification remains on [C-05](COMPLIANCE.md)**, and
 this paragraph says so only because the two facts behind it are now true rather

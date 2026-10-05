@@ -212,6 +212,17 @@
 
       :else nil)))
 
+(defn- outcome-line
+  "How `-main` reports an `ExceptionInfo`: `Refused:` when it is one of the
+  refusals of a list act this tool and `clofin.screening.list` name, `Failed:`
+  for anything else — a configuration that does not load also throws an
+  `ExceptionInfo`, and is not the tool refusing the list (017-REQ §8)."
+  [t]
+  (str (if (contains? (into refusal-reasons screening-list/refusal-reasons) (:reason (ex-data t)))
+         "Refused: "
+         "Failed: ")
+       (ex-message t)))
+
 (defn -main
   [& args]
   (let [parsed (parse-args args)]
@@ -241,7 +252,7 @@
                      0))
                  (catch clojure.lang.ExceptionInfo t
                    (binding [*out* *err*]
-                     (println (str "Refused: " (ex-message t)))
+                     (println (outcome-line t))
                      (when-let [reason (:reason (ex-data t))] (println (str "reason: " reason))))
                    1)
                  (catch Exception t
