@@ -130,7 +130,9 @@
   An `effect` that throws takes the key row down with it, so a request that
   failed does not consume its key. That is deliberate: a caller correcting a
   rejected request and retrying with the same key gets a fresh execution, not a
-  `409` telling it the body changed."
+  `409` telling it the body changed. An `effect` that *returns* a refusal as its
+  value — `screening-hit` and `screening-result-mismatch`, whose evidence must
+  commit — binds the key to that refusal like any other response (017-REQ O-4)."
   [pool {:keys [organisation-id key digest operation-id]} effect]
   (assert-operation-id! operation-id)
   (if-let [row (stored pool organisation-id key)]

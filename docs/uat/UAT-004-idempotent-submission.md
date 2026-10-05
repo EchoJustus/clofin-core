@@ -390,7 +390,7 @@ Stated so that a reviewer does not read more into a pass than it earns.
 |---|---|
 | Approval, or that a payment cannot be approved by whoever submitted it | TASK-003. `submit` stops at `pending-approval` and no operation moves it further. |
 | That an audit trail records who did any of this | TASK-003. There is no audit trail yet; `createdBy` is what a caller claimed. |
-| Screening before submission | Increment 7. Submission is gated by the lifecycle alone. |
+| Screening before submission | UAT-008's subject. Since TASK-017 every submission is screened by core, which is why this script's prerequisites load the synthetic list; its instructions name no listed counterparty, so every screening here is `clear`. |
 | Settlement, or any money actually moving | Increment 5. Nothing in this script posts a journal entry. |
 | Authentication of any kind | TASK-003. `organisationId` is taken from the request, and is not an access control. |
 | That two *simultaneous* retries produce one effect | Not reproducible by hand at a keyboard. Covered by `ac-9-two-concurrent-requests-with-one-key-produce-exactly-one-effect` in `clofin.api.payments-api-test`, which uses two threads and a latch. |

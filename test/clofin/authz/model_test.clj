@@ -192,10 +192,12 @@
 ;; ---------------------------------------------------------------------------
 
 (deftest ac-17-12-no-role-holds-screening-disposition-with-create-submit-or-approve
-  (testing "the actor who clears a hit is never one who could raise, submit or
-            approve the payment it is about — C-01's shape applied to C-07. The
-            service refuses a maker's disposition per case as well
-            (`self-disposition`); this is the belt to that brace"
+  (testing "no single role both clears a hit and could raise, submit or approve
+            the payment it is about — C-01's shape applied to C-07, per role.
+            The service refuses a maker's disposition per case as well
+            (`self-disposition`); an actor granted compliance *and* approver is
+            not refused per case as the approver (017-REQ O-15), so this
+            assertion is about roles and claims nothing about actors"
     (is (seq (keep (fn [[role granted]] (when (contains? granted :screening/disposition) role))
                    model/role-permissions))
         "some role holds :screening/disposition (non-vacuity)")

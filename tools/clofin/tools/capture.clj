@@ -225,6 +225,10 @@
     (stack/assert-port-free! port)
     (store/reset-schema! db)
     (stack/migrate! {:worktree worktree :db db :clojure-bin clojure-bin :log-file log-file})
+    ;; From TASK-017 a commit refuses every submission until its list is
+    ;; loaded; one from before ships none and needs none (017-REQ R-4).
+    (stack/load-screening-list! {:worktree worktree :db db :clojure-bin clojure-bin
+                                 :log-file log-file})
     (let [running (stack/start! {:worktree worktree :db db :port port
                                  :clojure-bin clojure-bin :log-file log-file
                                  :instance-id instance-id :source-commit commit})]

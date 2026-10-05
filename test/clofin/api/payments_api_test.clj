@@ -584,7 +584,7 @@
         pi (new-instruction! f)
         org-id (get-in f [:org "id"])]
     (testing "PR-040, as far as it is built — every mutating operation *in this
-              namespace* requires an Idempotency-Key. The whole seventeen-route
+              namespace* requires an Idempotency-Key. The whole nineteen-route
               sweep is `clofin.api.conformance-test`'s (2B-009)"
       (doseq [[method uri body]
               [[:post "/payment-instructions" (instruction-body f)]

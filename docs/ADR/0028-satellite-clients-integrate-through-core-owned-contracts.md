@@ -638,7 +638,14 @@ counterparts". As published:
   at `GET /screening-lists/{version}`; the request carries them only so core can
   refuse a claim on rules the list does not have.
 - `caseId` is present when a case was opened by the hit, or — on the `201` that
-  recorded it — was already open on the same content against the same list.
+  recorded it — when a case already covers the same content against the same
+  list, open or dispositioned. A client's accepted hit never opens a second
+  case for content and a list a case already covers, so a disposition is never
+  superseded by later evidence (017-REQ R-1, O-7: narrower than A-6's "opens a
+  case if none is open", ruling asked).
+- On `submit`'s `409 screening-hit`, `errors.blockingCaseId` replaces
+  `errors.caseId` when the instruction's one open case is about earlier content
+  or another list, and so is not the case for this content (017-REQ R-2).
 - `screenedAt` is the client's own, recorded as sent.
 
 **Refusal reasons beyond D5's table**, one published enum

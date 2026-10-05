@@ -414,8 +414,9 @@ curl -sS "$BASE/audit/events?action=screening-result.recorded" -H "X-Actor-Id: $
 **Expected:** the first case's evidence pack is exactly
 `screening-case.opened` then `screening-case.dispositioned`, by Priya's
 submission and Cleo's decision respectively; `subjectType` `screening-case`.
-The event list holds one `screening-result.recorded` per result step 10's
-listing showed — core's three and the client's two, the refused one included.
+The event list holds one `screening-result.recorded` per result recorded —
+five: the four step 10's listing showed (core's three and the client's refused
+one) and the client's accepted result from step 11.
 Every decision is reproducible from what was retained: the list version, the
 digest, the entries, the actor and the time. *[PR-063]*
 

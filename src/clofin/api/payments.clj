@@ -32,9 +32,12 @@
   a week-old submission must be told what happened, not told its date is
   invalid.
 
-  A rejected request does not consume its key. The effect and the key row share
-  a transaction, so a throw takes both down and a caller that fixes its body and
-  retries under the same key gets a fresh execution rather than a `409`."
+  A request rejected by a throw does not consume its key. The effect and the key
+  row share a transaction, so a throw takes both down and a caller that fixes
+  its body and retries under the same key gets a fresh execution rather than a
+  `409`. **One refusal here is not a throw**: `submit`'s `409 screening-hit` is
+  the effect's value, committed with core's result and the case it opened, so
+  it binds the key and a retry under it replays the `409` (017-REQ O-4)."
   (:require [clofin.api.principal :as principal]
             [clofin.api.wire :as wire]
             [clofin.audit :as audit]
@@ -678,27 +681,45 @@
 (defn- screening-hit-outcome
   "The `409 screening-hit` a refused submission answers, as an effect's value
   so its evidence — core's result, and the case it opened — commits first."
-  [request {:keys [case disposition list-version result]}]
+  [request {:keys [case blocking-case disposition list-version result]}]
   (let [{:keys [status title]} (get err/error-types :conflict)]
     {:status status
      :body   (:body (resp/problem
                      {:status   status
                       :type     :conflict
                       :title    title
-                      :detail   (if (= :confirmed-hit disposition)
+                      :detail   (cond
+                                  (= :confirmed-hit disposition)
                                   (str "Screening case " (:id case) " confirmed this hit against list "
                                        list-version "; the instruction cannot be submitted, and may be "
                                        "cancelled")
+
+                                  ;; The open case is about earlier content or
+                                  ;; another list: dispositioning it decides
+                                  ;; nothing about this content, and is only what
+                                  ;; lets this content's case open (017-REQ R-2).
+                                  blocking-case
+                                  (str "Core's screening against list " list-version
+                                       " found a hit; no case could open for this content, because "
+                                       "screening case " (:id blocking-case) " is still open on "
+                                       (if (= (:list-version blocking-case) list-version)
+                                         "earlier content of this instruction"
+                                         (str "this instruction against list " (:list-version blocking-case)))
+                                       ". Once compliance has dispositioned it, the next submission "
+                                       "opens a case for this content")
+
+                                  :else
                                   (str "Core's screening against list " list-version
                                        " found a hit; screening case " (:id case)
                                        " must be dispositioned false-positive by compliance before "
                                        "this content can be submitted"))
                       :instance (:correlation-id request)
                       :errors   (cond-> {"reason"      "screening-hit"
-                                         "caseId"      (str (:id case))
                                          "listVersion" list-version
                                          "resultId"    (str (:id result))}
-                                  disposition (assoc "disposition" (name disposition)))}))}))
+                                  case          (assoc "caseId" (str (:id case)))
+                                  blocking-case (assoc "blockingCaseId" (str (:id blocking-case)))
+                                  disposition   (assoc "disposition" (name disposition)))}))}))
 
 (defn submit
   "`POST /payment-instructions/:id/submission` — submit a draft for approval.

@@ -158,8 +158,10 @@
   None of those stores anything. Then core recomputes with
   `clofin.screening.rules/evaluate` against the same list version. Equal
   outcome and equal entry-id set → stored `accepted`, `agrees: true`; an
-  accepted `hit` opens a case unless one is open on the instruction (the
-  partial unique index decides), bound to (instruction, digest, list version).
+  accepted `hit` opens a case bound to (instruction, digest, list version)
+  unless a case already covers that triple — open or dispositioned, which it
+  then names and leaves as it is — or another case is open on the instruction
+  (the partial unique index decides).
   Anything else → stored **`refused`**, `screening-result-mismatch`,
   `agrees: false`, returned as a refusal. One `screening-result.recorded` event
   for every row stored, refused included; `screening-case.opened` when a case
@@ -170,7 +172,7 @@
   (audit-store/assert-unit-of-work! tx)
   (let [instruction (payments/lock-instruction! tx organisation-id instruction-id)
         _ (state/assert-screenable! (:status instruction))
-        listed (screening/accepted-list tx)
+        listed (screening/lock-accepted-list! tx)
         _ (when-not (and listed (= list-version (:version listed)))
             (unprocessable! "list-version-not-accepted"
                             (str "List version " list-version " is not the accepted screening list"
@@ -221,15 +223,24 @@
                         (str " (" (str/join ", " (:matched recomputed)) ")"))
                       ", which this result does not reproduce. The result is recorded as refused "
                       "evidence; nothing else changed.")}
-      (let [{open-case :case} (when (= :hit outcome)
+      (let [;; A case that already covers this content against this list —
+            ;; open, or dispositioned — is this hit's case, and no other opens.
+            ;; A client's evidence never re-opens a decision compliance has
+            ;; taken: `decide` reads the latest case for the triple, so a second
+            ;; case would let a client's hit supersede a final `confirmed-hit`
+            ;; or `false-positive` without any amendment (017-REQ R-1, O-7).
+            covering (when (= :hit outcome)
+                       (screening/latest-case-for tx instruction-id digest (:version listed)))
+            {open-case :case} (when (and (= :hit outcome) (nil? covering))
                                 (open-case-on-hit! tx organisation-id actor result correlation-id))
-            ;; `caseId` names the case for *this* hit — opened by it, or already
-            ;; open on the same content against the same list. An open case on
-            ;; other content is not this hit's.
-            this-hits (when (and open-case
-                                 (= (:instruction-digest open-case) digest)
-                                 (= (:list-version open-case) (:version listed)))
-                        open-case)]
+            ;; `caseId` names the case for *this* hit — the one covering it, or
+            ;; the one it opened. An open case on other content is not this
+            ;; hit's.
+            this-hits (or covering
+                          (when (and open-case
+                                     (= (:instruction-digest open-case) digest)
+                                     (= (:list-version open-case) (:version listed)))
+                            open-case))]
         {:result   (cond-> result this-hits (assoc :case-id (:id this-hits)))
          :case     this-hits
          :refused? false}))))
@@ -241,7 +252,9 @@
 (defn submit-screened!
   "Screen, decide, and submit if core's decision permits. Returns
   `{:instruction … :before … :result …}` on permit, or
-  `{:refused? true :reason \"screening-hit\" :case … :disposition … :result …}`.
+  `{:refused? true :reason \"screening-hit\" :case … :disposition … :result …}`,
+  with `:blocking-case` in place of `:case` when a case open on other content
+  or another list keeps this content's case from opening.
 
   In the caller's transaction, in this order:
 
@@ -260,7 +273,9 @@
      (instruction, digest, list):
      - `:permit` → `transition! :submit`, whose own gate re-reads the result
        just stored and decides again under the lock;
-     - `:refuse/hit` → open a case unless one is open, and return the refusal;
+     - `:refuse/hit` → open a case unless one is open, and return the refusal
+       naming it — or, when the open case is about other content or another
+       list, naming that one as the case that blocks;
      - `:refuse/confirmed-hit` → return the refusal with the disposition; the
        maker's path is `cancel`.
 
@@ -270,7 +285,7 @@
   (audit-store/assert-unit-of-work! tx)
   (let [existing (payments/lock-instruction! tx organisation-id instruction-id)
         _ (payments/assert-may-apply! existing :submit actor)
-        listed (or (screening/accepted-list tx)
+        listed (or (screening/lock-accepted-list! tx)
                    (unprocessable! "no-screening-list-accepted"
                                    (str "No screening list is accepted, so this instruction cannot be "
                                         "screened and is not submitted; a list is loaded by the operator's "
@@ -311,12 +326,20 @@
        :result       result}
 
       :refuse/hit
-      (let [{open-case :case} (open-case-on-hit! tx organisation-id actor result correlation-id)]
-        {:refused?     true
-         :reason       (reason "screening-hit")
-         :case         open-case
-         :list-version (:version listed)
-         :result       result})
+      (let [{open-case :case} (open-case-on-hit! tx organisation-id actor result correlation-id)
+            ;; One open case per instruction (`screening_case_open_key`): a case
+            ;; still open on earlier content, or against a list since replaced,
+            ;; blocks this content's case from opening. It is not this hit's
+            ;; case and is never named as one — the 409 names it as what blocks
+            ;; (017-REQ R-2, O-6).
+            this-hits? (and (= (:instruction-digest open-case) digest)
+                            (= (:list-version open-case) (:version listed)))]
+        (cond-> {:refused?     true
+                 :reason       (reason "screening-hit")
+                 :list-version (:version listed)
+                 :result       result}
+          this-hits?       (assoc :case open-case)
+          (not this-hits?) (assoc :blocking-case open-case)))
 
       ;; Unreachable: the result decided on was written above, over this
       ;; digest, against the accepted list. Reaching here is a defect.

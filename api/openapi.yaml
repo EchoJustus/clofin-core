@@ -1176,10 +1176,17 @@ paths:
         - No hit, or a hit a compliance actor dispositioned `false-positive` for
           this content against this list → `200`, `pendingApproval`.
         - A hit → **`409 screening-hit`**, `errors.caseId` naming the case
-          (opened now if none was open on the instruction), `errors.listVersion`
-          and `errors.resultId`; the instruction stays `draft`; and once a case
-          has confirmed the hit, `errors.disposition: confirmed-hit` — the
-          maker's path is then `cancel`. Core's result and the case are
+          for this content against this list (opened now if none was open on
+          the instruction), `errors.listVersion` and `errors.resultId`; the
+          instruction stays `draft`; and once a case has confirmed the hit,
+          `errors.disposition: confirmed-hit` — the maker's path is then
+          `cancel`. An instruction has at most one open case: while a case is
+          still open on its **earlier** content (it was amended) or against a
+          list since replaced, no case can open for this content, and the `409`
+          carries **`errors.blockingCaseId`** naming that case **instead of**
+          `errors.caseId` — dispositioning it decides nothing about this
+          content; it is what lets the next submission open this content's
+          case. Core's result and the case are
           **stored**, and the `409` is rendered after they commit (they are the
           evidence of the refusal); the `Idempotency-Key` is bound to that
           answer, so a retry under it replays the `409`, and a submission after
@@ -1253,9 +1260,16 @@ paths:
             The lifecycle does not permit `submit` from the instruction's
             current state, or the `Idempotency-Key` has already been used for a
             different request, or **core's screening found a hit that stands**
-            — `errors.reason` `screening-hit` with `errors.caseId`,
-            `errors.listVersion`, `errors.resultId` and, once confirmed,
-            `errors.disposition` (`ScreeningRefusalReason`). Provenance is
+            — `errors.reason` `screening-hit` with `errors.caseId` (or
+            `errors.blockingCaseId`, when a case open on earlier content keeps
+            this content's case from opening), `errors.listVersion`,
+            `errors.resultId` and, once confirmed, `errors.disposition`
+            (`ScreeningRefusalReason`). `screening-required` is the
+            repository's own gate refusing a `submit` that reaches it without
+            core's permitting decision; this operation screens first, under the
+            instruction's lock and the accepted list's, so the gate re-reads the
+            decision it was just given and does not answer it here in practice.
+            Provenance is
             checked **first**, so a caller who is not the creator gets `403`
             rather than this — the instruction's state is not disclosed to an
             actor the operation is closed to — and the lifecycle second, so a
@@ -1396,8 +1410,11 @@ paths:
            instruction's current `screeningDigest`;
         7. core recomputes. Equal outcome and equal entry-id set → `201`,
            stored `accepted`, `agrees: true`; an accepted `hit` opens a
-           screening case unless one is open on the instruction, and `caseId`
-           names it. Anything else → **`422 screening-result-mismatch`**, with
+           screening case unless a case already covers this content against
+           this list — open, or dispositioned: a client's hit never re-opens a
+           decision compliance has taken — or another case is open on the
+           instruction; `caseId` names the case that covers it or that it
+           opened. Anything else → **`422 screening-result-mismatch`**, with
            `errors.coreOutcome` and `errors.coreMatchedEntries` — and the result
            **is stored**, `disposition: refused`, `agrees: false`, because the
            disagreement is evidence. Read it back at `GET /screening-results`.
@@ -3782,6 +3799,11 @@ components:
             timestamps, so a submission does not change it and an amendment
             does. A screening client sends it back as `instructionDigest` rather
             than reimplementing the canonical form. Derived; never accepted.
+            Required on every instruction core renders; the one exception is a
+            response **stored** before migration `0015` and replayed under its
+            key (`Idempotent-Replayed: true`), which is returned as it was
+            stored and so lacks this member — as `IdempotencyKeyLookup.originalBody`
+            says of the same bodies.
 
     CreatePaymentInstructionRequest:
       type: object
@@ -5325,8 +5347,10 @@ components:
           format: uuid
           description: |
             Present when a case was opened by this hit — or, on the `201` that
-            recorded it, when one was already open on the same content against
-            the same list.
+            recorded it, when a case already covers the same content against
+            the same list, open or dispositioned. A client's accepted hit never
+            opens a second case for content and a list a case already covers,
+            so a disposition is never superseded by later evidence.
         screenedAt: { type: string, format: date-time }
         recordedBy:
           type: string

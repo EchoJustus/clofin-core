@@ -86,15 +86,37 @@
   `clofin.tools.screening-list`); if two are ever found, screening against
   either would be a decision nobody can say was taken against *the* list, so
   this throws — a `500` with a correlation id — rather than picking one."
-  [source]
-  (let [rows (db/query source ["select version, source, loaded_at, retired_at, entry_count
-                                  from screening_list where retired_at is null
-                                 order by version"])]
-    (when (> (count rows) 1)
-      (throw (ex-info "More than one screening list is accepted; screening refuses to choose"
-                      {:accepted (mapv :version rows)})))
-    (when-let [row (first rows)]
-      (assoc (row->list-summary row) :entries (entries-of source (:version row))))))
+  ([source] (accepted-list source {}))
+  ([source {:keys [lock?]}]
+   (let [rows (db/query source [(str "select version, source, loaded_at, retired_at, entry_count
+                                        from screening_list where retired_at is null
+                                       order by version"
+                                     (when lock? " for share"))])]
+     (when (> (count rows) 1)
+       (throw (ex-info "More than one screening list is accepted; screening refuses to choose"
+                       {:accepted (mapv :version rows)})))
+     (when-let [row (first rows)]
+       (assoc (row->list-summary row) :entries (entries-of source (:version row)))))))
+
+(defn lock-accepted-list!
+  "`accepted-list`, with the accepted list's row held `for share` until the
+  caller's transaction ends — taken by every screening decision, after the
+  instruction's lock (L-8, 017-REQ R-7).
+
+  A retirement is an `update` of that row, so it waits for every decision in
+  flight against the list, and a decision that starts while a retirement is
+  uncommitted waits for it and then reads the list as it stands: a submission
+  can never commit `pending-approval` on the strength of a list retired before
+  it committed.
+
+  Read twice when the first read comes back empty. A statement that waited on
+  a retirement re-checks the row it waited for — now retired, so excluded — but
+  its snapshot predates the replacement the same tool committed with it; the
+  second statement sees that replacement. With no list accepted, both are
+  empty and the answer is nil."
+  [tx]
+  (or (accepted-list tx {:lock? true})
+      (accepted-list tx {:lock? true})))
 
 ;; ---------------------------------------------------------------------------
 ;; Results

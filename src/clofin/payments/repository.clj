@@ -649,7 +649,8 @@
                               where r.instruction_id = ? and r.origin = 'core'
                                 and r.instruction_digest = ?
                               order by r.recorded_at desc, r.id desc
-                              limit 1"
+                              limit 1
+                              for share of l"
                             instruction-id digest])
         c (when r
             (db/query-one tx ["select id, status, disposition, instruction_digest, list_version

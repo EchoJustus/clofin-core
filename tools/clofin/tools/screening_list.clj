@@ -72,15 +72,28 @@
 
 (defn- lock-lists!
   "Serialise loaders. `share row exclusive` conflicts with itself and with every
-  write to the table, and not with the plain reads a submission makes, so
-  screening is never blocked by a load — it sees the old list or the new one."
+  write to the table, and not with the `for share` row lock a screening
+  decision holds on the accepted list
+  (`clofin.screening.repository/lock-accepted-list!`). The retirement's
+  `update` of that row is what serialises with decisions: it waits for every
+  one in flight, and one that starts meanwhile waits for this transaction and
+  then reads the list as it stands (017-REQ R-7)."
   [tx]
   (db/execute! tx ["lock table screening_list in share row exclusive mode"]))
 
 (defn retire-version!
-  "Retire `version`, which must be accepted. Under the caller's transaction."
+  "Retire `version`, which must be accepted. Under the caller's transaction.
+
+  The row is read `for update` first, which waits for every screening decision
+  in flight against it (each holds the row `for share`), and only then stamped
+  with `clock_timestamp()` — not `now()`, the transaction's start, and not in
+  the `update` alone, whose new row is computed before it waits. So every
+  result recorded against a list was recorded before that list's `retired_at`,
+  and no decision taken against it commits after the retirement does
+  (017-REQ R-7)."
   [tx version]
-  (let [row (db/query-one tx ["select version, retired_at from screening_list where version = ?"
+  (let [row (db/query-one tx ["select version, retired_at from screening_list where version = ?
+                                  for update"
                               version])]
     (when-not row
       (refuse! "unknown-version" (str "No screening list version " version " is loaded")
@@ -88,7 +101,7 @@
     (when (:retired-at row)
       (refuse! "already-retired" (str "Screening list " version " is already retired")
                {:version version}))
-    (db/execute! tx ["update screening_list set retired_at = now()
+    (db/execute! tx ["update screening_list set retired_at = clock_timestamp()
                        where version = ? and retired_at is null" version])
     version))
 
@@ -163,9 +176,12 @@
 (defn- parse-args
   [args]
   (let [[command target & more] args
-        opts (apply hash-map more)]
+        ;; An odd count — `--replacing` with no version — is a usage error,
+        ;; not an exception: `apply hash-map` would throw before `-main`'s
+        ;; `try` and answer with a stack trace (017-REQ R-11).
+        opts (when (even? (count more)) (apply hash-map more))]
     (cond
-      (and (= "load" command) target (every? #{"--replacing"} (keys opts)))
+      (and (= "load" command) target opts (every? #{"--replacing"} (keys opts)))
       {:command :load :path target :replacing (get opts "--replacing")}
 
       (and (= "retire" command) target (empty? more))

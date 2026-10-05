@@ -115,7 +115,7 @@ query is only evidence if it can fail.
 × instruction matrix — six role sets, three approval ceilings and three amounts,
 including the empty role set and the actor holding every role — and calls
 `evaluate` **directly**, with no HTTP anywhere in the file. It is *not* the
-power set of the five roles and it does not enumerate every numeric limit or
+power set of the six roles and it does not enumerate every numeric limit or
 amount; the claim was written as "every role set, every limit, every amount"
 until the `ref-1` release audit (finding **A-001**), which is a description of a
 test nobody could write for an unbounded set. What the table does cover
@@ -548,8 +548,9 @@ which also records why a seeded `system` actor row was rejected).
 
 **Design.** Every operation routed through
 `clofin.idempotency.repository/execute-once!` requires an `Idempotency-Key` —
-the six payment and approval mutations: create, amend, submit, cancel, approve
-and withdraw. The key, the
+eight mutations: the six payment and approval mutations — create, amend, submit,
+cancel, approve and withdraw — and, from TASK-017, recording a screening result
+and dispositioning a screening case. The key, the
 organisation and a digest of the request are stored with the resulting response,
 **in the same transaction as the effect they protect** — a key stored separately
 from the effect leaves a window in which a crash makes a payment with no record
@@ -708,7 +709,15 @@ submission screens the amended content again.
   maker is refused `403 self-disposition` whatever roles they hold (C-01's
   shape). A disposition is bound to the digest and list version its case names:
   an amendment or a new list makes it moot, and the next submission opens a new
-  case if the hit stands.
+  case if the hit stands. **At most one case covers an instruction's content
+  against a list, and a disposition is never superseded by later evidence**: a
+  client's accepted hit on content a case already covers joins that case, open
+  or dispositioned, and opens none. **At most one case is open per
+  instruction**: while a case is still open on earlier content (or against a
+  replaced list), no case can open for the current content, and `submit`'s
+  `409` names the open one as `errors.blockingCaseId` — never as this content's
+  `caseId`. Compliance then dispositions the stale case before the current
+  content's case can open (017-REQ O-6).
 - **Exactly one list is accepted at a time, and none means no submission.** With
   no list accepted, `submit` is `422 no-screening-list-accepted` — unconfigured
   is not unsupervised; an empty list would make every instruction clear, which
@@ -728,7 +737,7 @@ submission screens the amended content again.
 | `screening_case_disposition_final` | A dispositioned case cannot be changed by any writer; a second disposition is a new case. |
 | `screening_list_retire_only`, `screening_entry_append_only`, `screening_rule_append_only`, `screening_result_append_only`, `screening_result_match_append_only` and the `…_no_truncate` triggers | A list version is immutable once loaded but for its retirement, once; a result and its matched entries cannot be rewritten, deleted or truncated. |
 | `screening_result_core_agrees_with_itself`, `screening_result_refusal_needs_reason`, `screening_case_disposition_complete` | A core result cannot disagree with itself; a refused result names its reason; a disposition without a rationale cannot be stored. |
-| `clofin.authz.model` | Only `compliance` holds `screening/disposition`, and no role holds it with `payment/create`, `payment/submit` or `payment/approve`; `screening-service` writes nothing but evidence. |
+| `clofin.authz.model` | Only `compliance` holds `screening/disposition`, and no role holds it with `payment/create`, `payment/submit` or `payment/approve`; `screening-service` writes nothing but evidence. **The separation is per role, not per actor**: the maker is refused per case (`self-disposition`), but an actor *granted* both `compliance` and `approver` can disposition a hit and then approve the same instruction — nothing refuses that per case today (017-REQ O-15). |
 
 **Evidence.** Three reads and the trail. `GET /screening-results?instructionId=`
 lists every result about an instruction — core's and clients', accepted and
@@ -764,7 +773,12 @@ one-transaction replacement). The negative controls for each are recorded in
 **Boundary of this control.** Screening gates `submit` and nothing later:
 approval, release and settlement rely on the retained decision, and an
 amendment forces a new one — re-screening at release is out of scope by
-decision, not by omission. Lists are one synthetic list for every tenant.
+decision, not by omission. **So the statement holds for every instruction
+submitted under migration `0015` and later, and not for one submitted before
+it**: an instruction already `pending-approval` or `approved` on a database
+when `0015` is applied carries no screening decision and can still be approved,
+released and settled — its queue row carries no `screening` member, which is
+how a checker sees it. A stack built from empty has no such instruction. Lists are one synthetic list for every tenant.
 Fraud scoring (`FraudAssessment`, PR-062) remains designed and not built.
 
 ---

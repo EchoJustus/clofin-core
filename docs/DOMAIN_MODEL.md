@@ -42,7 +42,7 @@ Legend: **✅ built** · **🔨 in progress** · **📋 specified, not built**
 | **Idempotency Key** | A caller-supplied identifier making a retry safe. | A payment reference. |
 | **Audit Event** | An append-only record of a state change: who, what, when, before/after **as digests**. | An application log line. Also not a copy of the record — a digest proves a value, it does not carry one. |
 | **Actor** | A person or system able to act within one organisation, holding roles and per-currency approval limits. | An Organisation, which is the tenant the actor acts within. |
-| **Role** | A named bundle of permissions. Five exist and none of them is a superuser. | A job title. A role here is exactly its permission set. |
+| **Role** | A named bundle of permissions. Six exist and none of them is a superuser. | A job title. A role here is exactly its permission set. |
 | **Permission** | A single verb an actor may exercise. **Absent means denied**, always. | A preference or a UI affordance. |
 | **Approval Threshold** | A band of amounts, in one currency, and how many approvals it requires. Lower bound inclusive. | A limit. A threshold is the organisation's rule; a limit is one approver's ceiling. |
 
@@ -128,12 +128,13 @@ them apart. A row written before `0014` has no operation and is refused as
 
 Modelled as a **record of its own** rather than as a field on the instruction,
 because the key protects every mutating **payment and approval** operation — a
-submission, an amendment, a cancellation, a decision — and not only the creation
-of an instruction. A key that lived on `payment_instruction` could make creation
+submission, an amendment, a cancellation, a decision — and, from TASK-017, the
+two screening writes (a client's result, a case's disposition), and not only
+the creation of an instruction. A key that lived on `payment_instruction` could make creation
 idempotent and nothing else, which would leave submission unprotected: precisely
 the operation whose timeout the control exists for.
 
-The six it protects are `clofin.idempotency/protected-operations`; the route
+The eight it protects are `clofin.idempotency/protected-operations`; the route
 table's other eleven mutations do not take a caller key and are guarded
 otherwise, which [C-06](COMPLIANCE.md) sets out. This paragraph said "*every*
 mutating operation" until the `ref-2` release audit (**2B-009**, standing
@@ -370,7 +371,9 @@ Designed and not built (PR-062).
 **Case** ✅ — an alert requiring human disposition, with rationale retained.
 Opened by an accepted hit — core's at a submission, or a client's core
 reproduced — and bound to the instruction, the digest and the list version of
-that hit; at most one open per instruction. Dispositioned once, finally,
+that hit; at most one open per instruction, and at most one for an
+instruction's content against a list — a client's hit on content a case already
+covers, open or dispositioned, opens none. Dispositioned once, finally,
 `false-positive` or `confirmed-hit`, with a rationale of 1–1000 characters, by a
 compliance actor who is not the instruction's maker. A disposition decides that
 hit on that content against that list, so an amendment or a new list makes it

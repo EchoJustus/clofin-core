@@ -29,6 +29,7 @@
             [clofin.screening.repository :as screening-repo]
             [clofin.system :as system]
             [clofin.test-db :as tdb]
+            [clofin.tools.screening-list :as screening-tool]
             [clojure.data.json :as json]
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing use-fixtures]])
@@ -212,3 +213,109 @@
                                                             where instruction_id = ?"
                                                            (java.util.UUID/fromString (:id f))])))
           "only core's own decision at the submission is stored"))))
+
+;; ---------------------------------------------------------------------------
+;; A list retirement and a screening decision (017-REQ R-7)
+;; ---------------------------------------------------------------------------
+
+(defn- submit [{:keys [pool org maker id]}]
+  (call pool :post (str "/payment-instructions/" id "/submission") :actor maker
+        :idempotency-key (str (random-uuid)) :body {"organisationId" org}))
+
+(defn- status-of [{:keys [pool maker id]}]
+  (get (:json (call pool :get (str "/payment-instructions/" id) :actor maker)) "status"))
+
+(def ^:private list-lock "%screening_list%")
+
+(defn- results-recorded-after-their-list-retired
+  "Results whose `recorded_at` is not before their list's `retired_at` — a
+  decision taken against a list after it was retired."
+  []
+  (db/query tdb/*pool* ["select r.id, r.recorded_at, l.retired_at
+                           from screening_result r
+                           join screening_list l on l.version = r.list_version
+                          where l.retired_at is not null and r.recorded_at >= l.retired_at"]))
+
+(deftest a-retirement-in-flight-holds-the-list-and-a-submission-waits-then-decides-nothing
+  (testing "the retirement holds the list's row: a submission waits for it, then
+            finds no list accepted and decides nothing"
+    (let [f (setup)
+          parked (CountDownLatch. 1)
+          release (CountDownLatch. 1)
+          original-retire screening-tool/retire-version!]
+      (with-redefs [screening-tool/retire-version! (fn [tx version]
+                                                     (let [v (original-retire tx version)]
+                                                       (.countDown parked)
+                                                       (.await release 60 TimeUnit/SECONDS)
+                                                       v))]
+        (let [t (on-thread #(screening-tool/retire! (:pool f) "synthetic-2026-10-v1"))]
+          (is (.await parked 30 TimeUnit/SECONDS) "the retirement reached its park point, uncommitted")
+          (let [s (on-thread #(submit f))]
+            (is (pos? (await-lock-wait! list-lock))
+                "non-vacuity: the submission is waiting on the list's row")
+            (.countDown release)
+            (let [t* (deref t 60000 ::timeout) s* (deref s 60000 ::timeout)]
+              (is (= "synthetic-2026-10-v1" t*) (pr-str t*))
+              (is (= 422 (:status s*)) (pr-str (:json s*)))
+              (is (= "no-screening-list-accepted" (get-in s* [:json "errors" "reason"])))))))
+      (is (= "draft" (status-of f)))
+      (is (empty? (stored-results f)) "nothing decided against the retired list"))))
+
+(deftest a-replacement-in-flight-holds-the-list-and-a-submission-screens-against-the-replacement
+  (testing "a replacement holds the row: the submission waits, then screens
+            against the replacement the same transaction committed — the
+            second read sees what the first read's snapshot could not"
+    (let [f (setup)
+          parked (CountDownLatch. 1)
+          release (CountDownLatch. 1)
+          original-retire screening-tool/retire-version!]
+      (with-redefs [screening-tool/retire-version! (fn [tx version]
+                                                     (let [v (original-retire tx version)]
+                                                       (.countDown parked)
+                                                       (.await release 60 TimeUnit/SECONDS)
+                                                       v))]
+        (let [t (on-thread #(screening-tool/load-list!
+                             (:pool f)
+                             {:version "synthetic-2026-10-v2"
+                              :entries [{:id "SYN-0001"
+                                         :rules [{:field :creditor-name :operator :exact
+                                                  :value "Blocked Counterparty Ltd"}]}]}
+                             {:source "test" :replacing "synthetic-2026-10-v1"}))]
+          (is (.await parked 30 TimeUnit/SECONDS))
+          (let [s (on-thread #(submit f))]
+            (is (pos? (await-lock-wait! list-lock)) "non-vacuity")
+            (.countDown release)
+            (let [t* (deref t 60000 ::timeout) s* (deref s 60000 ::timeout)]
+              (is (= "synthetic-2026-10-v2" (:version t*)) (pr-str t*))
+              (is (= 200 (:status s*)) (pr-str (:json s*)))))))
+      (is (= ["synthetic-2026-10-v2"]
+             (mapv :list-version (db/query tdb/*pool* ["select list_version from screening_result
+                                                         where instruction_id = ?"
+                                                        (java.util.UUID/fromString (:id f))])))
+          "screened against the replacement, never the retired list"))))
+
+(deftest a-decision-in-flight-holds-the-list-and-the-retirement-is-stamped-after-it
+  (testing "the decision holds the row: the retirement waits for it, and is
+            stamped after it — no result is ever recorded after its list's
+            retired_at"
+    (let [f (setup)
+          parked (CountDownLatch. 1)
+          release (CountDownLatch. 1)
+          original-insert screening-repo/insert-result!]
+      (with-redefs [screening-repo/insert-result! (fn [tx row]
+                                                    (.countDown parked)
+                                                    (.await release 60 TimeUnit/SECONDS)
+                                                    (original-insert tx row))]
+        (let [s (on-thread #(submit f))]
+          (is (.await parked 30 TimeUnit/SECONDS)
+              "the submission holds the list's row and has not yet recorded its result")
+          (let [t (on-thread #(screening-tool/retire! (:pool f) "synthetic-2026-10-v1"))]
+            (is (pos? (await-lock-wait! list-lock))
+                "non-vacuity: the retirement is waiting on the decision's hold")
+            (.countDown release)
+            (let [s* (deref s 60000 ::timeout) t* (deref t 60000 ::timeout)]
+              (is (= 200 (:status s*)) (pr-str (:json s*)))
+              (is (= "synthetic-2026-10-v1" t*) (pr-str t*))))))
+      (is (= 1 (count (stored-results f))))
+      (is (empty? (results-recorded-after-their-list-retired))
+          "the forbidden state is absent: a result recorded at or after its list's retirement"))))

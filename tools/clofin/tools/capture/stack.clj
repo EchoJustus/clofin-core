@@ -206,6 +206,54 @@
                       {:worktree worktree :exit exit :log log-file})))
     :migrated))
 
+(defn- shipped-screening-lists
+  "The screening-list files a worktree ships, sorted by name."
+  [worktree]
+  (->> (.listFiles (io/file worktree "resources" "screening-lists"))
+       (filter #(str/ends-with? (.getName ^java.io.File %) ".edn"))
+       (sort-by #(.getName ^java.io.File %))))
+
+(defn load-screening-list!
+  "Load the captured commit's own shipped screening list into the capture
+  database, when the commit ships one.
+
+  From TASK-017 (C-07), core refuses every submission while no list is
+  accepted — `422 no-screening-list-accepted` — and a list is loaded only by
+  the operator's tool, never through the API. A capture of such a commit that
+  skipped this step would stop at its first submission (017-REQ R-4).
+
+  Run as the commit's own loader — `clojure -M:screening-list load <file>`
+  inside the worktree — for `migrate!`'s reason: the loader and the list are
+  part of what the commit is, and a capture that put the list in some other
+  way would capture a state the commit never produces.
+
+  - No list shipped → `:no-list`. A commit from before TASK-017 has no loader,
+    no list and no screening gate, and needs none.
+  - Exactly one → loaded, `:loaded`.
+  - More than one → refused. Which list a capture runs against is part of what
+    it captures, and not something this harness guesses."
+  [{:keys [worktree db clojure-bin log-file]}]
+  (let [lists (shipped-screening-lists worktree)]
+    (case (count lists)
+      0 :no-list
+      1 (let [path (str "resources/screening-lists/" (.getName ^java.io.File (first lists)))
+              p    (process {:dir worktree
+                             :command [clojure-bin "-M:screening-list" "load" path]
+                             :env (env-for db 0 nil)
+                             :log-file log-file})
+              exit (.waitFor p)]
+          (when-not (zero? exit)
+            (throw (ex-info (format (str "capture refuses: loading the screening list %s from %s "
+                                         "failed (exit %s). See %s")
+                                    path worktree exit log-file)
+                            {:worktree worktree :list path :exit exit :log log-file})))
+          :loaded)
+      (throw (ex-info (format (str "capture refuses: %s ships %d screening lists (%s); a capture "
+                                   "loads the one list the commit ships, and does not choose")
+                              worktree (count lists)
+                              (str/join ", " (map #(.getName ^java.io.File %) lists)))
+                      {:worktree worktree :lists (mapv #(.getName ^java.io.File %) lists)})))))
+
 (defn- http-get
   [url]
   (try

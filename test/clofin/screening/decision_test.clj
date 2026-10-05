@@ -18,36 +18,42 @@
           :list-version "synthetic-2026-10-v1"}
          overrides))
 
+(def ^:private matrix
+  "Every cell: a label, `decide`'s input, and the answer it must give."
+  [["no result at all"                     {:digest d}                                              :refuse/no-decision]
+   ["core's result for another digest"     {:digest d :latest-core-result (result :instruction-digest other-d)} :refuse/no-decision]
+   ["a client's clear, accepted"           {:digest d :latest-core-result (result :origin :client)}  :refuse/no-decision]
+   ["a client's result as stored strings"  {:digest d :latest-core-result (result :origin "client" :outcome "clear")} :refuse/no-decision]
+   ["a refused result"                     {:digest d :latest-core-result (result :disposition :refused)} :refuse/no-decision]
+   ["core clear, list retired"             {:digest d :latest-core-result (result :list-retired? true)} :refuse/list-retired]
+   ["core hit, list retired"               {:digest d :latest-core-result (result :outcome :hit :list-retired? true)} :refuse/list-retired]
+   ["core clear"                           {:digest d :latest-core-result (result)}                  :permit]
+   ["core clear, as stored strings"        {:digest d :latest-core-result (result :origin "core" :disposition "accepted" :outcome "clear")} :permit]
+   ["core hit, no case"                    {:digest d :latest-core-result (result :outcome :hit)}    :refuse/hit]
+   ["core hit, open case"                  {:digest d :latest-core-result (result :outcome :hit) :case (a-case)} :refuse/hit]
+   ["core hit, false-positive"             {:digest d :latest-core-result (result :outcome :hit)
+                                            :case (a-case :status :dispositioned :disposition :false-positive)} :permit]
+   ["core hit, confirmed"                  {:digest d :latest-core-result (result :outcome :hit)
+                                            :case (a-case :status "dispositioned" :disposition "confirmed-hit")} :refuse/confirmed-hit]
+   ["core hit, false-positive on other content" {:digest d :latest-core-result (result :outcome :hit)
+                                                 :case (a-case :status :dispositioned :disposition :false-positive
+                                                               :instruction-digest other-d)} :refuse/hit]
+   ["core hit, false-positive against another list" {:digest d :latest-core-result (result :outcome :hit)
+                                                     :case (a-case :status :dispositioned :disposition :false-positive
+                                                                   :list-version "synthetic-2026-09-v1")} :refuse/hit]])
+
 (deftest ac-17-11-the-decision-matrix
-  (doseq [[label input expected]
-          [["no result at all"                     {:digest d}                                              :refuse/no-decision]
-           ["core's result for another digest"     {:digest d :latest-core-result (result :instruction-digest other-d)} :refuse/no-decision]
-           ["a client's clear, accepted"           {:digest d :latest-core-result (result :origin :client)}  :refuse/no-decision]
-           ["a client's result as stored strings"  {:digest d :latest-core-result (result :origin "client" :outcome "clear")} :refuse/no-decision]
-           ["a refused result"                     {:digest d :latest-core-result (result :disposition :refused)} :refuse/no-decision]
-           ["core clear, list retired"             {:digest d :latest-core-result (result :list-retired? true)} :refuse/list-retired]
-           ["core hit, list retired"               {:digest d :latest-core-result (result :outcome :hit :list-retired? true)} :refuse/list-retired]
-           ["core clear"                           {:digest d :latest-core-result (result)}                  :permit]
-           ["core clear, as stored strings"        {:digest d :latest-core-result (result :origin "core" :disposition "accepted" :outcome "clear")} :permit]
-           ["core hit, no case"                    {:digest d :latest-core-result (result :outcome :hit)}    :refuse/hit]
-           ["core hit, open case"                  {:digest d :latest-core-result (result :outcome :hit) :case (a-case)} :refuse/hit]
-           ["core hit, false-positive"             {:digest d :latest-core-result (result :outcome :hit)
-                                                    :case (a-case :status :dispositioned :disposition :false-positive)} :permit]
-           ["core hit, confirmed"                  {:digest d :latest-core-result (result :outcome :hit)
-                                                    :case (a-case :status "dispositioned" :disposition "confirmed-hit")} :refuse/confirmed-hit]
-           ["core hit, false-positive on other content" {:digest d :latest-core-result (result :outcome :hit)
-                                                         :case (a-case :status :dispositioned :disposition :false-positive
-                                                                       :instruction-digest other-d)} :refuse/hit]
-           ["core hit, false-positive against another list" {:digest d :latest-core-result (result :outcome :hit)
-                                                             :case (a-case :status :dispositioned :disposition :false-positive
-                                                                           :list-version "synthetic-2026-09-v1")} :refuse/hit]]]
+  (doseq [[label input expected] matrix]
     (testing label
       (is (= expected (decision/decide input)))
       (is (= (= :permit expected) (decision/permits-submit? (decision/decide input))))))
-  (testing "every answer the matrix gives is one `decisions` declares, and every
-            declared answer is reached (non-vacuity both ways)"
-    (is (= decision/decisions
-           #{:permit :refuse/no-decision :refuse/hit :refuse/confirmed-hit :refuse/list-retired}))))
+  (testing "every answer `decide` gives over the matrix is one `decisions`
+            declares, and every declared answer is reached by some cell —
+            computed from `decide` itself, so an answer `decide` stopped giving,
+            or a new one it started giving, fails here (017-REQ R-9: this
+            compared `decisions` with a literal, and could not fail as labelled)"
+    (let [reached (into #{} (map (fn [[_ input _]] (decision/decide input))) matrix)]
+      (is (= decision/decisions reached)))))
 
 (deftest a-refused-decision-names-its-reason
   (is (nil? (decision/refusal-reason :permit)))

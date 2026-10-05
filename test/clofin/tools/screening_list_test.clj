@@ -131,3 +131,23 @@
            (:reason (ex-data (try (tool/read-list-file "Makefile") nil
                                   (catch clojure.lang.ExceptionInfo t t)))))
         "a file that is not EDN")))
+
+(deftest a-malformed-command-line-is-a-usage-error-not-a-stack-trace
+  (testing "017-REQ R-11: `load f --replacing` with no version reached
+            `apply hash-map` with an odd count, which threw before `-main`'s
+            `try`. Every malformed line now parses to nil, which `-main`
+            answers with its usage and exit 2"
+    (let [parse #'tool/parse-args]
+      (doseq [args [["load" "f.edn" "--replacing"]
+                    ["load" "f.edn" "--replacing" "v1" "--replacing"]
+                    ["load" "f.edn" "--other" "x"]
+                    ["load"]
+                    ["retire"]
+                    ["retire" "v1" "extra"]
+                    []]]
+        (is (nil? (parse args)) (pr-str args)))
+      (testing "negative control: the well-formed lines parse"
+        (is (= {:command :load :path "f.edn" :replacing "v1"}
+               (parse ["load" "f.edn" "--replacing" "v1"])))
+        (is (= {:command :load :path "f.edn" :replacing nil} (parse ["load" "f.edn"])))
+        (is (= {:command :retire :version "v1"} (parse ["retire" "v1"])))))))

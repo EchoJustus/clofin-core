@@ -97,11 +97,12 @@
          ;; **No role holds `:screening/disposition` with `:payment/create`,
          ;; `:payment/submit` or `:payment/approve`.** Asserted in
          ;; `clofin.authz.model-test` beside the existing separation assertions:
-         ;; an actor who could raise a payment and clear its own hit, or clear a
-         ;; hit and then approve the payment, would put one person on both sides
-         ;; of C-07 — and the service refuses a maker's disposition per case as
-         ;; well (`self-disposition`). The permission split is the belt to that
-         ;; brace.
+         ;; no single role puts one person on both sides of C-07, and the
+         ;; service refuses a maker's disposition per case as well
+         ;; (`self-disposition`). **This split is per role, not per actor**: an
+         ;; actor granted both `compliance` and `approver` can disposition a
+         ;; hit and then approve the same instruction, and nothing refuses that
+         ;; per case today (017-REQ O-15).
          :screening/record
          :screening/read
          :screening/disposition]))
@@ -193,9 +194,11 @@
    :compliance #{:payment/read :account/read :entry/read :audit/read
                  :organisation/read :reconciliation/read
                  ;; C-07 (TASK-017). Compliance reads screening and decides a
-                 ;; case — and creates, submits and approves nothing, so the
-                 ;; actor who clears a hit is never the one who raised or agreed
-                 ;; the payment.
+                 ;; case — and creates, submits and approves nothing, so this
+                 ;; role never raises or agrees the payment whose hit it clears.
+                 ;; An actor granted another role beside it is refused only as
+                 ;; the maker (`self-disposition`), not as the approver
+                 ;; (017-REQ O-15).
                  :screening/read :screening/disposition}
    :auditor    #{:audit/read :payment/read :account/read :entry/read
                  :organisation/read :reconciliation/read

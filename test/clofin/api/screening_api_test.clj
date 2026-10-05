@@ -495,6 +495,89 @@
       (is (= ["clear" "hit"] (mapv #(get % "outcome") (get (results f pi) "screeningResults")))
           "newest first: core's fresh clear, then the earlier hit"))))
 
+(deftest ac-17-9-a-client-hit-never-supersedes-a-disposition
+  ;; 017-REQ R-1. `decide` reads the latest case for (instruction, digest, list),
+  ;; so a second case for the same triple would let a client's evidence overturn
+  ;; a final disposition with no amendment at all.
+  (doseq [[disposition submit-status] [["confirmed-hit" 409] ["false-positive" 200]]]
+    (testing (str "after " disposition ", a client's accepted hit on the same content and list")
+      (let [f (setup)
+            pi (raise! f :creditor-name blocked)
+            case-id (get-in (:json (submit! f pi)) ["errors" "caseId"])]
+        (is (= 200 (:status (disposition! f case-id disposition))))
+        (let [{:keys [status json]} (record! f pi {"outcome" "hit" "matchedEntries" [syn-0001]})]
+          (is (= 201 status) (pr-str json))
+          (is (= case-id (get json "caseId")) "names the case that already covers this content")
+          (is (= 1 (count-of "screening_case" pi)) "and opens no second case"))
+        (is (= {"status" "dispositioned" "disposition" disposition}
+               (select-keys (:json (call :get (str "/screening-cases/" case-id) :actor (:compliance f)))
+                            ["status" "disposition"]))
+            "the disposition stands")
+        (let [{:keys [status json]} (submit! f pi)]
+          (is (= submit-status status) (str "the gate still answers by the disposition: " (pr-str json)))
+          (when (= 409 submit-status)
+            (is (= {"disposition" "confirmed-hit" "caseId" case-id}
+                   (select-keys (get json "errors") ["disposition" "caseId"]))))))))
+  (testing "negative control: with no case on this content, a client's accepted hit opens one"
+    (let [f (setup)
+          pi (raise! f :creditor-name blocked)
+          {:keys [status json]} (record! f pi {"outcome" "hit" "matchedEntries" [syn-0001]})]
+      (is (= 201 status))
+      (is (some? (get json "caseId")))
+      (is (= 1 (count-of "screening_case" pi))))))
+
+(deftest ac-17-2-a-case-open-on-earlier-content-is-named-as-blocking-never-as-this-contents
+  ;; 017-REQ R-2. One open case per instruction (`screening_case_open_key`): a
+  ;; case left open across an amendment blocks the amended content's case, and
+  ;; the 409 must say so rather than present it as this content's case.
+  (let [f (setup)
+        pi (raise! f :creditor-name blocked)
+        first-case (get-in (:json (submit! f pi)) ["errors" "caseId"])
+        _ (is (some? first-case))
+        _ (is (= 200 (:status (call :patch (str "/payment-instructions/" (get pi "id"))
+                                    :actor (:maker f) :idempotency-key (key!)
+                                    :body {"organisationId" (:org f)
+                                           "creditorAccount" "SG-SYNTH-99999999"}))))
+        {:keys [status json]} (submit! f pi)]
+    (testing "the amended content still hits; the first case is still open"
+      (is (= 409 status) (pr-str json))
+      (is (= "screening-hit" (get-in json ["errors" "reason"]))))
+    (testing "the open case is named as what blocks, and not as this content's case"
+      (is (= first-case (get-in json ["errors" "blockingCaseId"])))
+      (is (not (contains? (get json "errors") "caseId")))
+      (is (str/includes? (get json "detail") "earlier content"))
+      (is (= list-version (get-in json ["errors" "listVersion"])))
+      (is (= 1 (count-of "screening_case" pi)) "no case could open"))
+    (testing "once compliance dispositions the stale case, the next submission opens this content's"
+      (is (= 200 (:status (disposition! f first-case "false-positive"))))
+      (let [{:keys [status json]} (submit! f pi)
+            second-case (get-in json ["errors" "caseId"])]
+        (is (= 409 status))
+        (is (some? second-case))
+        (is (not= first-case second-case))
+        (is (not (contains? (get json "errors") "blockingCaseId")))
+        (is (= (get (read-instruction f pi) "screeningDigest")
+               (get (:json (call :get (str "/screening-cases/" second-case) :actor (:compliance f)))
+                    "instructionDigest"))
+            "bound to the content as it stands")
+        (is (= 200 (:status (disposition! f second-case "false-positive"))))
+        (is (= 200 (:status (submit! f pi))))))
+    (testing "and after a list replacement, the old list's open case is named as blocking too"
+      (let [f (setup)
+            pi (raise! f :creditor-name blocked)
+            old-case (get-in (:json (submit! f pi)) ["errors" "caseId"])]
+        (screening-tool/load-list! tdb/*pool* {:version "synthetic-2026-10-v2"
+                                               :entries [{:id "SYN-0001"
+                                                          :rules [{:field :creditor-name :operator :exact
+                                                                   :value blocked}]}]}
+                                   {:source "test" :replacing list-version})
+        (let [{:keys [status json]} (submit! f pi)]
+          (is (= 409 status))
+          (is (= old-case (get-in json ["errors" "blockingCaseId"])))
+          (is (not (contains? (get json "errors") "caseId")))
+          (is (= "synthetic-2026-10-v2" (get-in json ["errors" "listVersion"])))
+          (is (str/includes? (get json "detail") (str "against list " list-version))))))))
+
 ;; ---------------------------------------------------------------------------
 ;; AC-17-12 — the screening-service actor
 ;; ---------------------------------------------------------------------------

@@ -608,6 +608,7 @@
                       stack/assert-port-free!         (fn [& _] :free)
                       store/reset-schema!             (fn [& _] "x_capture")
                       stack/migrate!                  (fn [& _] :migrated)
+                      stack/load-screening-list!      (fn [& _] :no-list)
                       stack/start!                    (fn [_] {:process nil
                                                                :base-url "http://127.0.0.1:1"
                                                                :readyz "{}"
