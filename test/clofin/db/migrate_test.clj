@@ -90,3 +90,15 @@
     (testing "and it is applied on the migrated test database"
       (migrate/migrate! tdb/*pool*)
       (is (contains? (set (map :version (:applied (migrate/status tdb/*pool*)))) "0014")))))
+
+(deftest ac-17-0-the-index-reaches-0015
+  (testing "TASK-017's migration is the fifteenth entry, appended after 0014 —
+            by position, as above"
+    (let [available (migrate/available)]
+      (is (<= 15 (count available)))
+      (is (= ["0014" "0015"] (mapv :version (subvec (vec available) 13 15))))
+      (is (= "0015-screening-lists-results-and-cases.sql"
+             (:filename (nth available 14)))))
+    (testing "and it is applied on the migrated test database"
+      (migrate/migrate! tdb/*pool*)
+      (is (contains? (set (map :version (:applied (migrate/status tdb/*pool*)))) "0015")))))

@@ -150,6 +150,21 @@ migrate: ## Apply pending database migrations
 migrate-status: ## Show applied and pending migrations
 	$(CLJ) -M -m clofin.db.migrate status
 
+# The synthetic screening list core screens every submission against (C-07).
+# Loaded by this tool, never by a client and never by a migration; exactly one
+# list is accepted at a time, and a submission with none accepted is refused.
+# To replace the accepted list in one transaction:
+#   make load-screening-list LIST=<edn-file> REPLACING=<accepted-version>
+# To retire it (every submission is then refused until a list is loaded):
+#   clojure -M:screening-list retire <version>
+# The list is synthetic and the matching exact; see docs/COMPLIANCE.md C-07.
+LIST      ?= resources/screening-lists/synthetic-2026-10-v1.edn
+REPLACING ?=
+
+.PHONY: load-screening-list
+load-screening-list: ## Load a synthetic screening list (LIST=…, default the shipped list)
+	$(CLJ) -M:screening-list load $(LIST) $(if $(REPLACING),--replacing $(REPLACING))
+
 # ---------------------------------------------------------------------------
 # Development
 # ---------------------------------------------------------------------------

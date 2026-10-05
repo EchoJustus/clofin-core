@@ -33,7 +33,7 @@
 (def protected-operations
   "The operations that require an `Idempotency-Key`, by `:operation-id`.
 
-  **Six of the route table's seventeen mutations**, not all of them, and saying
+  **Eight of the route table's nineteen mutations**, not all of them, and saying
   otherwise is release-audit finding **2B-009**. This function's docstring and
   its own `400` said the header was mandatory on *every* mutating endpoint,
   which a maintainer could read as fail-closed retry protection for writes that
@@ -51,14 +51,19 @@
 
   A set rather than a sentence, so it can be compared with the route table and
   with the contract's `IdempotencyKey` references in both directions —
-  `clofin.api.conformance-test`, `ac-15-the-key-is-required-by-exactly-the-six-
+  `clofin.api.conformance-test`, `ac-15-the-key-is-required-by-exactly-the-eight-
   operations-that-say-so`, which makes that comparison, and
-  `ac-15-a-mutation-with-no-key-is-refused-by-the-six-and-by-no-others`, which
-  drives all seventeen mutating routes without a key and compares what refuses
+  `ac-15-a-mutation-with-no-key-is-refused-by-the-eight-and-by-no-others`, which
+  drives all nineteen mutating routes without a key and compares what refuses
   with this set. Extending the mechanism to the remaining eleven is a design
   decision, not a docstring edit."
   #{"createPaymentInstruction" "amendPaymentInstruction" "submitPaymentInstruction"
-    "cancelPaymentInstruction" "approvePaymentInstruction" "withdrawApproval"})
+    "cancelPaymentInstruction" "approvePaymentInstruction" "withdrawApproval"
+    ;; TASK-017 (C-07): recording a client's screening result and
+    ;; dispositioning a case. Each writes evidence a retry must not write twice
+    ;; — a second refused result, a second disposition attempt — so each binds
+    ;; its answer to the caller's key, refusals whose evidence commits included.
+    "recordScreeningResult" "dispositionScreeningCase"})
 
 (defn- key-shape!
   "The rules a key obeys once it is known to be present: at most
@@ -80,11 +85,12 @@
 (defn read-key
   "Validate and normalise a caller-supplied idempotency key.
 
-  The header is **mandatory on the six operations in `protected-operations`** —
+  The header is **mandatory on the eight operations in `protected-operations`** —
   `approvePaymentInstruction`, `amendPaymentInstruction`,
   `cancelPaymentInstruction`, `createPaymentInstruction`,
-  `submitPaymentInstruction` and `withdrawApproval`, which are the payment and
-  approval mutations (PR-040). Named here as well as in the `400`, because a
+  `dispositionScreeningCase`, `recordScreeningResult`,
+  `submitPaymentInstruction` and `withdrawApproval`, which are the payment,
+  approval and screening mutations (PR-040, C-07). Named here as well as in the `400`, because a
   maintainer reads the docstring and a caller reads the message, and a set
   spelled out in only one of the two is a set one of them has to take on
   trust: a request that omits the header is `400`
@@ -99,7 +105,7 @@
   (when-not (and (string? value) (not (str/blank? value)))
     (err/invalid!
      (str "Header 'Idempotency-Key' is required on this request. It is required "
-          "on the six payment and approval mutations — "
+          "on the eight payment, approval and screening mutations — "
           (str/join ", " (sort protected-operations))
           " — and on no other operation")
      {:header "Idempotency-Key"

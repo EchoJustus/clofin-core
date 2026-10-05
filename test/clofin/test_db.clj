@@ -8,7 +8,12 @@
   one thing already covered by the unit tests."
   (:require [clofin.config :as config]
             [clofin.db.core :as db]
-            [clofin.db.migrate :as migrate]))
+            [clofin.db.migrate :as migrate]
+            [clofin.payments.repository :as payments]
+            [clofin.screening.repository :as screening]
+            [clofin.screening.rules :as rules]
+            [clofin.screening.subject :as subject]
+            [clofin.tools.screening-list :as screening-tool]))
 
 (def ^:dynamic *pool* nil)
 
@@ -51,7 +56,28 @@
    ;; and `reconciliation_adjustment` are deliberately absent — a break's state
    ;; and owner move and an adjustment becomes posted, which is the mechanism of
    ;; the module rather than a gap in it.
-   "reconciliation_statement" "reconciliation_statement_line" "reconciliation_match"])
+   "reconciliation_statement" "reconciliation_statement_line" "reconciliation_match"
+   ;; Screening (migration `0015`). A list version, its entries and rules, a
+   ;; result and the entries it matched are each a statement about a moment —
+   ;; what core screened against, and what it decided. `screening_case` is here
+   ;; because it refuses `DELETE` and `TRUNCATE` too, though not every `UPDATE`:
+   ;; a case moves once, from open to dispositioned, and is frozen from then on
+   ;; (`screening_case_disposition_final`).
+   "screening_list" "screening_entry" "screening_rule"
+   "screening_result" "screening_result_match" "screening_case"])
+
+(def shipped-screening-list
+  "The synthetic list the repository ships, which `make load-screening-list`
+  loads by default."
+  "resources/screening-lists/synthetic-2026-10-v1.edn")
+
+(defn load-shipped-screening-list!
+  "Make the shipped synthetic list the accepted one, through the loading tool
+  itself — the only writer a list has (C-07). Returns its version."
+  [pool]
+  (:version (screening-tool/load-list! pool
+                                       (screening-tool/read-list-file shipped-screening-list)
+                                       {:source shipped-screening-list})))
 
 (defn clean-business-data!
   "Reset business tables between tests, leaving reference data and the
@@ -93,7 +119,14 @@
   commits, because a deferred trigger that was disabled at INSERT queues no
   event to fire at commit, so re-enabling before COMMIT does not save it.
   Nothing is inserted inside the window today, so nothing is broken today; the
-  point is that the narrow form cannot break if that ever stops being true."
+  point is that the narrow form cannot break if that ever stops being true.
+
+  **And then the shipped screening list is loaded again**, so every test starts
+  where a deployment does after `make load-screening-list`. The list tables are
+  emptied with the business tables because tests retire and replace lists; since
+  migration `0015` a submission with no list accepted is refused
+  (`422 no-screening-list-accepted` — unconfigured is not unsupervised), and a
+  test about that absence retires the list itself rather than inheriting it."
   [pool]
   (db/with-transaction [tx pool]
     (let [guards (db/query tx ["select c.relname as table_name, t.tgname as trigger_name,
@@ -122,7 +155,9 @@
       ;; `cascade` would reach the payment tables through their foreign keys, but
       ;; they are named anyway: a test that leaves rows behind because a table was
       ;; only ever truncated by implication is a test that fails somewhere else.
-      (db/execute! tx ["truncate audit_event, approval, approver_limit,
+      (db/execute! tx ["truncate screening_case, screening_result_match, screening_result,
+                                 screening_rule, screening_entry, screening_list,
+                                 audit_event, approval, approver_limit,
                                  approval_threshold, actor_role, actor,
                                  reconciliation_adjustment, reconciliation_break,
                                  reconciliation_match, reconciliation_statement_line,
@@ -148,7 +183,8 @@
                                 "R" " enable replica trigger "
                                 "D" " disable trigger "
                                 " enable trigger ")
-                              trigger-name)])))))
+                              trigger-name)]))))
+  (load-shipped-screening-list! pool))
 
 (defn with-clean-data
   [f]
@@ -288,3 +324,37 @@
                        (or subject-id (random-uuid))
                        before-digest after-digest correlation-id])
     id))
+
+;; ---------------------------------------------------------------------------
+;; Screening (C-07)
+;; ---------------------------------------------------------------------------
+
+(defn record-core-screening!
+  "Record **core's own** screening decision over an instruction as it stands
+  now, against the accepted list — the row `clofin.screening.service/submit-screened!`
+  writes before it submits — for a test that drives
+  `clofin.payments.repository/transition!` directly.
+
+  A fixture at the repository seam, like `insert-actor!`: it writes the result
+  and its matches and no audit event, because the tests that use it are about
+  the lifecycle beneath the service. Since migration `0015`, `transition!`
+  refuses `:submit` without such a decision (`screening-required`) — which is
+  the point: the repository's gate does not trust its caller. Returns the
+  result."
+  [pool organisation-id instruction-id actor-id]
+  (let [instruction (payments/find-instruction pool organisation-id instruction-id)
+        listed (or (screening/accepted-list pool)
+                   (throw (ex-info "No screening list is accepted to screen against" {})))
+        {:keys [outcome matched]} (rules/evaluate instruction (:entries listed))]
+    (screening/insert-result! pool {:id                 (random-uuid)
+                                    :organisation-id    organisation-id
+                                    :instruction-id     instruction-id
+                                    :list-version       (:version listed)
+                                    :origin             :core
+                                    :outcome            outcome
+                                    :core-outcome       outcome
+                                    :agrees             true
+                                    :instruction-digest (subject/digest instruction)
+                                    :disposition        :accepted
+                                    :recorded-by        actor-id
+                                    :core-entries       matched})))

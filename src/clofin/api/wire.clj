@@ -21,6 +21,8 @@
             [clofin.ledger.account :as account]
             [clofin.money :as money]
             [clofin.payments.state :as payment-state]
+            [clofin.screening.decision :as screening-decision]
+            [clofin.screening.subject :as screening-subject]
             [clojure.string :as str])
   (:import [java.time Instant LocalDate]
            [java.time.format DateTimeParseException]))
@@ -247,7 +249,12 @@
            ;; operation the state machine would refuse. A caller reading this
            ;; does not have to hold a copy of the state machine to know what it
            ;; may do next (ADR-0014).
-           "permittedTransitions" (mapv name (payment-state/permitted-events (:status pi)))}
+           "permittedTransitions" (mapv name (payment-state/permitted-events (:status pi)))
+           ;; The digest core's screening decisions are bound to (C-07, ADR-0028
+           ;; D5) — identity and the screened content, not status — so a
+           ;; screening client echoes what core holds rather than reimplementing
+           ;; the canonical form. Read-only: derived, never accepted.
+           "screeningDigest"  (screening-subject/digest pi)}
     (:created-at pi)  (assoc "createdAt" (str (:created-at pi)))
     ;; Present only on a reversal, where it names the settled instruction this
     ;; one was raised against.
@@ -310,7 +317,7 @@
   rather than an id the approver would have to resolve in another system. An
   approval given without context is a rubber stamp."
   [{:keys [instruction approvals approvals-held approvals-required
-           approvals-remaining can-approve? refusal-reason]}
+           approvals-remaining can-approve? refusal-reason screening]}
    instruction->wire-fn]
   (cond-> {"paymentInstruction"  (instruction->wire-fn instruction)
            "priorApprovals"      (mapv approval->wire approvals)
@@ -321,7 +328,15 @@
            ;; would be a control implemented in a list query, and it would
            ;; leave a maker unable to see that their own payment is waiting.
            "canApprove"          (boolean can-approve?)}
-    refusal-reason (assoc "refusalReason" (name refusal-reason))))
+    refusal-reason (assoc "refusalReason" (name refusal-reason))
+    ;; The screening outcome beside the amount (PR-015, C-07): core's latest
+    ;; accepted decision over the instruction's *current* content, read by the
+    ;; handler in the same request. Absent only for an instruction submitted
+    ;; before migration `0015`, which no decision covers.
+    screening (assoc "screening" {"resultId"    (str (:id screening))
+                                  "outcome"     (name (:outcome screening))
+                                  "listVersion" (:list-version screening)
+                                  "recordedAt"  (str (:recorded-at screening))})))
 
 (defn audit-event->wire
   [event]
@@ -358,3 +373,75 @@
    ;; to infer from the absence of a field that nothing was left out.
    "truncated"      (boolean (:truncated? statement))
    "movementCap"    cap})
+
+;; ---------------------------------------------------------------------------
+;; Screening (TASK-017, C-07)
+;; ---------------------------------------------------------------------------
+
+(defn screening-rule->wire
+  [{:keys [field operator value]}]
+  {"field" (name field) "operator" (name operator) "value" value})
+
+(defn screening-entry->wire
+  [{:keys [id rules]}]
+  {"id" id "rules" (mapv screening-rule->wire rules)})
+
+(defn screening-list-summary->wire
+  "A list version without its entries. `accepted` is derived — not retired —
+  so a reader need not know that a null `retiredAt` means the list in force."
+  [{:keys [version source loaded-at retired-at entry-count]}]
+  (cond-> {"version"    version
+           "source"     source
+           "loadedAt"   (str loaded-at)
+           "entryCount" entry-count
+           "accepted"   (nil? retired-at)}
+    retired-at (assoc "retiredAt" (str retired-at))))
+
+(defn screening-list->wire
+  "A list version with every entry and rule — the list a past decision can be
+  reproduced against."
+  [screening-list]
+  (assoc (screening-list-summary->wire screening-list)
+         "entries" (mapv screening-entry->wire (:entries screening-list))))
+
+(defn screening-result->wire
+  "One screening result. `matchedEntries` is what the result claims — core's
+  own entries for a core result, the client's for a client result —
+  and `coreMatchedEntries` what core recomputed. Entry ids, sorted."
+  [r]
+  (cond-> {"id"                 (str (:id r))
+           "organisationId"     (str (:organisation-id r))
+           "instructionId"      (str (:instruction-id r))
+           "listVersion"        (:list-version r)
+           "origin"             (name (:origin r))
+           "outcome"            (name (:outcome r))
+           "matchedEntries"     (vec (:matched-entries r))
+           "coreOutcome"        (name (:core-outcome r))
+           "coreMatchedEntries" (vec (:core-matched-entries r))
+           "agrees"             (boolean (:agrees r))
+           "instructionDigest"  (:instruction-digest r)
+           "disposition"        (name (:disposition r))
+           "recordedBy"         (str (:recorded-by r))
+           "recordedAt"         (str (:recorded-at r))
+           "auditEventId"       (str (:audit-event-id r))}
+    (:disposition-reason r) (assoc "dispositionReason" (:disposition-reason r))
+    (:case-id r)            (assoc "caseId" (str (:case-id r)))
+    (:screened-at r)        (assoc "screenedAt" (str (:screened-at r)))))
+
+(defn screening-case->wire
+  [c]
+  (cond-> {"id"                   (str (:id c))
+           "organisationId"       (str (:organisation-id c))
+           "instructionId"        (str (:instruction-id c))
+           "resultId"             (str (:result-id c))
+           "instructionDigest"    (:instruction-digest c)
+           "listVersion"          (:list-version c)
+           "status"               (name (:status c))
+           "openedAt"             (str (:opened-at c))
+           ;; Derived from the case's one rule, so a client is told what it may
+           ;; do next rather than holding a copy of the rule.
+           "permittedTransitions" (mapv name (get screening-decision/case-events (:status c)))}
+    (:disposition c)      (assoc "disposition" (name (:disposition c)))
+    (:rationale c)        (assoc "rationale" (:rationale c))
+    (:dispositioned-by c) (assoc "dispositionedBy" (str (:dispositioned-by c)))
+    (:dispositioned-at c) (assoc "dispositionedAt" (str (:dispositioned-at c)))))

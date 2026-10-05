@@ -37,7 +37,7 @@ scheme or central bank and holds no regulatory authorisation.
 
 | | |
 |---|---|
-| Prerequisite | `make up` has completed and `make ready` answers |
+| Prerequisite | `make up` has completed and `make ready` answers — and, since TASK-017, `make load-screening-list` has run: every submission is screened against the accepted synthetic list, and with none accepted it is refused `422 no-screening-list-accepted`. This script's names are clear against the shipped list. |
 | Tools | `curl`, `psql` (via `make db-shell`), and a terminal |
 | Time | About 25 minutes |
 | Data | Synthetic only. Nothing here names a real person or counterparty |
@@ -50,12 +50,12 @@ export BASE=http://localhost:8080
 
 Two conventions used throughout:
 
-- Every payment and approval mutation needs an `Idempotency-Key` — the six
-  operations `clofin.idempotency/protected-operations` names, which are the
-  ones this script uses. Use a fresh UUID each time — `uuidgen` or any random
-  string will do. The route table's other eleven mutations do not take one and
-  ignore it if you send one; `docs/COMPLIANCE.md` C-06 says what guards them
-  instead.
+- Every payment and approval mutation needs an `Idempotency-Key` — six of the
+  eight operations `clofin.idempotency/protected-operations` names (the other
+  two are screening's, which this script does not use; UAT-008 does). Use a
+  fresh UUID each time — `uuidgen` or any random string will do. The route
+  table's other eleven mutations do not take one and ignore it if you send
+  one; `docs/COMPLIANCE.md` C-06 says what guards them instead.
 - Every request except organisation creation needs an `X-Actor-Id`. **This is
   not authentication that resists an adversary**, and the API contract says so:
   there is no token and no signature. It names which seeded actor you are

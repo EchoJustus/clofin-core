@@ -184,7 +184,28 @@
          ;; transition. The decision itself is `approval.recorded`, as it is for
          ;; every other decision in CloFin — one refusal, two events, because a
          ;; decision being taken and a subject becoming terminal are two facts.
-         "reconciliation-adjustment.rejected"]))
+         "reconciliation-adjustment.rejected"
+
+         ;; Screening (TASK-017, C-07).
+         ;;
+         ;; **Every result stored is one event**, whatever it says: core's own
+         ;; decision at a submission, a client's result core reproduced, and a
+         ;; client's result core refused (`screening-result-mismatch`) — which
+         ;; is stored, not rolled back, because the disagreement is the evidence
+         ;; (L-11). The disposition travels in the subject digest, not in a
+         ;; second term: a result arriving is one fact whatever core made of it.
+         ;; Recording one is **not** a transition of the payment, and emits no
+         ;; `payment.*` event under any outcome (ADR-0028 D5: a `201` means
+         ;; evidence recorded and nothing else).
+         "screening-result.recorded"
+         ;; One per case, in the transaction where the row first exists — L-7's
+         ;; requirement of a `<subject>.<transition>` term.
+         "screening-case.opened"
+         ;; Emitted **only** in the transaction where the case reaches its one
+         ;; terminal status. The decision and the transition are one fact here
+         ;; (there is no partial step — one compliance actor decides), so one
+         ;; term, unlike `approval.recorded` beside `payment.approved`.
+         "screening-case.dispositioned"]))
 
 (def subject-types
   "Every kind of thing an audit event may be about.
@@ -211,7 +232,16 @@
          ;; settlement item's events on the instruction and on the batch.
          "reconciliation-statement"
          "reconciliation-break"
-         "reconciliation-adjustment"]))
+         "reconciliation-adjustment"
+         ;; Screening (TASK-017). A result's matched entries have no identity of
+         ;; their own (a match is addressed by its result and side), so an event
+         ;; about either names the result, whose projection carries both
+         ;; entry-id vectors — the reasoning that keeps a statement's matches on
+         ;; the statement. A screening *list* is deliberately absent: it belongs
+         ;; to no organisation, and its loading is recorded by its own
+         ;; append-only rows (C-07, evidence).
+         "screening-result"
+         "screening-case"]))
 
 (def payment-action-prefix
   "The one action prefix whose subject type is not spelt the same way.
@@ -599,3 +629,41 @@
   [adjustment]
   (when adjustment
     (select-keys adjustment reconciliation-adjustment-fields)))
+
+(def screening-result-fields
+  "The fields of a screening result that a digest covers.
+
+  Everything the decision is and everything it was taken over: the list
+  version, who produced it, both outcomes, whether they agree, the instruction
+  digest it is bound to, what core did with it, why, and **both entry-id
+  vectors** — what was claimed and what core found. A result is append-only, so
+  the digest proves the row and its match rows have not moved since.
+
+  `recorded-at` and `screened-at` are outside the projection for the reason
+  `instruction-fields` excludes `created-at`."
+  [:id :organisation-id :instruction-id :list-version :origin :outcome :core-outcome
+   :agrees :instruction-digest :disposition :disposition-reason
+   :matched-entries :core-matched-entries])
+
+(defn screening-result-subject
+  "The projection of a screening result that its audit digests are taken over."
+  [result]
+  (when result
+    (select-keys result screening-result-fields)))
+
+(def screening-case-fields
+  "The fields of a screening case that a digest covers.
+
+  What the case is about — instruction, the result that opened it, the digest
+  and list version it is bound to — and everything its one transition changes:
+  status, disposition, rationale and the actor who gave it. The rationale is
+  digested, not stored here, like every other payload (ADR-0016): the trail
+  proves what was written, the case row says it."
+  [:id :organisation-id :instruction-id :result-id :instruction-digest :list-version
+   :status :disposition :rationale :dispositioned-by])
+
+(defn screening-case-subject
+  "The projection of a screening case that its audit digests are taken over."
+  [screening-case]
+  (when screening-case
+    (select-keys screening-case screening-case-fields)))

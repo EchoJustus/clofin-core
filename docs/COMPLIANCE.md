@@ -115,7 +115,7 @@ query is only evidence if it can fail.
 × instruction matrix — six role sets, three approval ceilings and three amounts,
 including the empty role set and the actor holding every role — and calls
 `evaluate` **directly**, with no HTTP anywhere in the file. It is *not* the
-power set of the five roles and it does not enumerate every numeric limit or
+power set of the six roles and it does not enumerate every numeric limit or
 amount; the claim was written as "every role set, every limit, every amount"
 until the `ref-1` release audit (finding **A-001**), which is a description of a
 test nobody could write for an unbounded set. What the table does cover
@@ -292,10 +292,12 @@ The transactional property is made structural rather than remembered.
 `clofin.audit.repository/record!` takes a `tx` and never opens one, so the only
 connection available to a caller *is* the transaction carrying the change.
 Every service that composes a change with its event likewise takes the caller's
-transaction and requires no `clofin.db.*` namespace at all — all **five** of
+transaction and requires no `clofin.db.*` namespace at all — all **six** of
 them: `clofin.payments.approval-service`, `clofin.ledger.service`,
-`clofin.organisations.service`, `clofin.settlement.service` and
-`clofin.recon.service`. A service that could open its own connection is a
+`clofin.organisations.service`, `clofin.settlement.service`,
+`clofin.recon.service` and, since TASK-017, `clofin.screening.service` (C-07:
+core's screening result, a client's evidence, the case a hit opens and a
+disposition, each with its event). A service that could open its own connection is a
 service that could write an audit event outside the change it describes, and
 `clofin.ledger.purity-test` fails the build if any of them acquires one.
 
@@ -306,9 +308,9 @@ control's own reconciliation row in the matrix below by omission (release-audit
 finding **2B-005**, standing lesson **L-15**: a document that understates what
 exists is as false as one that overstates it, and less likely to be caught
 because nobody is looking). The list is now compared with
-`clofin.ledger.purity-test/service-namespaces` in both directions, so a sixth
+`clofin.ledger.purity-test/service-namespaces` in both directions, so a
 service arriving without a line here fails the build rather than passing
-unnoticed.
+unnoticed — which is how `clofin.screening.service` arrived, with its line.
 
 **And the other half, which was documentation until audit finding F-011.** Those
 services could not *open* a transaction; nothing made a caller *supply* one.
@@ -374,7 +376,7 @@ decided it, while one starting from a payment could (release-audit finding
 | `clofin.audit.repository/record!` | Writes on the caller's transaction. Cannot open one. |
 | `clofin.audit/event` | Refuses an action outside the vocabulary — default deny reaching the audit trail, so "show me every approval in August" has a complete answer. |
 | `clofin.audit/event`, actor rule | Refuses a **null actor** for any action outside `clofin.audit/bootstrap-actions`, so the trail's one unattributed case is the one that is documented and not merely the one that happens to be there ([ADR-0017](ADR/0017-bootstrap-identity-for-organisation-creation.md)). |
-| `clofin.ledger.purity-test` | Fails the build if `clofin.payments.approval-service`, `clofin.ledger.service`, `clofin.organisations.service` or `clofin.settlement.service` acquires a `clofin.db.*` dependency. A service that can open a connection is a service that can write an event outside the change it describes. |
+| `clofin.ledger.purity-test` | Fails the build if any of the six services named above acquires a `clofin.db.*` dependency. A service that can open a connection is a service that can write an event outside the change it describes. (This row named four until TASK-017 — `clofin.recon.service` had been missing from it since TASK-008, though the test itself guarded it; the list is now the paragraph's, by reference, rather than a second copy.) |
 | `clofin.audit.repository/assert-unit-of-work!` | Refuses a pool or an autocommit connection at the entry of every audit-composing service, **before its first write**. The runtime half of the rule above: the purity test says a service cannot open a transaction, this says a caller must have supplied one (finding **F-011**, lesson **L-13**). |
 | `scheme_response_append_only`, `scheme_response_no_truncate` | Reject `UPDATE`, `DELETE` and `TRUNCATE` on the settlement receipt table (migration `0009`), reusing `reject_mutation()`. In the raw-SQL verb matrix since finding **F-010** — before which their removal left the focused suites green. |
 
@@ -462,6 +464,22 @@ three now records one event in the transaction that carries the change:
 | `POST /accounts` | `account.created` | `account` | `clofin.ledger.service` |
 | `POST /journal-entries` | `journal-entry.posted` | `journal-entry` | `clofin.ledger.service` |
 
+The screening writes (TASK-017, C-07) are audited the same way, in the same
+transaction as the rows they describe:
+
+| Write | Action | Subject | Composed by |
+|---|---|---|---|
+| `POST /payment-instructions/{id}/submission` — core's screening result, at every submission core screens (permitted or refused; a submission refused before screening — provenance, the lifecycle, no list accepted — stores none) | `screening-result.recorded` (and `payment.submitted` only when the transition commits) | `screening-result` | `clofin.screening.service` |
+| `POST /payment-instructions/{id}/screening-results` — a client's result, accepted **or refused** | `screening-result.recorded` — never a `payment.*` event | `screening-result` | `clofin.screening.service` |
+| a hit that opens a case, at either of the two above | `screening-case.opened` | `screening-case` | `clofin.screening.service` |
+| `POST /screening-cases/{id}/disposition` | `screening-case.dispositioned` | `screening-case` | `clofin.screening.service` |
+
+A refused submission and a refused result are **receipts**: the row and its
+event commit, and the refusal is rendered afterwards (lesson **L-11**). Loading a
+screening list is the one screening write with no tenant event — a list belongs
+to no organisation, and `audit_event` requires one; its record is the list's own
+append-only rows (see C-07).
+
 Both services take the caller's transaction and require no `clofin.db.*`
 namespace, exactly as `clofin.payments.approval-service` does — the handler
 opens the transaction, because a transport layer may and a service may not.
@@ -530,8 +548,9 @@ which also records why a seeded `system` actor row was rejected).
 
 **Design.** Every operation routed through
 `clofin.idempotency.repository/execute-once!` requires an `Idempotency-Key` —
-the six payment and approval mutations: create, amend, submit, cancel, approve
-and withdraw. The key, the
+eight mutations: the six payment and approval mutations — create, amend, submit,
+cancel, approve and withdraw — and, from TASK-017, recording a screening result
+and dispositioning a screening case. The key, the
 organisation and a digest of the request are stored with the resulting response,
 **in the same transaction as the effect they protect** — a key stored separately
 from the effect leaves a window in which a crash makes a payment with no record
@@ -635,21 +654,145 @@ rely on.
 
 ---
 
-### C-07 Sanctions screening before release 📋
+### C-07 Sanctions screening before release ✅
 
 **Statement.** No instruction can be released without a completed screening
 decision, and a hit blocks release pending disposition.
 
-**Design.** Screening is a precondition of the `submitted → pending_approval`
-transition, so it cannot be skipped by ordering. The result records the **list
-version**, without which a past decision cannot be reproduced — the question an
-investigation actually asks.
+**Scope of this control, stated first because it is the boundary that matters.**
+The screening list is **synthetic** — CloFin-defined data, not derived from any
+real sanctions or watch list — and the matching is **exact**: string equality on
+three beneficiary fields, with no case folding, trimming, transliteration or
+scoring. This control builds the *shape* of screening — a deterministic decision
+against a versioned, retained list, gating the lifecycle, with a case and a
+segregated disposition — and **makes no claim about real-world screening
+quality**. A matcher that normalised names would be a different operator with a
+different false-positive profile, and is not built.
 
-**Enforcement point.** State machine precondition; case creation on a hit.
-*(Increment 7.)*
+**Design.** Screening is a precondition of the `submit` transition —
+`draft → pending-approval` — so it cannot be skipped by ordering: approval,
+release and settlement all follow `submit`, and rely on the decision retained
+there. (This sentence named a `submitted → pending_approval` transition until
+TASK-017; there is no `submitted` state, and the event is `submit`, checked
+against `clofin.payments.state/transitions`.) Screening runs at **every**
+submission: an amendment returns an instruction to `draft`, so the next
+submission screens the amended content again.
 
-**Evidence.** `ScreeningResult` with list version, matched entries and
-disposition rationale.
+- **Core screens, and only core's decision counts** ([ADR-0028](ADR/0028-satellite-clients-integrate-through-core-owned-contracts.md)
+  D5). At `submit`, `clofin.screening.service/submit-screened!` locks the
+  instruction, reads the one accepted list, evaluates the locked row with
+  `clofin.screening.rules/evaluate`, stores core's result, and decides with
+  `clofin.screening.decision/decide`. A `clear` — or a hit a compliance actor
+  dispositioned `false-positive` for this content against this list — permits
+  the transition; any other hit is `409 screening-hit`, and opens a case unless
+  a case already covers this content against this list (it is named) or a case
+  still open on earlier content, or against a list since replaced, blocks it
+  (named `blockingCaseId`, below).
+- **The repository re-decides under the lock.**
+  `clofin.payments.repository/transition!` reads the latest core result for the
+  locked row's own digest and asks `decide` again before it moves the status;
+  anything but a permit is `409 screening-required` or `screening-hit`. A direct
+  call of `transition!` with `:submit` and no decision is therefore refused by
+  the repository itself — the gate does not trust a flag its caller set.
+- **A client's result is evidence, never authorisation.**
+  `POST /payment-instructions/{id}/screening-results` records a client's `clear`
+  or `hit` bound to the instruction's digest and a list version; core recomputes
+  it against that version and stores both outcomes and whether they agree. One
+  core cannot reproduce is stored **refused** and answered `422
+  screening-result-mismatch` after the row commits. Neither transitions
+  anything, and `decide` never reads a client's result.
+- **Every decision is reproducible from what is retained**: the list version
+  (immutable once loaded; readable at `GET /screening-lists/{version}`), the
+  instruction digest the decision was taken over
+  (`clofin.screening.subject/digest` — identity and screened content, not status
+  — rendered as `screeningDigest`), the matched entries on each side, the actor
+  and the time.
+- **A hit opens a case; a compliance actor who is not the maker dispositions
+  it**, `false-positive` or `confirmed-hit`, with a retained rationale. The
+  maker is refused `403 self-disposition` whatever roles they hold (C-01's
+  shape). A disposition is bound to the digest and list version its case names:
+  an amendment or a new list makes it moot, and the next submission opens a new
+  case if the hit stands. **At most one case covers an instruction's content
+  against a list, and a disposition is never superseded by later evidence**: a
+  client's accepted hit on content a case already covers joins that case, open
+  or dispositioned, and opens none. **At most one case is open per
+  instruction**: while a case is still open on earlier content (or against a
+  replaced list), no case can open for the current content, and `submit`'s
+  `409` names the open one as `errors.blockingCaseId` — never as this content's
+  `caseId`. Compliance then dispositions the stale case before the current
+  content's case can open (017-REQ O-6).
+- **Exactly one list is accepted at a time, and none means no submission.** With
+  no list accepted, `submit` is `422 no-screening-list-accepted` — unconfigured
+  is not unsupervised; an empty list would make every instruction clear, which
+  is the control's absence wearing its name. Lists are loaded by the operator's
+  tool (`make load-screening-list`), **never by a client** — a client that could
+  load the list it is screened against would make this control unenforceable —
+  and never by a migration.
+
+**Enforcement points.**
+
+| | |
+|---|---|
+| `clofin.payments.repository/transition!` (its `assert-screened!` gate) | The state-machine precondition: `:submit` requires core's permitting decision over the locked row's current digest, re-read under the row lock. |
+| `clofin.screening.service` | `submit-screened!` screens every submission in the submitting transaction; `record-result!` records a client's result as evidence, never as a transition; `disposition!` refuses the maker and a second disposition. Each asserts its unit of work before its first write (C-05). |
+| `clofin.screening.decision/decide` | The judgement both callers ask: core's result only, for the current digest, against a list not retired, with the case for that content and list. |
+| `screening_case_open_key` | At most one open case per instruction, decided by the index rather than by a read. |
+| `clofin.screening.service/record-result!` and `decide`, under the instruction's lock | At most one case for an instruction's content against a list — **by a read under the lock, not by a schema constraint**: migration `0015` has no unique key on (instruction, digest, list), so a writer that bypassed the service could still insert a second (017-REQ O-7 asks whether a later migration should add one). |
+| `clofin.screening.list/lock-key` (a transaction-scoped advisory lock) | Every decision — core's at `submit`, a client's result, the repository's gate — holds it shared; the loading tool holds it exclusive. A list change waits for every decision in flight, no decision runs during one, and the tool stamps `retired_at` and `loaded_at` with one instant after its waits. |
+| `screening_case_disposition_final` | A dispositioned case cannot be changed by any writer; a second disposition is a new case. |
+| `screening_list_retire_only`, `screening_entry_append_only`, `screening_rule_append_only`, `screening_result_append_only`, `screening_result_match_append_only` and the `…_no_truncate` triggers | A list version is immutable once loaded but for its retirement, once; a result and its matched entries cannot be rewritten, deleted or truncated. |
+| `screening_result_core_agrees_with_itself`, `screening_result_refusal_needs_reason`, `screening_case_disposition_complete` | A core result cannot disagree with itself; a refused result names its reason; a disposition without a rationale cannot be stored. |
+| `clofin.authz.model` | Only `compliance` holds `screening/disposition`, and no role holds it with `payment/create`, `payment/submit` or `payment/approve`; `screening-service` writes nothing but evidence. **The separation is per role, not per actor**: the maker is refused per case (`self-disposition`), but an actor *granted* both `compliance` and `approver` can disposition a hit and then approve the same instruction — nothing refuses that per case today (017-REQ O-15). |
+
+**Evidence.** Three reads and the trail. `GET /screening-results?instructionId=`
+lists every result about an instruction — core's and clients', accepted and
+refused — with the list version, digest, both outcomes, both entry sets, the
+actor, the time and the `screening-result.recorded` event's id.
+`GET /screening-cases` and `GET /screening-cases/{id}` give each case's
+binding, disposition, rationale and who gave it; the evidence pack for a case
+(`GET /audit/evidence/{caseId}`) is its `screening-case.opened` then
+`screening-case.dispositioned`. `GET /screening-lists/{version}` returns the
+list a decision names, entry by entry. **Loading a list is recorded by the list
+tables, not by the audit trail**: `screening_list.loaded_at`, `source` and
+`retired_at`, on rows the database keeps immutable, are the record of which list
+was in force when — `audit_event` requires an organisation, and a list belongs
+to none. **The list a decision was taken against is its `list_version`; when,
+relative to that list's `loaded_at` and `retired_at`, and in what order, is
+read from `screening_result.recorded_at`** (`clock_timestamp()`, written after
+the instruction's lock and the list lock were taken), not from an event's
+`occurred_at` or a case's `opened_at`: those are the transaction's start time,
+shared by every row it writes with its event, and a decision that waited for a
+list change began before that change. The approval queue shows the checker core's screening outcome beside
+the amount (PR-015).
+
+**Tests.** `clofin.api.screening-api-test` carries ADR-0028's executable
+identifiers — `ac-17-1-submit-answers-409-screening-hit-and-emits-no-payment-submitted-event`,
+`ac-17-2-a-hit-opens-a-case-in-the-same-transaction`,
+`ac-17-3-an-unaccepted-list-version-is-422`,
+`ac-17-4-an-instruction-digest-mismatch-is-422-and-changes-nothing`,
+`ac-17-5-a-result-core-cannot-reproduce-is-422-screening-result-mismatch-and-is-recorded-as-refused`,
+`ac-17-6-a-201-screening-result-leaves-status-draft-and-emits-no-transition-event`
+and `ac-17-9-a-disposition-is-never-the-makers-and-is-final` —
+with `clofin.screening.concurrency-test/ac-17-7-amend-and-screening-result-serialise-on-the-instruction-row`,
+`clofin.payments.repository-test/ac-17-11-submit-without-a-screening-decision-is-refused-by-the-repository-itself`,
+`clofin.screening.rules-test` (the matrix and an order-independence property),
+`clofin.screening.repository-test` (every schema refusal, application bypassed)
+and `clofin.tools.screening-list-test` (the load-time refusals and the
+one-transaction replacement). The negative controls for each are recorded in
+`docs/audits/017-REQ-screening-and-cases.md`.
+
+**Boundary of this control.** Screening gates `submit` and nothing later:
+approval, release and settlement rely on the retained decision, and an
+amendment forces a new one — re-screening at release is out of scope by
+decision, not by omission. **So the statement holds for every instruction
+submitted under migration `0015` and later, and not for one submitted before
+it**: an instruction already `pending-approval` or `approved` on a database
+when `0015` is applied carries no screening decision and can still be approved,
+released and settled. A `pending-approval` one's queue row carries no
+`screening` member, which is how a checker sees it; an `approved` one has no
+queue row, and shows only by having no core result at
+`GET /screening-results?instructionId=`. A stack built from empty has no such instruction. Lists are one synthetic list for every tenant.
+Fraud scoring (`FraudAssessment`, PR-062) remains designed and not built.
 
 ---
 
@@ -679,7 +822,10 @@ Four properties, each mechanical rather than remembered:
 Which role can do what is stated once, in `clofin.authz.model/role-permissions`.
 `operator` is the maker and cannot approve; `approver` is the checker and cannot
 raise a payment; `controller` opens accounts and posts entries and deliberately
-cannot approve; `auditor` holds reads only.
+cannot approve; `compliance` reads and dispositions screening cases and raises,
+submits and approves nothing; `auditor` holds reads only; and
+`screening-service` — a screening client's seeded identity (ADR-0028 D8) —
+records screening evidence and writes nothing else.
 
 **Enforcement points.**
 
@@ -687,7 +833,7 @@ cannot approve; `auditor` holds reads only.
 |---|---|
 | `clofin.api.principal/authorise!` | At the API boundary, on every operation. There is no handler that authenticates without authorising — "authenticated" is not a permission. |
 | `clofin.authz.approval/evaluate` | Again in the domain, for the operation that moves a payment forward. This is the one that can see the *instruction*, so it is the one that reports the reason. |
-| `actor_role.role_known` | The database refuses a role outside the five. There is no `superuser` to grant. |
+| `actor_role.role_known` | The database refuses a role outside the six. There is no `superuser` to grant. (Five until migration `0015` added `screening-service`.) |
 | `clofin.authz.model/authorise!` | An unknown *permission* raises rather than denying, so a typo in a handler is a failure instead of unreachable code that looks like a refusal. |
 
 **Evidence.** `actor`, `actor_role` and `approver_limit` state what each actor

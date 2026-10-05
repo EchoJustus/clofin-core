@@ -45,6 +45,8 @@
             [clofin.recon.break-state :as break-state]
             [clofin.recon.matching :as matching]
             [clofin.recon.statement :as recon-statement]
+            [clofin.screening.decision :as screening-decision]
+            [clofin.screening.rules :as screening-rules]
             [clofin.settlement.batch :as batch]
             [clofin.settlement.response :as response]
             [clofin.test-db :as tdb]
@@ -146,7 +148,22 @@
    "recon_break_kind_known"             #'matching/break-kinds
    "recon_break_state_known"            #'break-state/states
    "recon_adjustment_status_known"      #'adjustment/statuses
-   "recon_adjustment_direction_known"   #'adjustment/directions})
+   "recon_adjustment_direction_known"   #'adjustment/directions
+   ;; Screening (migration `0015`, TASK-017) — eight, the count the brief's
+   ;; pre-flight took. `screening_result_outcome_known` and
+   ;; `screening_result_core_outcome_known` are one vocabulary in two columns,
+   ;; owned by one set, so an outcome added to one constraint and not the other
+   ;; fails here. Two more single-value vocabularies are rendered by PostgreSQL
+   ;; as `=` rather than `= ANY (ARRAY[…])` and so are not discovered above:
+   ;; `a-017-the-single-value-screening-vocabularies-have-owners-too` below.
+   "screening_rule_field_known"          #'screening-rules/fields
+   "screening_result_origin_known"       #'screening-decision/origins
+   "screening_result_outcome_known"      #'screening-decision/outcomes
+   "screening_result_core_outcome_known" #'screening-decision/outcomes
+   "screening_result_disposition_known"  #'screening-decision/result-dispositions
+   "screening_result_match_side_known"   #'screening-decision/match-sides
+   "screening_case_status_known"         #'screening-decision/case-statuses
+   "screening_case_disposition_known"    #'screening-decision/case-dispositions})
 
 ;; ---------------------------------------------------------------------------
 ;; The comparison
@@ -201,3 +218,40 @@
             so DOMAIN_MODEL's \"constrained vocabulary\" was true of the
             application path and false of the system of record"
     (is (contains? (catalogue-vocabularies) "payment_purpose_code_known"))))
+
+;; ---------------------------------------------------------------------------
+;; TASK-017 — the vocabularies the discovery cannot see
+;; ---------------------------------------------------------------------------
+;;
+;; `check (operator in ('exact'))` is stored by PostgreSQL as
+;; `operator = 'exact'::text`: a one-value `IN` list is not an array, so
+;; `vocabulary-marker` never finds it. Two of migration `0015`'s vocabularies
+;; have one value each. They are compared here by name — the one place this file
+;; names constraints rather than discovering them, and it says so — so the
+;; dimension the discovery is blind to (a vocabulary of one) is still guarded
+;; (L-17).
+
+(defn- single-value-literal
+  [constraint]
+  (some->> (db/query-one tdb/*pool*
+                         ["select pg_get_constraintdef(c.oid) as definition
+                             from pg_constraint c
+                             join pg_class t on t.oid = c.conrelid
+                             join pg_namespace n on n.oid = t.relnamespace
+                            where n.nspname = 'public' and c.conname = ?"
+                          constraint])
+           :definition
+           (re-find #"= '([^']*)'::text")
+           second))
+
+(deftest a-017-the-single-value-screening-vocabularies-have-owners-too
+  (doseq [[constraint owner] {"screening_rule_operator_known"         #'screening-rules/operators
+                              "screening_result_refusal_reason_known" #'screening-decision/stored-refusal-reasons}]
+    (testing constraint
+      (let [literal (single-value-literal constraint)]
+        (is (some? literal) (str constraint " is not a one-value check in the live catalogue"))
+        (is (not (contains? (catalogue-vocabularies) constraint))
+            (str constraint " is now an array vocabulary; move it to `owners`"))
+        (is (= #{literal} (names @owner))
+            (str constraint " admits " (pr-str literal) " and " (symbol owner)
+                 " holds " (pr-str (names @owner))))))))

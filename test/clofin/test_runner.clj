@@ -37,6 +37,9 @@
     clofin.recon.matching-test
     clofin.recon.break-state-test
     clofin.recon.adjustment-test
+    clofin.screening.rules-test
+    clofin.screening.subject-test
+    clofin.screening.decision-test
     clofin.config-test
     ;; What `GET /` may report as the running commit, and the several ways it
     ;; could report something plausible and wrong instead (ADR-0027).
@@ -62,6 +65,8 @@
     ;; Every field of the stamp removed in turn, with the walk itself asserted
     ;; exhaustive against the requirement list (AC-2, lesson L-13).
     clofin.tools.capture-test
+    ;; 017-REQ R-11: the screening-list loader's command line, no database.
+    clofin.tools.screening-list-args-test
     ;; 2C-006, lesson L-19: a capture binds to the process it started, not to a
     ;; port and not to a schema version. Needs no service — the stranger on the
     ;; port is a local HttpServer.
@@ -107,6 +112,10 @@
     ;; 2C-002 and 2B-004: reconciliation where the outcome depends on timing —
     ;; the receipt-collision matrix and the two-connection lock proofs.
     clofin.recon.concurrency-test
+    clofin.screening.repository-test
+    clofin.tools.screening-list-test
+    clofin.api.screening-api-test
+    clofin.screening.concurrency-test
     clofin.system-test])
 
 (defn integration?

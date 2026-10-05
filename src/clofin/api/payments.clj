@@ -13,7 +13,8 @@
     already been used for a different request.
 
   **Every mutating operation in this namespace is idempotent** (PR-040), which
-  is six of the route table's seventeen mutations — these and approvals'; the
+  is eight of the route table's nineteen mutations — these, approvals' and
+  screening's; the
   set is `clofin.idempotency/protected-operations` and the other eleven are
   guarded by something else, each named in `docs/COMPLIANCE.md` C-06. The
   qualifier was absent until the `ref-2` release audit read this sentence as
@@ -31,9 +32,12 @@
   a week-old submission must be told what happened, not told its date is
   invalid.
 
-  A rejected request does not consume its key. The effect and the key row share
-  a transaction, so a throw takes both down and a caller that fixes its body and
-  retries under the same key gets a fresh execution rather than a `409`."
+  A request rejected by a throw does not consume its key. The effect and the key
+  row share a transaction, so a throw takes both down and a caller that fixes
+  its body and retries under the same key gets a fresh execution rather than a
+  `409`. **One refusal here is not a throw**: `submit`'s `409 screening-hit` is
+  the effect's value, committed with core's result and the case it opened, so
+  it binds the key and a retry under it replays the `409` (017-REQ O-4)."
   (:require [clofin.api.principal :as principal]
             [clofin.api.wire :as wire]
             [clofin.audit :as audit]
@@ -46,6 +50,7 @@
             [clofin.payments.instruction :as instruction]
             [clofin.payments.repository :as payments]
             [clofin.payments.state :as state]
+            [clofin.screening.service :as screening]
             [clojure.string :as str])
   (:import [java.time LocalDate ZoneOffset]))
 
@@ -262,11 +267,17 @@
 
   The body is the stored JSON **string**, so a replay is byte-identical to the
   response the first call produced. That is also why the content type is set
-  here: the JSON middleware encodes data and leaves a string alone."
+  here: the JSON middleware encodes data and leaves a string alone.
+
+  A stored outcome of `400` or more is a refusal whose evidence committed with
+  the key — today only `submit`'s `409 screening-hit` — and is labelled as the
+  problem document it is, now and on every replay."
   ([outcome] (respond outcome {}))
   ([{:keys [status body replayed?]} headers]
    {:status  status
-    :headers (cond-> (assoc headers "content-type" "application/json")
+    :headers (cond-> (assoc headers "content-type" (if (>= status 400)
+                                                     "application/problem+json"
+                                                     "application/json"))
                ;; Stated rather than left to be inferred. Someone reconciling a
                ;; retry should be able to see that CloFin replayed rather than
                ;; acted.
@@ -667,6 +678,49 @@
                {:status 200 :body (wire/instruction->wire after)})))]
       (respond outcome))))
 
+(defn- screening-hit-outcome
+  "The `409 screening-hit` a refused submission answers, as an effect's value
+  so its evidence — core's result, and the case it opened — commits first."
+  [request {:keys [case blocking-case disposition list-version result]}]
+  (let [{:keys [status title]} (get err/error-types :conflict)]
+    {:status status
+     :body   (:body (resp/problem
+                     {:status   status
+                      :type     :conflict
+                      :title    title
+                      :detail   (cond
+                                  (= :confirmed-hit disposition)
+                                  (str "Screening case " (:id case) " confirmed this hit against list "
+                                       list-version "; the instruction cannot be submitted, and may be "
+                                       "cancelled")
+
+                                  ;; The open case is about earlier content or
+                                  ;; another list: dispositioning it decides
+                                  ;; nothing about this content, and is only what
+                                  ;; lets this content's case open (017-REQ R-2).
+                                  blocking-case
+                                  (str "Core's screening against list " list-version
+                                       " found a hit; no case could open for this content, because "
+                                       "screening case " (:id blocking-case) " is still open on "
+                                       (if (= (:list-version blocking-case) list-version)
+                                         "earlier content of this instruction"
+                                         (str "this instruction against list " (:list-version blocking-case)))
+                                       ". Once compliance has dispositioned it, the next submission "
+                                       "opens a case for this content")
+
+                                  :else
+                                  (str "Core's screening against list " list-version
+                                       " found a hit; screening case " (:id case)
+                                       " must be dispositioned false-positive by compliance before "
+                                       "this content can be submitted"))
+                      :instance (:correlation-id request)
+                      :errors   (cond-> {"reason"      "screening-hit"
+                                         "listVersion" list-version
+                                         "resultId"    (str (:id result))}
+                                  case          (assoc "caseId" (str (:id case)))
+                                  blocking-case (assoc "blockingCaseId" (str (:id blocking-case)))
+                                  disposition   (assoc "disposition" (name disposition)))}))}))
+
 (defn submit
   "`POST /payment-instructions/:id/submission` — submit a draft for approval.
 
@@ -681,10 +735,51 @@
   the row lock, via `clofin.payments.state/creator-only-events`.
 
   A submitted instruction stops at `pending-approval`. Moving it further is
-  `POST /payment-instructions/:id/approvals`."
+  `POST /payment-instructions/:id/approvals`.
+
+  **Core screens every submission** (C-07, docs/briefs/017), in the effect's
+  transaction, through `clofin.screening.service/submit-screened!`: the
+  accepted list, the locked row, core's result stored with its event, and the
+  decision. A `:permit` submits through `transition!` — whose own gate decides
+  again under the lock — and records `payment.submitted` here, as before. A hit
+  is `409 screening-hit` with `errors.caseId` and `errors.listVersion` (and
+  `errors.disposition` once a case confirmed it) — or `errors.blockingCaseId`
+  in place of `errors.caseId` when the instruction's one open case is about
+  earlier content or a replaced list (017-REQ O-6) — **rendered after the
+  transaction commits** so core's result and the case survive their own
+  refusal (L-11) — and the key is bound to that answer: a retry under it
+  replays the `409`; a submission after the disposition takes a new key. No
+  list accepted is `422 no-screening-list-accepted`, stored nothing, key
+  unconsumed. A refused submission writes no `payment.*` event."
   [pool]
-  (transition-handler pool :submit :payment/submit "payment.submitted"
-                      "submitPaymentInstruction"))
+  (fn [request]
+    (let [body (wire/read-object request)
+          [actor organisation-id]
+          (principal/for-request pool request :payment/submit body)
+          id (wire/read-uuid (get-in request [:path-params :id]) "id")
+          outcome
+          (idempotently
+           pool request organisation-id "submitPaymentInstruction"
+           (fn [tx]
+             (let [{:keys [refused? before instruction] :as screened}
+                   (screening/submit-screened! tx {:organisation-id organisation-id
+                                                   :instruction-id  id
+                                                   :actor           actor
+                                                   :correlation-id  (:correlation-id request)})]
+               (if refused?
+                 (screening-hit-outcome request screened)
+                 (do
+                   ;; Same transaction as the status change (C-05, PR-075).
+                   (audit-store/record! tx {:organisation-id organisation-id
+                                            :actor-id        (:id actor)
+                                            :action          "payment.submitted"
+                                            :subject-type    "payment-instruction"
+                                            :subject-id      id
+                                            :before          (audit/instruction-subject before)
+                                            :after           (audit/instruction-subject instruction)
+                                            :correlation-id  (:correlation-id request)})
+                   {:status 200 :body (wire/instruction->wire instruction)})))))]
+      (respond outcome))))
 
 (defn cancel
   "`POST /payment-instructions/:id/cancellation` — cancel an instruction.

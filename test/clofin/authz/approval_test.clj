@@ -70,7 +70,10 @@
     (doseq [roles [#{:operator}
                    #{:approver}
                    #{:operator :approver}
-                   #{:operator :approver :controller :compliance :auditor}]
+                   ;; Every role the model has, derived rather than listed, so a
+                   ;; role added later is in this cell without anyone editing it
+                   ;; (C-01's "the actor holding every role"; 017-REQ §8).
+                   (set model/roles)]
             limits [{} {"SGD" 1} {"SGD" 10000000}]
             amount [(money/of "SGD" 1) (money/of "SGD" 125000) (money/of "SGD" 99999999)]]
       (let [result (decide :actor (actor maker-id :roles roles :limits limits)

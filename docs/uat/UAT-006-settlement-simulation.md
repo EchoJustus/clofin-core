@@ -39,7 +39,7 @@ defect. That is what this document exists to detect.
 
 | | |
 |---|---|
-| Prerequisite | `make up` has completed and `make ready` answers |
+| Prerequisite | `make up` has completed and `make ready` answers — and, since TASK-017, `make load-screening-list` has run: every submission is screened against the accepted synthetic list, and with none accepted it is refused `422 no-screening-list-accepted`. This script's names are clear against the shipped list. |
 | Tools | `curl`, `jq`, `psql` (via `make db-shell`) |
 | Time | About 30 minutes |
 | Data | Synthetic only |

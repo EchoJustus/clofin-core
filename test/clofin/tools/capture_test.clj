@@ -608,6 +608,7 @@
                       stack/assert-port-free!         (fn [& _] :free)
                       store/reset-schema!             (fn [& _] "x_capture")
                       stack/migrate!                  (fn [& _] :migrated)
+                      stack/load-screening-list!      (fn [& _] :no-list)
                       stack/start!                    (fn [_] {:process nil
                                                                :base-url "http://127.0.0.1:1"
                                                                :readyz "{}"
@@ -627,6 +628,48 @@
         (is (= {:fixture (name binding) :quotations (name binding) :manifest (name binding)}
                @stamped)
             (str "start! established " binding))))))
+
+(deftest a-capture-loads-the-commit-s-list-after-migrating-and-before-the-service-starts
+  (testing "017-REQ R-4: from TASK-017 a commit refuses every submission until a
+            list is loaded, so `capture!` loads the commit's own list into the
+            capture database — after its migrations made the tables, before its
+            service starts and any scenario submits"
+    (let [base   (stamp (fake-git (answers)))
+          calls  (atom [])
+          loaded (atom nil)
+          called (fn [k v] (fn [& _] (swap! calls conj k) v))
+          writer (fn [_] {:path "x" :sha256 "0"})]
+      (with-redefs [prov/stamp                      (fn [_] base)
+                    stack/worktree!                 (fn [& _] "/nonexistent-worktree")
+                    stack/assert-formatter-matches! (fn [& _] :same)
+                    stack/assert-port-free!         (fn [& _] :free)
+                    store/reset-schema!             (called :reset-schema "x_capture")
+                    stack/migrate!                  (called :migrate :migrated)
+                    stack/load-screening-list!      (fn [opts]
+                                                      (swap! calls conj :load-screening-list)
+                                                      (reset! loaded opts)
+                                                      :loaded)
+                    stack/start!                    (fn [_] (swap! calls conj :start)
+                                                      {:process nil
+                                                       :base-url "http://127.0.0.1:1"
+                                                       :readyz "{}"
+                                                       :identity-binding :instance-id})
+                    stack/assert-schema-matches!    (fn [& _] "0015")
+                    stack/assert-same-process!      (fn [_] {})
+                    stack/stop!                     (fn [_] :stopped)
+                    capture/capture-service-info    (fn [& _] service-info)
+                    store/connect                   (fn [_] (reify java.sql.Connection (close [_])))
+                    quotations/extract              (fn [& _] {})
+                    scenarios/all                   []
+                    bundle/write-fixture!           writer
+                    bundle/write-quotations!        writer
+                    bundle/write-manifest!          writer]
+        (capture/capture! {:ref "ref-1" :out (str (.getParentFile (temp-path "x")))
+                           :port 1 :clojure-bin "unused" :db {:url "jdbc:capture"}}))
+      (is (= [:reset-schema :migrate :load-screening-list :start] @calls))
+      (is (= {:worktree "/nonexistent-worktree" :db {:url "jdbc:capture"}}
+             (select-keys @loaded [:worktree :db]))
+          "the captured commit's worktree and the capture database — not the harness's own tree"))))
 
 (deftest ac-1-the-run-stamp-carries-what-start-established
   (let [base (stamp (fake-git (answers)))]

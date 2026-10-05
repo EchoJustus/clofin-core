@@ -182,9 +182,10 @@ CloFin is doing its job when a reviewer can, within thirty minutes of cloning:
 | # | Question | Impact if deferred |
 |---|---|---|
 | Q1 | Should approval thresholds be per-currency, or normalised to a base currency? | Multi-currency organisations get inconsistent control strength. |
-| Q2 | Should screening re-run on amendment, or only on submission? | A material amendment could bypass screening. |
+| Q2 | Should screening re-run on amendment, or only on submission? | **Resolved** (TASK-017; [ADR-0028](ADR/0028-satellite-clients-integrate-through-core-owned-contracts.md) D5 and its Amendment 1). Screening runs at **every** submission. An amendment returns the instruction to `draft`, so the next submission re-screens the amended content; and a disposition is bound to the instruction digest it was made on, so a disposition given on the old content does not clear the new. A material amendment therefore cannot bypass screening. |
 | Q3 | Is a period-close snapshot needed before performance work, or after measurement? | Premature optimisation versus a slow statement endpoint. |
 | Q4 | Should reconciliation matching be pluggable per organisation, or fixed? | Flexibility versus explainability of a match. |
 
 These are recorded rather than answered because answering them changes the
-product's shape, and the decision belongs in an ADR when it is made.
+product's shape, and the decision belongs in an ADR when it is made. Q2 has been
+answered, and the row says where.

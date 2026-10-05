@@ -15,6 +15,7 @@
             [clofin.api.organisations :as organisations]
             [clofin.api.payments :as payments]
             [clofin.api.reconciliation :as reconciliation]
+            [clofin.api.screening :as screening]
             [clofin.api.settlement :as settlement]))
 
 (defn routes
@@ -121,6 +122,18 @@
     :handler (payments/cancel pool)
     :summary "Cancel a payment instruction"}
 
+   ;; A client's screening result is recorded against the instruction it is
+   ;; about, as **evidence**: it transitions nothing, and `submit` above is
+   ;; where core screens and decides (C-07, ADR-0028 D5). The results are read
+   ;; at `GET /screening-results?instructionId=` rather than at a `GET` on this
+   ;; path: a `GET /payment-instructions/:id/<literal>` can match the same path
+   ;; as the idempotency-key lookup, and `clofin.http.router-test` holds this
+   ;; table to having no such pair (017-REQ O-1).
+   {:method :post :path "/payment-instructions/:id/screening-results"
+    :operation-id "recordScreeningResult"
+    :handler (screening/record-result pool)
+    :summary "Record a client's screening result as evidence; transitions nothing"}
+
    ;; -------------------------------------------------------------------------
    ;; Approvals
    ;;
@@ -145,6 +158,47 @@
     :operation-id "getApprovalQueue"
     :handler (approvals/queue pool)
     :summary "List instructions awaiting approval with the context to decide them"}
+
+   ;; -------------------------------------------------------------------------
+   ;; Screening (C-07)
+   ;;
+   ;; Results and cases are read here; a case is dispositioned here, by a
+   ;; compliance actor who is not the instruction's maker. Lists are **read**
+   ;; here and written nowhere in this table: a list is loaded by the
+   ;; operator's tool (`make load-screening-list`), because a client that could
+   ;; load the list it is screened against would make the control
+   ;; unenforceable. The list is synthetic and the matching exact.
+   ;; -------------------------------------------------------------------------
+
+   {:method :get :path "/screening-results"
+    :operation-id "listScreeningResults"
+    :handler (screening/index-results pool)
+    :summary "List a payment instruction's screening results, core's and clients'"}
+
+   {:method :get :path "/screening-cases"
+    :operation-id "listScreeningCases"
+    :handler (screening/index-cases pool)
+    :summary "List an organisation's screening cases"}
+
+   {:method :get :path "/screening-cases/:id"
+    :operation-id "getScreeningCase"
+    :handler (screening/show-case pool)
+    :summary "Retrieve a screening case"}
+
+   {:method :post :path "/screening-cases/:id/disposition"
+    :operation-id "dispositionScreeningCase"
+    :handler (screening/disposition-case pool)
+    :summary "Disposition a screening case as false-positive or confirmed-hit"}
+
+   {:method :get :path "/screening-lists"
+    :operation-id "listScreeningLists"
+    :handler (screening/index-lists pool)
+    :summary "List the synthetic screening list versions loaded"}
+
+   {:method :get :path "/screening-lists/:version"
+    :operation-id "getScreeningList"
+    :handler (screening/show-list pool)
+    :summary "Retrieve a synthetic screening list version with its entries"}
 
    ;; -------------------------------------------------------------------------
    ;; Settlement

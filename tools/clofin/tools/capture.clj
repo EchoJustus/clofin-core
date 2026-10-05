@@ -20,8 +20,11 @@
      project's most public artifact.
   3. Creates a detached worktree at the commit, refuses the port if anything is
      already answering on it, mints an instance id for the run, migrates a
-     scratch database with the commit's own migration runner, and starts the
-     commit's own service — which must echo that instance id and the commit
+     scratch database with the commit's own migration runner, loads the
+     commit's one shipped screening list with the commit's own loader when it
+     ships one (from TASK-017 a commit refuses every submission until a list
+     is loaded; one from before ships none; two are refused rather than chosen
+     between — 017-REQ R-4), and starts the commit's own service — which must echo that instance id and the commit
      under capture before the run continues, **on every commit whose `GET /`
      can report them**. `ref-1` and earlier cannot; there the binding is the
      port having been proved free before the child was spawned. Which of the
@@ -225,6 +228,10 @@
     (stack/assert-port-free! port)
     (store/reset-schema! db)
     (stack/migrate! {:worktree worktree :db db :clojure-bin clojure-bin :log-file log-file})
+    ;; From TASK-017 a commit refuses every submission until its list is
+    ;; loaded; one from before ships none and needs none (017-REQ R-4).
+    (stack/load-screening-list! {:worktree worktree :db db :clojure-bin clojure-bin
+                                 :log-file log-file})
     (let [running (stack/start! {:worktree worktree :db db :port port
                                  :clojure-bin clojure-bin :log-file log-file
                                  :instance-id instance-id :source-commit commit})]

@@ -592,6 +592,47 @@
       (is (= (get pending "id")
              (get-in json ["approvalQueue" 0 "paymentInstruction" "id"]))))))
 
+(deftest ac-17-10-the-queue-carries-the-screening-outcome
+  (testing "TASK-017 A-11, beside PR-015: every row for an instruction submitted
+            since migration 0015 carries `screening` — core's latest accepted
+            decision over its current content — because `submit` cannot succeed
+            without one"
+    (let [f (setup :bands [[0 2]])
+          pis [(pending! f) (pending! f :minor-units 99000)]
+          rows (get (:json (call :get "/approvals/queue" {:actor (:checker-a f)})) "approvalQueue")]
+      (is (= 2 (count rows)) "non-vacuity: both instructions are queued")
+      (doseq [row rows]
+        (is (= {"outcome" "clear" "listVersion" "synthetic-2026-10-v1"}
+               (select-keys (get row "screening") ["outcome" "listVersion"]))
+            (pr-str row))
+        (is (some? (get-in row ["screening" "resultId"])))
+        (is (some? (get-in row ["screening" "recordedAt"]))))
+      (testing "and the resultId is core's own result about that instruction"
+        (doseq [row rows]
+          (is (= {:origin "core" :instruction-id (java.util.UUID/fromString
+                                                  (get-in row ["paymentInstruction" "id"]))}
+                 (db/query-one tdb/*pool* ["select origin, instruction_id from screening_result
+                                            where id = ?"
+                                           (java.util.UUID/fromString (get-in row ["screening" "resultId"]))]))))))))
+
+(deftest ac-17-10-a-row-with-no-decision-over-its-current-content-carries-no-screening
+  (testing "the member is optional only for an instruction no decision covers —
+            one submitted before migration 0015 — reproduced by a pending row
+            raised past the API, which a missing member must show rather than a
+            decision about other content"
+    (let [f (setup)
+          id (random-uuid)]
+      (db/execute! tdb/*pool*
+                   ["insert into payment_instruction
+                       (id, organisation_id, debtor_account_id, creditor_name, creditor_account,
+                        amount_minor, currency, value_date, purpose_code, status, created_by)
+                     values (?, ?, ?, 'Pacific Rim Logistics Pte Ltd', 'SG-SYNTH-88012345',
+                             125000, 'SGD', ?, 'SUPP', 'pending-approval', ?)"
+                    id (:org f) (:account f) (.plusDays today 7) (:maker f)])
+      (let [row (first (get (:json (call :get "/approvals/queue" {:actor (:checker-a f)})) "approvalQueue"))]
+        (is (= (str id) (get-in row ["paymentInstruction" "id"])))
+        (is (not (contains? row "screening")))))))
+
 ;; ---------------------------------------------------------------------------
 ;; AC-9 / AC-10 — the audit trail, over the API
 ;; ---------------------------------------------------------------------------
@@ -736,8 +777,10 @@
     (approve! f a (:checker-a f))
     (let [all (:json (call :get "/audit/events" {:actor (:auditor f)}))]
       ;; created + submitted for each of two instructions, plus one
-      ;; approval.recorded and one payment.approved for the approved one.
-      (is (= 6 (get all "count")))
+      ;; approval.recorded and one payment.approved for the approved one —
+      ;; and, since TASK-017, the screening-result.recorded core's screening
+      ;; writes at each submission (C-07): eight.
+      (is (= 8 (get all "count")))
       (is (= 500 (get all "limit")))
       (is (false? (get all "truncated"))))
     (is (= 1 (get (:json (call :get "/audit/events"
@@ -863,7 +906,10 @@
           pi (pending! f)]
       (approve! f pi (:checker-a f) :decision "rejected" :reason "Counterparty unverified")
       (is (= "rejected" (status-of f pi)))
-      (is (= {"payment.created" 1 "payment.submitted" 1
+      ;; `screening-result.recorded` is core's screening decision at the
+      ;; submission (TASK-017, C-07) — a result about the instruction, not a
+      ;; payment transition, and its subject is the result.
+      (is (= {"payment.created" 1 "screening-result.recorded" 1 "payment.submitted" 1
               "approval.recorded" 1 "payment.rejected" 1}
              (frequencies (map :action (audit-rows))))))))
 
